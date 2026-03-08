@@ -25,6 +25,7 @@ const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
 const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
 const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
+const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
 
 let updaterState = {
   phase: 'idle',
@@ -41,6 +42,7 @@ let startupUpdateFlowPromise = null;
 let resolveStartupUpdateFlowPromise = null;
 let startupUpdateResolutionTimer = null;
 let startupUpdateInstallTimer = null;
+let startupUpdateBlockTimer = null;
 let startupUpdateInstallArmed = false;
 
 function sendToRenderer(channel, payload) {
@@ -83,8 +85,16 @@ function clearStartupUpdateInstallTimer() {
   }
 }
 
+function clearStartupUpdateBlockTimer() {
+  if (startupUpdateBlockTimer) {
+    clearTimeout(startupUpdateBlockTimer);
+    startupUpdateBlockTimer = null;
+  }
+}
+
 function resolveStartupUpdateFlow() {
   clearStartupUpdateResolutionTimer();
+  clearStartupUpdateBlockTimer();
   const resolve = resolveStartupUpdateFlowPromise;
   resolveStartupUpdateFlowPromise = null;
   startupUpdateFlowPromise = null;
@@ -110,6 +120,33 @@ function queueStartupUpdateFlowResolution(delayMs, patch = {}) {
   }, delayMs);
 }
 
+function releaseStartupUpdateBlock(message, patch = {}) {
+  if (!startupUpdateFlowPromise) {
+    return false;
+  }
+
+  startupUpdateInstallArmed = false;
+  clearStartupUpdateResolutionTimer();
+  clearStartupUpdateInstallTimer();
+  clearStartupUpdateBlockTimer();
+
+  if (message) {
+    sendUpdateStatus(message);
+  }
+
+  setUpdaterState({
+    phase: 'dismissed',
+    message: message || updaterState.message,
+    visible: false,
+    canSkip: false,
+    source: 'startup',
+    ...patch
+  });
+  resolveStartupUpdateFlow();
+
+  return true;
+}
+
 async function runStartupUpdateFlow() {
   if (!autoUpdater) {
     return;
@@ -121,6 +158,7 @@ async function runStartupUpdateFlow() {
 
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
+  clearStartupUpdateBlockTimer();
 
   startupUpdateInstallArmed = true;
   currentUpdateCheckSource = 'startup';
@@ -139,6 +177,16 @@ async function runStartupUpdateFlow() {
   startupUpdateFlowPromise = new Promise((resolve) => {
     resolveStartupUpdateFlowPromise = resolve;
   });
+
+  startupUpdateBlockTimer = setTimeout(() => {
+    startupUpdateBlockTimer = null;
+    releaseStartupUpdateBlock(
+      'Sprawdzanie aktualizacji trwa zbyt dlugo. Aplikacja uruchamia sie bez blokowania.',
+      {
+        phase: 'idle'
+      }
+    );
+  }, STARTUP_UPDATE_MAX_BLOCK_MS);
 
   try {
     await autoUpdater.checkForUpdates();
@@ -164,29 +212,11 @@ async function runStartupUpdateFlow() {
 }
 
 function skipStartupUpdateFlow() {
-  if (!startupUpdateFlowPromise) {
-    return false;
-  }
-
-  startupUpdateInstallArmed = false;
-  clearStartupUpdateResolutionTimer();
-  clearStartupUpdateInstallTimer();
-
   const message = updaterState.readyToInstall
     ? 'Aktualizacja jest juz pobrana i zainstaluje sie po zamknieciu aplikacji.'
     : 'Aktualizacja zostala pominieta na starcie. Pobieranie moze trwac dalej w tle.';
 
-  sendUpdateStatus(message);
-  setUpdaterState({
-    phase: 'dismissed',
-    message,
-    visible: false,
-    canSkip: false,
-    source: 'startup'
-  });
-  resolveStartupUpdateFlow();
-
-  return true;
+  return releaseStartupUpdateBlock(message);
 }
 
 function enqueueExclusiveOperation(operation) {
@@ -456,17 +486,22 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
+    const startupFlowActive = currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise);
     sendUpdateStatus(`Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`);
     setUpdaterState({
       phase: 'downloading',
       message: `Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`,
-      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      visible: false,
+      canSkip: false,
       readyToInstall: false,
       progressPercent: 0,
       version: info.version,
       source: currentUpdateCheckSource
     });
+
+    if (startupFlowActive) {
+      resolveStartupUpdateFlow();
+    }
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -828,6 +863,7 @@ app.on('before-quit', () => {
   }
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
+  clearStartupUpdateBlockTimer();
 });
 
 ipcMain.handle('app:getBootstrap', async () => ({
@@ -865,7 +901,11 @@ ipcMain.handle('updater:installNow', () => {
   autoUpdater.quitAndInstall();
 });
 
-ipcMain.handle('updater:skipStartup', async () => skipStartupUpdateFlow());
+ipcMain.handle('updater:skipStartup', async () => {
+  const result = skipStartupUpdateFlow();
+  setUpdaterState({ visible: false, canSkip: false });
+  return result;
+});
 
 ipcMain.handle('settings:saveGoogleMapsApiKey', async (_event, apiKey) => {
   store.setSetting('googleMapsApiKey', apiKey ? String(apiKey).trim() : '');

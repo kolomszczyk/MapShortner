@@ -1,5 +1,19 @@
 let startupUpdateOverlay = null;
 
+async function dismissStartupUpdateOverlay() {
+  const overlay = ensureStartupUpdateOverlay();
+  overlay.skipButton.disabled = true;
+  overlay.closeButton.disabled = true;
+
+  try {
+    await window.appApi.skipStartupUpdate();
+    overlay.manuallyClosed = false;
+  } finally {
+    overlay.skipButton.disabled = false;
+    overlay.closeButton.disabled = false;
+  }
+}
+
 export function initShell(pageId) {
   document.body.dataset.page = pageId;
   bindHiddenDashboardShortcut(pageId);
@@ -63,20 +77,47 @@ function ensureStartupUpdateOverlay() {
       <div class="startup-update-progress" hidden>
         <div class="startup-update-progress-bar"></div>
       </div>
-      <button type="button" class="startup-update-skip">Pomin tym razem</button>
+      <div style="display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end;">
+        <button type="button" class="startup-update-close" style="background: var(--button-muted, #eee); color: var(--text);">Zamknij</button>
+        <button type="button" class="startup-update-skip">Pomiń tym razem</button>
+      </div>
     </div>
   `;
 
   document.body.appendChild(layer);
 
   const skipButton = layer.querySelector('.startup-update-skip');
-  skipButton.addEventListener('click', async () => {
-    skipButton.disabled = true;
-    try {
-      await window.appApi.skipStartupUpdate();
-    } finally {
-      skipButton.disabled = false;
+  const closeButton = layer.querySelector('.startup-update-close');
+
+  let manuallyClosed = false;
+
+  layer.addEventListener('mousedown', (e) => {
+    if (e.target === layer && !skipButton.hidden && !skipButton.disabled) {
+      void dismissStartupUpdateOverlay();
     }
+  });
+
+  closeButton.addEventListener('click', () => {
+    if (closeButton.disabled || closeButton.hidden) {
+      return;
+    }
+
+    if (!skipButton.hidden) {
+      void dismissStartupUpdateOverlay();
+      return;
+    }
+
+    layer.hidden = true;
+    layer.classList.remove('is-visible');
+    manuallyClosed = true;
+  });
+
+  skipButton.addEventListener('click', async () => {
+    if (skipButton.disabled || skipButton.hidden) {
+      return;
+    }
+
+    await dismissStartupUpdateOverlay();
   });
 
   startupUpdateOverlay = {
@@ -85,7 +126,10 @@ function ensureStartupUpdateOverlay() {
     copy: layer.querySelector('.startup-update-copy'),
     progress: layer.querySelector('.startup-update-progress'),
     progressBar: layer.querySelector('.startup-update-progress-bar'),
-    skipButton
+    skipButton,
+    closeButton,
+    get manuallyClosed() { return manuallyClosed; },
+    set manuallyClosed(val) { manuallyClosed = val; }
   };
 
   return startupUpdateOverlay;
@@ -112,10 +156,14 @@ function getStartupUpdateTitle(state) {
 
 function syncStartupUpdateOverlay(state) {
   const overlay = ensureStartupUpdateOverlay();
-  const isVisible = Boolean(state?.visible);
-
+  let isVisible = Boolean(state?.visible);
+  // Jeśli overlay został zamknięty ręcznie, nie pokazuj go ponownie w tej sesji
+  if (isVisible && overlay.manuallyClosed) {
+    isVisible = false;
+  }
   overlay.layer.hidden = !isVisible;
   overlay.layer.classList.toggle('is-visible', isVisible);
+  overlay.manuallyClosed = overlay.manuallyClosed || false;
   if (!isVisible) {
     return;
   }
@@ -142,6 +190,7 @@ function syncStartupUpdateOverlay(state) {
   overlay.progressBar.style.width = progressWidth;
 
   overlay.skipButton.hidden = !state?.canSkip;
+  overlay.closeButton.hidden = !state?.canSkip;
 }
 
 function bindHiddenDashboardShortcut(pageId) {
