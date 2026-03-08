@@ -28,6 +28,10 @@ npm run release
 
 Token musi mieć uprawnienia do tworzenia release (`repo`).
 
+Ważne:
+- Auto-update wymaga **publicznego release typu `release`** (nie sam tag i nie draft).
+- W repo jest ustawione `build.publish.releaseType = "release"`, żeby wymusić poprawny typ publikacji.
+
 ## 4) Automatyczne release przez GitHub Actions
 
 Workflow jest w `.github/workflows/release.yml` i uruchamia się po push taga `v*`.
@@ -57,3 +61,15 @@ To utworzy tag typu `v0.1.1` i pipeline zbuduje instalatory oraz opublikuje rele
 
 - Auto-update działa dla aplikacji zbudowanej przez `electron-builder` (nie dla `npm run start`).
 - Na Linuxie używany jest target `AppImage`, na Windowsie `NSIS`.
+
+## Diagnostyka błędu `Unable to find latest version on GitHub` / `406`
+
+Jeśli pojawia się błąd podobny do:
+- `ERR_UPDATER_LATEST_VERSION_NOT_FOUND`
+- `Cannot parse releases feed`
+
+to zwykle oznacza, że na GitHub jest tylko tag (albo draft), ale nie ma publicznego release z assetami updatera.
+
+Sprawdź, czy dla wersji są opublikowane pliki:
+- `latest-linux.yml` (Linux)
+- `*.AppImage` (Linux) / instalator `*.exe` (Windows)

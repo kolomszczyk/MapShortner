@@ -11,6 +11,32 @@ function sendUpdateStatus(message) {
   }
 }
 
+function formatUpdaterError(err) {
+  const message = err == null ? 'nieznany błąd' : err.message || String(err);
+
+  if (
+    message.includes('ERR_UPDATER_LATEST_VERSION_NOT_FOUND') ||
+    message.includes('Unable to find latest version on GitHub')
+  ) {
+    return (
+      'Błąd aktualizacji: brak publicznego release na GitHub. ' +
+      'Sam tag albo draft release nie wystarczy do auto-update.'
+    );
+  }
+
+  if (
+    message.includes('ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') ||
+    message.includes('latest-linux.yml')
+  ) {
+    return (
+      'Błąd aktualizacji: w release brakuje plików updatera ' +
+      '(np. latest-linux.yml i AppImage/instalator).'
+    );
+  }
+
+  return `Błąd aktualizacji: ${message}`;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
@@ -45,7 +71,7 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('error', (err) => {
-    sendUpdateStatus(`Błąd aktualizacji: ${err == null ? 'nieznany błąd' : err.message}`);
+    sendUpdateStatus(formatUpdaterError(err));
   });
 
   autoUpdater.on('download-progress', (progressObj) => {

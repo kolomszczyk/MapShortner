@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "electron": "^35.0.2",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.moonboy.mapshortner",
@@ -33,7 +33,8 @@
       {
         "provider": "github",
         "owner": "kolomszczyk",
-        "repo": "MapShortner"
+        "repo": "MapShortner",
+        "releaseType": "release"
       }
     ],
     "win": {
