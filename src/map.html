@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MapShortner | Mapa Polski</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app app-map">
+      <div class="hero hero-map">
+        <div>
+          <a class="back-link" href="./index.html">Wroc do strony glownej</a>
+          <h1>Punkty na mapie Polski</h1>
+          <p class="subtitle">
+            Strona pokazuje 10 punktow zapisanych w pliku JSON na podstawie szerokosci i dlugosci
+            geograficznej.
+          </p>
+        </div>
+        <span class="map-badge">Punkty zapisane w JSON</span>
+      </div>
+
+      <section class="map-grid">
+        <article class="card map-card">
+          <div class="map-card-header">
+            <h2>Mapa Polski z OpenStreetMap</h2>
+            <p class="map-caption">
+              Kazda kropka reprezentuje zapisana pare wspolrzednych naniesiona na mape OSM.
+            </p>
+          </div>
+
+          <div
+            id="poland-map"
+            class="poland-map"
+            role="img"
+            aria-label="Mapa Polski z punktami zapisanymi w pliku JSON"
+          ></div>
+        </article>
+
+        <aside class="card points-card">
+          <h2>Zapisane wspolrzedne</h2>
+          <p class="card-copy">
+            Punkty sa wczytywane z pliku `src/poland-points.json` i numerowane zgodnie z
+            markerami na mapie.
+          </p>
+          <ol id="points-list" class="points-list"></ol>
+        </aside>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="./map.js"></script>
+  </body>
+</html>

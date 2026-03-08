@@ -8,8 +8,13 @@
   </head>
   <body>
     <main class="app">
-      <h1>MapShortner</h1>
-      <p class="subtitle">Podstawowa aplikacja Electron z auto-update przez GitHub Releases</p>
+      <div class="hero">
+        <div>
+          <h1>MapShortner</h1>
+          <p class="subtitle">Podstawowa aplikacja Electron z auto-update przez GitHub Releases</p>
+        </div>
+        <a class="nav-link" href="./map.html">Otwórz mapę Polski</a>
+      </div>
 
       <section class="card">
         <h2>Status aktualizacji</h2>
@@ -18,6 +23,15 @@
           <button id="check-btn" type="button">Sprawdź aktualizacje</button>
           <button id="install-btn" type="button" disabled>Zainstaluj i uruchom ponownie</button>
         </div>
+      </section>
+
+      <section class="card card-secondary">
+        <h2>Nowa strona mapy</h2>
+        <p class="card-copy">
+          Widok mapy pokazuje 10 punktów zapisanych w pliku JSON na terenie Polski na podstawie
+          szerokości i długości geograficznej.
+        </p>
+        <a class="nav-link nav-link-inline" href="./map.html">Przejdź do mapy</a>
       </section>
     </main>
 

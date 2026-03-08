@@ -1,3 +1,4 @@
+const fs = require('node:fs/promises');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
@@ -41,6 +42,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 620,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -48,7 +50,9 @@ function createWindow() {
     }
   });
 
+  mainWindow.removeMenu();
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.maximize();
 }
 
 function configureAutoUpdater() {
@@ -114,4 +118,10 @@ ipcMain.handle('updater:checkNow', async () => {
 
 ipcMain.handle('updater:installNow', () => {
   autoUpdater.quitAndInstall();
+});
+
+ipcMain.handle('map:getPoints', async () => {
+  const filePath = path.join(__dirname, 'poland-points.json');
+  const content = await fs.readFile(filePath, 'utf8');
+  return JSON.parse(content);
 });
