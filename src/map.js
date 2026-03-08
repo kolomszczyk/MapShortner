@@ -42,7 +42,6 @@ routeForm.addEventListener('submit', async (event) => {
       originLat: Number(form.get('originLat')),
       originLng: Number(form.get('originLng')),
       lastVisitWeight: Number(form.get('lastVisitWeight')),
-      lastPaymentWeight: Number(form.get('lastPaymentWeight')),
       distanceWeight: Number(form.get('distanceWeight')),
       limit: Number(form.get('limit')),
       query: pointsSearchInput.value
@@ -260,7 +259,7 @@ function renderRoute(route) {
                 <span>${point.hopDistanceKm.toFixed(1)} km</span>
               </div>
               <p>${escapeHtml(point.routeAddress || point.addressText || 'Brak adresu')}</p>
-              <p>Score: ${point.routeScore.toFixed(1)} | Wizyta: ${point.daysSinceVisit} dni | Wplata: ${point.daysSincePayment} dni</p>
+              <p>Score: ${point.routeScore.toFixed(1)} | Wizyta: ${point.daysSinceVisit} dni</p>
             </article>
           `
         )

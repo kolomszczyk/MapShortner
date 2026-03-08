@@ -818,8 +818,7 @@ function buildRoute(db, input = {}) {
 
   const weights = {
     distance: Number(input.distanceWeight || 0.8),
-    lastVisit: Number(input.lastVisitWeight || 1),
-    lastPayment: Number(input.lastPaymentWeight || 1.2)
+    lastVisit: Number(input.lastVisitWeight || 1)
   };
   const limit = Math.min(50, Math.max(3, Number(input.limit || 12)));
   const candidates = listPeople(db, { query: input.query || '', limit: 1000 }).filter(
@@ -829,17 +828,12 @@ function buildRoute(db, input = {}) {
   const scored = candidates.map((row) => {
     const distanceKm = haversineKm(originLat, originLng, row.lat, row.lng);
     const daysSinceVisit = getDaysSince(row.lastVisitAt);
-    const daysSincePayment = getDaysSince(row.lastPaymentAt);
-    const routeScore =
-      daysSinceVisit * weights.lastVisit +
-      daysSincePayment * weights.lastPayment -
-      distanceKm * weights.distance;
+    const routeScore = daysSinceVisit * weights.lastVisit - distanceKm * weights.distance;
 
     return {
       ...row,
       distanceKm,
       daysSinceVisit,
-      daysSincePayment,
       routeScore
     };
   });
