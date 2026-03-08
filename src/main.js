@@ -1,6 +1,5 @@
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
-const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const { createDataStore } = require('./main/data-store');
 const {
@@ -12,6 +11,7 @@ const {
 
 let mainWindow;
 let store;
+let autoUpdater = null;
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -78,6 +78,7 @@ function createWindow() {
 }
 
 function configureAutoUpdater() {
+  ({ autoUpdater } = require('electron-updater'));
   log.transports.file.level = 'info';
   autoUpdater.logger = log;
 
