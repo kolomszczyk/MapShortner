@@ -6,7 +6,8 @@ const {
   geocodeOrigin,
   geocodePendingPeople,
   importAccessDatabase,
-  loadAccessPassword
+  loadAccessPassword,
+  loadGoogleMapsApiKey
 } = require('./main/access-service');
 
 let mainWindow;
@@ -157,6 +158,7 @@ app.on('window-all-closed', () => {
 ipcMain.handle('app:getBootstrap', async () => ({
   version: app.getVersion(),
   passwordConfigured: Boolean(loadAccessPassword()),
+  googleMapsConfigured: Boolean(loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey')),
   summary: store.getDashboardSummary()
 }));
 

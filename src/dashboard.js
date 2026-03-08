@@ -103,6 +103,9 @@ async function bootstrap() {
     ? 'Haslo Accessa jest skonfigurowane.'
     : 'Brak hasla Accessa w ~/secrets/acces_db_tata.';
   apiKeyInput.value = bootstrapData.summary?.settings?.googleMapsApiKey || '';
+  if (!apiKeyInput.value && bootstrapData.googleMapsConfigured) {
+    apiKeyInput.placeholder = 'Klucz ladowany automatycznie z ~/secrets/google_maps_api';
+  }
   renderSummary(bootstrapData.summary);
   appendLog('Aplikacja gotowa do pracy.');
 }

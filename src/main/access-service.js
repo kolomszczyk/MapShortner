@@ -98,7 +98,8 @@ async function importAccessDatabase({ app, store, accessDbPath, onProgress }) {
 }
 
 async function geocodePendingPeople({ store, apiKey, limit = 50, onProgress }) {
-  if (!apiKey) {
+  const effectiveApiKey = apiKey || loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey');
+  if (!effectiveApiKey) {
     throw new Error('Brak klucza Google Maps API do geokodowania.');
   }
 
@@ -109,7 +110,7 @@ async function geocodePendingPeople({ store, apiKey, limit = 50, onProgress }) {
   for (let index = 0; index < pending.length; index++) {
     const person = pending[index];
     try {
-      const geocode = await geocodeAddress(apiKey, person.routeAddress);
+      const geocode = await geocodeAddress(effectiveApiKey, person.routeAddress);
       store.updatePersonCoordinates({
         sourceRowId: person.sourceRowId,
         lat: geocode.lat,
@@ -150,7 +151,7 @@ async function geocodePendingPeople({ store, apiKey, limit = 50, onProgress }) {
 }
 
 async function geocodeOrigin({ store, address, apiKey }) {
-  const effectiveApiKey = apiKey || store.getSetting('googleMapsApiKey');
+  const effectiveApiKey = apiKey || loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey');
   if (!effectiveApiKey) {
     throw new Error('Brak klucza Google Maps API do geokodowania punktu startowego.');
   }
@@ -159,19 +160,44 @@ async function geocodeOrigin({ store, address, apiKey }) {
 }
 
 function loadAccessPassword() {
-  const direct = process.env.ACCES_PASSWORD || process.env.ACCESS_PASSWORD;
+  return loadExportedSecret(path.join(os.homedir(), 'secrets', 'acces_db_tata'), [
+    'ACCES_PASSWORD',
+    'ACCESS_PASSWORD'
+  ]);
+}
+
+function loadGoogleMapsApiKey() {
+  const direct = process.env.GOOGLE_MAPS_API_KEY;
   if (direct) {
     return direct;
   }
 
-  const secretFile = path.join(os.homedir(), 'secrets', 'acces_db_tata');
+  return loadExportedSecret(path.join(os.homedir(), 'secrets', 'google_maps_api'), [
+    'GOOGLE_MAPS_API_KEY'
+  ]);
+}
+
+function loadExportedSecret(secretFile, variableNames) {
+  for (const variableName of variableNames) {
+    if (process.env[variableName]) {
+      return process.env[variableName];
+    }
+  }
+
   if (!fs.existsSync(secretFile)) {
     return null;
   }
 
   const content = fs.readFileSync(secretFile, 'utf8');
-  const match = content.match(/ACCES_PASSWORD\s*=\s*["']?([^"'\n]+)["']?/);
-  return match ? match[1].trim() : null;
+  for (const variableName of variableNames) {
+    const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = content.match(new RegExp(`${escaped}\\s*=\\s*["']?([^"'\\n]+)["']?`));
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
 }
 
 async function runAccessBridge(app, args) {
@@ -288,5 +314,6 @@ module.exports = {
   geocodeOrigin,
   geocodePendingPeople,
   importAccessDatabase,
-  loadAccessPassword
+  loadAccessPassword,
+  loadGoogleMapsApiKey
 };
