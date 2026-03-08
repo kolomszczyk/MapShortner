@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const log = require('electron-log');
@@ -9,6 +10,7 @@ const {
   loadAccessPassword,
   loadGoogleMapsApiKey
 } = require('./main/access-service');
+const { exportTrasaArchive, importTrasaArchive } = require('./main/trasa-service');
 
 let mainWindow;
 let store;
@@ -26,6 +28,12 @@ function sendUpdateStatus(message) {
 
 function sendOperationStatus(payload) {
   sendToRenderer('app:operationStatus', payload);
+}
+
+function removeDatabaseSidecars(dbPath) {
+  for (const suffix of ['', '-wal', '-shm']) {
+    fs.rmSync(`${dbPath}${suffix}`, { force: true });
+  }
 }
 
 function formatUpdaterError(err) {
@@ -133,6 +141,42 @@ async function pickAccessDatabase() {
   return selectedPath;
 }
 
+async function pickTrasaExportPath() {
+  const suggestedName = `MapShortner-${new Date().toISOString().slice(0, 10)}.trasa`;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Eksportuj pakiet .trasa',
+    defaultPath: path.join(app.getPath('documents'), suggestedName),
+    filters: [
+      { name: 'Pakiet trasy', extensions: ['trasa'] },
+      { name: 'Wszystkie pliki', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  return result.filePath;
+}
+
+async function pickTrasaImportPath() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Wczytaj pakiet .trasa',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Pakiet trasy', extensions: ['trasa'] },
+      { name: 'Pliki ZIP', extensions: ['zip'] },
+      { name: 'Wszystkie pliki', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+}
+
 app.whenReady().then(() => {
   store = createDataStore(app);
   createWindow();
@@ -174,6 +218,98 @@ ipcMain.handle('updater:installNow', () => {
 ipcMain.handle('settings:saveGoogleMapsApiKey', async (_event, apiKey) => {
   store.setSetting('googleMapsApiKey', apiKey ? String(apiKey).trim() : '');
   return store.getDashboardSummary();
+});
+
+ipcMain.handle('trasa:export', async (_event, payload = {}) => {
+  const targetPath = payload.targetPath || (await pickTrasaExportPath());
+  if (!targetPath) {
+    return null;
+  }
+
+  sendOperationStatus({
+    type: 'trasa-export',
+    status: 'started',
+    message: 'Rozpoczeto eksport pakietu .trasa.'
+  });
+
+  const result = exportTrasaArchive({
+    app,
+    store,
+    targetPath,
+    appVersion: app.getVersion()
+  });
+
+  sendOperationStatus({
+    type: 'trasa-export',
+    status: 'completed',
+    message: `Wyeksportowano pakiet .trasa do ${result.outputPath}.`,
+    result
+  });
+
+  return {
+    ...result,
+    summary: store.getDashboardSummary()
+  };
+});
+
+ipcMain.handle('trasa:import', async () => {
+  const trasaPath = await pickTrasaImportPath();
+  if (!trasaPath) {
+    return null;
+  }
+
+  sendOperationStatus({
+    type: 'trasa-import',
+    status: 'started',
+    message: 'Rozpoczeto import pakietu .trasa.'
+  });
+
+  const targetDbPath = path.join(app.getPath('userData'), 'data', 'mapshortner.sqlite');
+  const backupPath = path.join(app.getPath('temp'), `mapshortner-before-import-${Date.now()}.sqlite`);
+
+  if (store) {
+    store.exportSnapshot(backupPath);
+    store.close();
+  }
+
+  try {
+    const result = importTrasaArchive({
+      app,
+      trasaPath,
+      targetDbPath
+    });
+
+    store = createDataStore(app);
+
+    const googleMapsApiKey = loadGoogleMapsApiKey();
+    if (googleMapsApiKey) {
+      store.setSetting('googleMapsApiKey', googleMapsApiKey);
+    }
+
+    const summary = store.getDashboardSummary();
+    sendOperationStatus({
+      type: 'trasa-import',
+      status: 'completed',
+      message: `Wczytano pakiet .trasa z ${trasaPath}.`,
+      result,
+      summary
+    });
+
+    return {
+      ...result,
+      summary
+    };
+  } catch (error) {
+    if (fs.existsSync(backupPath)) {
+      fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
+      removeDatabaseSidecars(targetDbPath);
+      fs.copyFileSync(backupPath, targetDbPath);
+    }
+    store = createDataStore(app);
+    throw error;
+  } finally {
+    fs.rmSync(backupPath, { force: true });
+  }
 });
 
 ipcMain.handle('access:pickFile', async () => {

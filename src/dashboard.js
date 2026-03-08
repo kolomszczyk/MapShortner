@@ -11,6 +11,8 @@ const chooseFileBtn = document.getElementById('choose-file-btn');
 const importBtn = document.getElementById('import-btn');
 const geocodeBtn = document.getElementById('geocode-btn');
 const saveApiKeyBtn = document.getElementById('save-api-key-btn');
+const exportTrasaBtn = document.getElementById('export-trasa-btn');
+const importTrasaBtn = document.getElementById('import-trasa-btn');
 const apiKeyInput = document.getElementById('google-api-key');
 const geocodeLimitInput = document.getElementById('geocode-limit');
 const operationLogEl = document.getElementById('operation-log');
@@ -60,6 +62,41 @@ saveApiKeyBtn.addEventListener('click', async () => {
     appendLog(`Nie udalo sie zapisac klucza API: ${error.message}`);
   } finally {
     setButtonBusy(saveApiKeyBtn, false);
+  }
+});
+
+exportTrasaBtn.addEventListener('click', async () => {
+  setButtonBusy(exportTrasaBtn, true, 'Eksport...');
+  try {
+    const result = await window.appApi.exportTrasaArchive({});
+    if (!result) {
+      appendLog('Eksport .trasa anulowany.');
+      return;
+    }
+    renderSummary(result.summary);
+    appendLog(`Wyeksportowano pakiet .trasa: ${result.outputPath}`);
+  } catch (error) {
+    appendLog(`Eksport .trasa nie powiodl sie: ${error.message}`);
+  } finally {
+    setButtonBusy(exportTrasaBtn, false);
+  }
+});
+
+importTrasaBtn.addEventListener('click', async () => {
+  setButtonBusy(importTrasaBtn, true, 'Import...');
+  try {
+    const result = await window.appApi.importTrasaArchive();
+    if (!result) {
+      appendLog('Import .trasa anulowany.');
+      return;
+    }
+    renderSummary(result.summary);
+    apiKeyInput.value = result.summary?.settings?.googleMapsApiKey || '';
+    appendLog('Pakiet .trasa zostal wczytany do aplikacji.');
+  } catch (error) {
+    appendLog(`Import .trasa nie powiodl sie: ${error.message}`);
+  } finally {
+    setButtonBusy(importTrasaBtn, false);
   }
 });
 

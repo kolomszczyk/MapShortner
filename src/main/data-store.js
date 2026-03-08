@@ -19,6 +19,8 @@ function createDataStore(app) {
 
   return {
     dbPath,
+    close: () => closeStore(db),
+    exportSnapshot: (targetPath) => exportSnapshot(db, targetPath),
     getSetting: (key) => getSetting(db, key),
     setSetting: (key, value) => setSetting(db, key, value),
     clearImportedData: () => clearImportedData(db),
@@ -39,8 +41,20 @@ function createDataStore(app) {
     listNotes: (entityType, entityId) => listNotes(db, entityType, entityId),
     addCustomPoint: (payload) => addCustomPoint(db, payload),
     listCustomPoints: () => listCustomPoints(db),
-    buildRoute: (input) => buildRoute(db, input)
+    buildRoute: (input) => buildRoute(db, input),
+    getExportReports: () => getExportReports(db)
   };
+}
+
+function closeStore(db) {
+  db.close();
+}
+
+function exportSnapshot(db, targetPath) {
+  fs.rmSync(targetPath, { force: true });
+  const safeTargetPath = targetPath.replace(/'/g, "''");
+  db.exec(`VACUUM INTO '${safeTargetPath}'`);
+  return targetPath;
 }
 
 function initSchema(db) {
@@ -874,6 +888,69 @@ function buildRoute(db, input = {}) {
   };
 }
 
+function getExportReports(db) {
+  const now = new Date().toISOString();
+  return {
+    generatedAt: now,
+    dashboardSummary: getDashboardSummary(db),
+    importTables: getImportTables(db),
+    mapData: listMapPoints(db, { includeUnresolved: true }),
+    people: db.prepare(`
+      SELECT
+        source_row_id AS sourceRowId,
+        full_name AS fullName,
+        company_name AS companyName,
+        city,
+        address_text AS addressText,
+        route_address AS routeAddress,
+        phone,
+        email,
+        lat,
+        lng,
+        geocode_status AS geocodeStatus,
+        last_visit_at AS lastVisitAt,
+        last_payment_at AS lastPaymentAt,
+        planned_visit_at AS plannedVisitAt,
+        total_paid AS totalPaid
+      FROM people_cache
+      ORDER BY full_name COLLATE NOCASE ASC
+    `).all().map(normalizePeopleRow),
+    notes: db.prepare(`
+      SELECT id, entity_type AS entityType, entity_id AS entityId, message, created_at AS createdAt
+      FROM local_notes
+      ORDER BY created_at DESC
+    `).all(),
+    googleMapReport: db.prepare(`
+      SELECT
+        source_row_id AS sourceRowId,
+        full_name AS fullName,
+        route_address AS routeAddress,
+        lat,
+        lng,
+        geocode_status AS geocodeStatus,
+        coordinate_source AS coordinateSource,
+        geocode_error AS geocodeError,
+        last_visit_at AS lastVisitAt
+      FROM people_cache
+      ORDER BY full_name COLLATE NOCASE ASC
+    `).all().map(normalizePeopleRowForExport),
+    serviceCards: db.prepare(`
+      SELECT
+        source_row_id AS sourceRowId,
+        owner_source_row_id AS ownerSourceRowId,
+        card_date AS cardDate,
+        technician,
+        device,
+        address_text AS addressText,
+        card_type AS cardType,
+        event_type AS eventType,
+        gross_income AS grossIncome
+      FROM service_cards
+      ORDER BY card_date DESC
+    `).all()
+  };
+}
+
 function mapPersonRow(row) {
   const importedAt = new Date().toISOString();
   const fullName = [pickValue(row, 'Imię'), pickValue(row, 'Nazwisko')].filter(Boolean).join(' ').trim();
@@ -973,6 +1050,20 @@ function normalizePeopleRow(row) {
     lastPaymentAt: row.lastPaymentAt || row.last_payment_at || null,
     plannedVisitAt: row.plannedVisitAt || row.planned_visit_at || null,
     totalPaid: row.totalPaid == null ? null : Number(row.totalPaid)
+  };
+}
+
+function normalizePeopleRowForExport(row) {
+  return {
+    sourceRowId: stringifyId(row.sourceRowId || row.source_row_id),
+    fullName: row.fullName || row.full_name || null,
+    routeAddress: row.routeAddress || row.route_address || null,
+    lat: row.lat == null ? null : Number(row.lat),
+    lng: row.lng == null ? null : Number(row.lng),
+    geocodeStatus: row.geocodeStatus || row.geocode_status || null,
+    coordinateSource: row.coordinateSource || row.coordinate_source || null,
+    geocodeError: row.geocodeError || row.geocode_error || null,
+    lastVisitAt: row.lastVisitAt || row.last_visit_at || null
   };
 }
 

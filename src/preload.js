@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('appApi', {
   checkNow: () => ipcRenderer.invoke('updater:checkNow'),
   installNow: () => ipcRenderer.invoke('updater:installNow'),
   saveGoogleMapsApiKey: (apiKey) => ipcRenderer.invoke('settings:saveGoogleMapsApiKey', apiKey),
+  exportTrasaArchive: (payload) => ipcRenderer.invoke('trasa:export', payload),
+  importTrasaArchive: () => ipcRenderer.invoke('trasa:import'),
   pickAccessFile: () => ipcRenderer.invoke('access:pickFile'),
   importAccessDatabase: (payload) => ipcRenderer.invoke('access:import', payload),
   runGeocoding: (payload) => ipcRenderer.invoke('geocode:run', payload),

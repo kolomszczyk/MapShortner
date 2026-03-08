@@ -163,6 +163,11 @@ textarea {
   line-height: 1.6;
 }
 
+.copy-warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
 .top-nav {
   display: flex;
   flex-wrap: wrap;
