@@ -27,6 +27,15 @@ let routeLayer;
 let currentPeople = [];
 let currentCustomPoints = [];
 
+window.appApi.onOperationStatus(async (payload) => {
+  if (
+    payload?.status === 'completed' &&
+    (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
+  ) {
+    await loadPoints();
+  }
+});
+
 bootstrap();
 
 refreshPointsBtn.addEventListener('click', () => loadPoints());

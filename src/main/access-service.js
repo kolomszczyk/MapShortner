@@ -9,7 +9,7 @@ const execFileAsync = util.promisify(execFile);
 const JAVA_MAIN_CLASS = 'bridge.AccessBridge';
 const GOOGLE_GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 
-async function importAccessDatabase({ app, store, accessDbPath, onProgress }) {
+async function importAccessDatabase({ app, store, accessDbPath, onProgress, sourceFingerprint }) {
   const password = loadAccessPassword();
   if (!password) {
     throw new Error(
@@ -17,84 +17,126 @@ async function importAccessDatabase({ app, store, accessDbPath, onProgress }) {
     );
   }
 
-  const tablesPayload = await runAccessBridge(app, ['tables', accessDbPath, password]);
-  const tables = Array.isArray(tablesPayload.tables) ? tablesPayload.tables : [];
-
+  const initialFingerprint = sourceFingerprint || (await getAccessFileFingerprint(accessDbPath));
   store.setSetting('accessDbPath', accessDbPath);
-  store.clearImportedData();
+  store.clearStagedImportedData();
 
-  let importedRows = 0;
-  const pageSize = 200;
+  try {
+    const tablesPayload = await runAccessBridge(app, ['tables', accessDbPath, password]);
+    const tables = Array.isArray(tablesPayload.tables) ? tablesPayload.tables : [];
 
-  for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
-    const tableName = tables[tableIndex];
-    const meta = await runAccessBridge(app, ['columns', accessDbPath, password, tableName]);
-    store.saveImportedTable({
-      name: tableName,
-      rowCount: 0,
-      columns: meta.columns || []
-    });
+    let importedRows = 0;
+    const pageSize = 200;
 
-    let offset = 0;
-    let totalForTable = 0;
-    while (true) {
-      const chunk = await runAccessBridge(app, [
-        'export-table',
-        accessDbPath,
-        password,
-        tableName,
-        String(pageSize),
-        String(offset)
-      ]);
-
-      const rows = Array.isArray(chunk.rows) ? chunk.rows : [];
-      if (rows.length === 0) {
-        break;
-      }
-
-      totalForTable += rows.length;
-      importedRows += rows.length;
-      store.saveImportedRows(tableName, rows);
-
-      if (tableName === PEOPLE_TABLE) {
-        store.savePeopleRows(rows);
-      }
-
-      if (tableName === SERVICE_TABLE) {
-        store.saveServiceCards(rows);
-      }
-
-      offset += rows.length;
-      if (typeof onProgress === 'function') {
-        onProgress({
-          phase: 'import',
-          tableName,
-          tableIndex,
-          totalTables: tables.length,
-          importedRows,
-          importedRowsForTable: totalForTable
-        });
-      }
+    if (typeof onProgress === 'function') {
+      onProgress({
+        phase: 'preparing',
+        tableName: null,
+        totalTables: tables.length,
+        importedRows,
+        message: 'Przygotowanie bezpiecznego reimportu.'
+      });
     }
 
-    store.saveImportedTable({
-      name: tableName,
-      rowCount: totalForTable,
-      columns: meta.columns || []
-    });
-  }
+    for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
+      const tableName = tables[tableIndex];
+      const meta = await runAccessBridge(app, ['columns', accessDbPath, password, tableName]);
+      store.saveStagedImportedTable({
+        name: tableName,
+        rowCount: 0,
+        columns: meta.columns || []
+      });
 
-  store.finalizeImport(accessDbPath);
-  if (typeof onProgress === 'function') {
-    onProgress({
-      phase: 'completed',
-      tableName: null,
-      totalTables: tables.length,
-      importedRows
-    });
-  }
+      let offset = 0;
+      let totalForTable = 0;
+      while (true) {
+        const chunk = await runAccessBridge(app, [
+          'export-table',
+          accessDbPath,
+          password,
+          tableName,
+          String(pageSize),
+          String(offset)
+        ]);
 
-  return store.getDashboardSummary();
+        const rows = Array.isArray(chunk.rows) ? chunk.rows : [];
+        if (rows.length === 0) {
+          break;
+        }
+
+        totalForTable += rows.length;
+        importedRows += rows.length;
+        store.saveStagedImportedRows(tableName, rows);
+
+        if (tableName === PEOPLE_TABLE) {
+          store.saveStagedPeopleRows(rows);
+        }
+
+        if (tableName === SERVICE_TABLE) {
+          store.saveStagedServiceCards(rows);
+        }
+
+        offset += rows.length;
+        if (typeof onProgress === 'function') {
+          onProgress({
+            phase: 'import',
+            tableName,
+            tableIndex,
+            totalTables: tables.length,
+            importedRows,
+            importedRowsForTable: totalForTable
+          });
+        }
+
+        await yieldToEventLoop();
+      }
+
+      store.saveStagedImportedTable({
+        name: tableName,
+        rowCount: totalForTable,
+        columns: meta.columns || []
+      });
+
+      await yieldToEventLoop();
+    }
+
+    const finalFingerprint = await getAccessFileFingerprint(accessDbPath);
+    if (finalFingerprint !== initialFingerprint) {
+      throw new Error(
+        'Plik Access zmienil sie w trakcie importu. Poprzedni snapshot pozostaje aktywny; reimport zostanie sprobowany ponownie.'
+      );
+    }
+
+    store.finalizeStagedImport(accessDbPath);
+    if (typeof onProgress === 'function') {
+      onProgress({
+        phase: 'promote',
+        tableName: null,
+        totalTables: tables.length,
+        importedRows,
+        message: 'Podmiana aktywnego snapshotu SQLite.'
+      });
+    }
+
+    store.promoteStagedImport({
+      sourcePath: accessDbPath,
+      sourceFingerprint: finalFingerprint
+    });
+
+    if (typeof onProgress === 'function') {
+      onProgress({
+        phase: 'completed',
+        tableName: null,
+        totalTables: tables.length,
+        importedRows
+      });
+    }
+
+    return store.getDashboardSummary();
+  } catch (error) {
+    store.clearStagedImportedData();
+    throw error;
+  }
 }
 
 async function geocodePendingPeople({ store, apiKey, limit = 50, onProgress }) {
@@ -240,6 +282,17 @@ async function resolveBridgePaths(app) {
   };
 }
 
+async function getAccessFileFingerprint(accessDbPath) {
+  const stat = await fs.promises.stat(accessDbPath);
+  return `${Math.trunc(stat.size)}:${Math.trunc(stat.mtimeMs)}`;
+}
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 async function compileAccessBridge({ bundledRoot, runtimeBuildDir }) {
   const sourceDir = path.join(bundledRoot, 'tools', 'access-bridge', 'src', 'bridge');
   const sources = fs
@@ -311,6 +364,7 @@ async function geocodeAddress(apiKey, address) {
 }
 
 module.exports = {
+  getAccessFileFingerprint,
   geocodeOrigin,
   geocodePendingPeople,
   importAccessDatabase,

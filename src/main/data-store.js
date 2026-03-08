@@ -4,6 +4,34 @@ const { DatabaseSync } = require('node:sqlite');
 
 const PEOPLE_TABLE = 'PC Dane właściciela i pompy';
 const SERVICE_TABLE = 'Karta serwisowa';
+const ACTIVE_IMPORT_TABLES = Object.freeze({
+  importMeta: 'import_meta',
+  importedTables: 'imported_tables',
+  importedTableRows: 'imported_table_rows',
+  peopleCache: 'people_cache',
+  serviceCards: 'service_cards'
+});
+const ACTIVE_IMPORT_INDEXES = Object.freeze({
+  importedRowsByTable: 'idx_imported_table_rows_table_name',
+  importedRowsBySource: 'idx_imported_table_rows_source_row_id',
+  peopleSearch: 'idx_people_cache_search_text',
+  peopleCoordinates: 'idx_people_cache_coordinates',
+  serviceCardsOwner: 'idx_service_cards_owner'
+});
+const STAGING_IMPORT_TABLES = Object.freeze({
+  importMeta: 'staging_import_meta',
+  importedTables: 'staging_imported_tables',
+  importedTableRows: 'staging_imported_table_rows',
+  peopleCache: 'staging_people_cache',
+  serviceCards: 'staging_service_cards'
+});
+const STAGING_IMPORT_INDEXES = Object.freeze({
+  importedRowsByTable: 'idx_staging_imported_table_rows_table_name',
+  importedRowsBySource: 'idx_staging_imported_table_rows_source_row_id',
+  peopleSearch: 'idx_staging_people_cache_search_text',
+  peopleCoordinates: 'idx_staging_people_cache_coordinates',
+  serviceCardsOwner: 'idx_staging_service_cards_owner'
+});
 
 function createDataStore(app) {
   const dbDirectory = path.join(app.getPath('userData'), 'data');
@@ -24,11 +52,18 @@ function createDataStore(app) {
     getSetting: (key) => getSetting(db, key),
     setSetting: (key, value) => setSetting(db, key, value),
     clearImportedData: () => clearImportedData(db),
+    clearStagedImportedData: () => clearStagedImportedData(db),
     saveImportedTable: (table) => saveImportedTable(db, table),
+    saveStagedImportedTable: (table) => saveStagedImportedTable(db, table),
     saveImportedRows: (tableName, rows) => saveImportedRows(db, tableName, rows),
+    saveStagedImportedRows: (tableName, rows) => saveStagedImportedRows(db, tableName, rows),
     savePeopleRows: (rows) => savePeopleRows(db, rows),
+    saveStagedPeopleRows: (rows) => saveStagedPeopleRows(db, rows),
     saveServiceCards: (rows) => saveServiceCards(db, rows),
+    saveStagedServiceCards: (rows) => saveStagedServiceCards(db, rows),
     finalizeImport: (sourcePath) => finalizeImport(db, sourcePath),
+    finalizeStagedImport: (sourcePath) => finalizeStagedImport(db, sourcePath),
+    promoteStagedImport: (input) => promoteStagedImport(db, input),
     getDashboardSummary: () => getDashboardSummary(db),
     getImportTables: () => getImportTables(db),
     getTableRows: (input) => getTableRows(db, input),
@@ -64,7 +99,34 @@ function initSchema(db) {
       value TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS import_meta (
+    ${buildImportSchemaSql(ACTIVE_IMPORT_TABLES, ACTIVE_IMPORT_INDEXES)}
+    ${buildImportSchemaSql(STAGING_IMPORT_TABLES, STAGING_IMPORT_INDEXES)}
+
+    CREATE TABLE IF NOT EXISTS local_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_local_notes_entity
+      ON local_notes(entity_type, entity_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS custom_points (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL,
+      address_text TEXT,
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+}
+
+function buildImportSchemaSql(tables, indexes) {
+  return `
+    CREATE TABLE IF NOT EXISTS ${tables.importMeta} (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       source_path TEXT,
       imported_at TEXT,
@@ -72,14 +134,14 @@ function initSchema(db) {
       rows_count INTEGER DEFAULT 0
     );
 
-    CREATE TABLE IF NOT EXISTS imported_tables (
+    CREATE TABLE IF NOT EXISTS ${tables.importedTables} (
       name TEXT PRIMARY KEY,
       row_count INTEGER DEFAULT 0,
       columns_json TEXT NOT NULL,
       imported_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS imported_table_rows (
+    CREATE TABLE IF NOT EXISTS ${tables.importedTableRows} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       table_name TEXT NOT NULL,
       source_row_id TEXT,
@@ -88,13 +150,13 @@ function initSchema(db) {
       imported_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_imported_table_rows_table_name
-      ON imported_table_rows(table_name);
+    CREATE INDEX IF NOT EXISTS ${indexes.importedRowsByTable}
+      ON ${tables.importedTableRows}(table_name);
 
-    CREATE INDEX IF NOT EXISTS idx_imported_table_rows_source_row_id
-      ON imported_table_rows(source_row_id);
+    CREATE INDEX IF NOT EXISTS ${indexes.importedRowsBySource}
+      ON ${tables.importedTableRows}(source_row_id);
 
-    CREATE TABLE IF NOT EXISTS people_cache (
+    CREATE TABLE IF NOT EXISTS ${tables.peopleCache} (
       source_row_id TEXT PRIMARY KEY,
       full_name TEXT,
       company_name TEXT,
@@ -130,13 +192,13 @@ function initSchema(db) {
       imported_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_people_cache_search_text
-      ON people_cache(search_text);
+    CREATE INDEX IF NOT EXISTS ${indexes.peopleSearch}
+      ON ${tables.peopleCache}(search_text);
 
-    CREATE INDEX IF NOT EXISTS idx_people_cache_coordinates
-      ON people_cache(lat, lng);
+    CREATE INDEX IF NOT EXISTS ${indexes.peopleCoordinates}
+      ON ${tables.peopleCache}(lat, lng);
 
-    CREATE TABLE IF NOT EXISTS service_cards (
+    CREATE TABLE IF NOT EXISTS ${tables.serviceCards} (
       source_row_id TEXT PRIMARY KEY,
       owner_source_row_id TEXT,
       card_date TEXT,
@@ -150,29 +212,9 @@ function initSchema(db) {
       imported_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_service_cards_owner
-      ON service_cards(owner_source_row_id);
-
-    CREATE TABLE IF NOT EXISTS local_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL,
-      entity_id TEXT NOT NULL,
-      message TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_local_notes_entity
-      ON local_notes(entity_type, entity_id, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS custom_points (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      label TEXT NOT NULL,
-      address_text TEXT,
-      lat REAL NOT NULL,
-      lng REAL NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `);
+    CREATE INDEX IF NOT EXISTS ${indexes.serviceCardsOwner}
+      ON ${tables.serviceCards}(owner_source_row_id);
+  `;
 }
 
 function getSetting(db, key) {
@@ -189,19 +231,35 @@ function setSetting(db, key, value) {
 }
 
 function clearImportedData(db) {
+  clearImportData(db, ACTIVE_IMPORT_TABLES);
+}
+
+function clearStagedImportedData(db) {
+  clearImportData(db, STAGING_IMPORT_TABLES);
+}
+
+function clearImportData(db, tables) {
   db.exec(`
-    DELETE FROM imported_tables;
-    DELETE FROM imported_table_rows;
-    DELETE FROM people_cache;
-    DELETE FROM service_cards;
-    DELETE FROM import_meta;
+    DELETE FROM ${tables.importedTables};
+    DELETE FROM ${tables.importedTableRows};
+    DELETE FROM ${tables.peopleCache};
+    DELETE FROM ${tables.serviceCards};
+    DELETE FROM ${tables.importMeta};
   `);
 }
 
 function saveImportedTable(db, table) {
+  saveImportedTableWithTables(db, ACTIVE_IMPORT_TABLES, table);
+}
+
+function saveStagedImportedTable(db, table) {
+  saveImportedTableWithTables(db, STAGING_IMPORT_TABLES, table);
+}
+
+function saveImportedTableWithTables(db, tables, table) {
   const importedAt = new Date().toISOString();
   db.prepare(`
-    INSERT INTO imported_tables(name, row_count, columns_json, imported_at)
+    INSERT INTO ${tables.importedTables}(name, row_count, columns_json, imported_at)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       row_count = excluded.row_count,
@@ -211,18 +269,25 @@ function saveImportedTable(db, table) {
 }
 
 function saveImportedRows(db, tableName, rows) {
+  saveImportedRowsWithTables(db, ACTIVE_IMPORT_TABLES, tableName, rows);
+}
+
+function saveStagedImportedRows(db, tableName, rows) {
+  saveImportedRowsWithTables(db, STAGING_IMPORT_TABLES, tableName, rows);
+}
+
+function saveImportedRowsWithTables(db, tables, tableName, rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return;
   }
 
   const importedAt = new Date().toISOString();
   const insertRow = db.prepare(`
-    INSERT INTO imported_table_rows(table_name, source_row_id, raw_json, search_text, imported_at)
+    INSERT INTO ${tables.importedTableRows}(table_name, source_row_id, raw_json, search_text, imported_at)
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  db.exec('BEGIN');
-  try {
+  runInTransaction(db, () => {
     for (const row of rows) {
       const sourceRowId = getSourceRowId(row);
       insertRow.run(
@@ -233,20 +298,24 @@ function saveImportedRows(db, tableName, rows) {
         importedAt
       );
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 function savePeopleRows(db, rows) {
+  savePeopleRowsWithTables(db, ACTIVE_IMPORT_TABLES, rows);
+}
+
+function saveStagedPeopleRows(db, rows) {
+  savePeopleRowsWithTables(db, STAGING_IMPORT_TABLES, rows);
+}
+
+function savePeopleRowsWithTables(db, tables, rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return;
   }
 
   const upsert = db.prepare(`
-    INSERT INTO people_cache (
+    INSERT INTO ${tables.peopleCache} (
       source_row_id,
       full_name,
       company_name,
@@ -295,34 +364,35 @@ function savePeopleRows(db, rows) {
       postal_code = excluded.postal_code,
       country = excluded.country,
       route_address = excluded.route_address,
-      lat = COALESCE(people_cache.lat, excluded.lat),
-      lng = COALESCE(people_cache.lng, excluded.lng),
-      coordinate_source = COALESCE(people_cache.coordinate_source, excluded.coordinate_source),
+      lat = COALESCE(${tables.peopleCache}.lat, excluded.lat),
+      lng = COALESCE(${tables.peopleCache}.lng, excluded.lng),
+      coordinate_source = COALESCE(${tables.peopleCache}.coordinate_source, excluded.coordinate_source),
       geocode_status = CASE
-        WHEN people_cache.lat IS NOT NULL AND people_cache.lng IS NOT NULL THEN people_cache.geocode_status
+        WHEN ${tables.peopleCache}.lat IS NOT NULL AND ${tables.peopleCache}.lng IS NOT NULL
+          THEN ${tables.peopleCache}.geocode_status
         ELSE excluded.geocode_status
       END,
       geocode_error = excluded.geocode_error,
       installed_at = excluded.installed_at,
       last_visit_at = CASE
-        WHEN people_cache.last_visit_at IS NULL THEN excluded.last_visit_at
-        WHEN excluded.last_visit_at IS NULL THEN people_cache.last_visit_at
-        ELSE MAX(people_cache.last_visit_at, excluded.last_visit_at)
+        WHEN ${tables.peopleCache}.last_visit_at IS NULL THEN excluded.last_visit_at
+        WHEN excluded.last_visit_at IS NULL THEN ${tables.peopleCache}.last_visit_at
+        ELSE MAX(${tables.peopleCache}.last_visit_at, excluded.last_visit_at)
       END,
       last_payment_at = CASE
-        WHEN people_cache.last_payment_at IS NULL THEN excluded.last_payment_at
-        WHEN excluded.last_payment_at IS NULL THEN people_cache.last_payment_at
-        ELSE MAX(people_cache.last_payment_at, excluded.last_payment_at)
+        WHEN ${tables.peopleCache}.last_payment_at IS NULL THEN excluded.last_payment_at
+        WHEN excluded.last_payment_at IS NULL THEN ${tables.peopleCache}.last_payment_at
+        ELSE MAX(${tables.peopleCache}.last_payment_at, excluded.last_payment_at)
       END,
       planned_visit_at = CASE
-        WHEN people_cache.planned_visit_at IS NULL THEN excluded.planned_visit_at
-        WHEN excluded.planned_visit_at IS NULL THEN people_cache.planned_visit_at
-        ELSE MAX(people_cache.planned_visit_at, excluded.planned_visit_at)
+        WHEN ${tables.peopleCache}.planned_visit_at IS NULL THEN excluded.planned_visit_at
+        WHEN excluded.planned_visit_at IS NULL THEN ${tables.peopleCache}.planned_visit_at
+        ELSE MAX(${tables.peopleCache}.planned_visit_at, excluded.planned_visit_at)
       END,
       declined_visit_at = CASE
-        WHEN people_cache.declined_visit_at IS NULL THEN excluded.declined_visit_at
-        WHEN excluded.declined_visit_at IS NULL THEN people_cache.declined_visit_at
-        ELSE MAX(people_cache.declined_visit_at, excluded.declined_visit_at)
+        WHEN ${tables.peopleCache}.declined_visit_at IS NULL THEN excluded.declined_visit_at
+        WHEN excluded.declined_visit_at IS NULL THEN ${tables.peopleCache}.declined_visit_at
+        ELSE MAX(${tables.peopleCache}.declined_visit_at, excluded.declined_visit_at)
       END,
       device_vendor = excluded.device_vendor,
       device_model = excluded.device_model,
@@ -335,8 +405,7 @@ function savePeopleRows(db, rows) {
       imported_at = excluded.imported_at
   `);
 
-  db.exec('BEGIN');
-  try {
+  runInTransaction(db, () => {
     for (const row of rows) {
       const person = mapPersonRow(row);
       upsert.run(
@@ -375,20 +444,24 @@ function savePeopleRows(db, rows) {
         person.importedAt
       );
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 function saveServiceCards(db, rows) {
+  saveServiceCardsWithTables(db, ACTIVE_IMPORT_TABLES, rows);
+}
+
+function saveStagedServiceCards(db, rows) {
+  saveServiceCardsWithTables(db, STAGING_IMPORT_TABLES, rows);
+}
+
+function saveServiceCardsWithTables(db, tables, rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return;
   }
 
   const upsert = db.prepare(`
-    INSERT INTO service_cards(
+    INSERT INTO ${tables.serviceCards}(
       source_row_id,
       owner_source_row_id,
       card_date,
@@ -414,8 +487,7 @@ function saveServiceCards(db, rows) {
       imported_at = excluded.imported_at
   `);
 
-  db.exec('BEGIN');
-  try {
+  runInTransaction(db, () => {
     for (const row of rows) {
       const mapped = mapServiceCardRow(row);
       upsert.run(
@@ -432,20 +504,24 @@ function saveServiceCards(db, rows) {
         mapped.importedAt
       );
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 function finalizeImport(db, sourcePath) {
+  finalizeImportWithTables(db, ACTIVE_IMPORT_TABLES, sourcePath);
+}
+
+function finalizeStagedImport(db, sourcePath) {
+  finalizeImportWithTables(db, STAGING_IMPORT_TABLES, sourcePath);
+}
+
+function finalizeImportWithTables(db, tables, sourcePath) {
   const importedAt = new Date().toISOString();
-  const tablesCount = db.prepare('SELECT COUNT(*) AS total FROM imported_tables').get().total;
-  const rowsCount = db.prepare('SELECT COUNT(*) AS total FROM imported_table_rows').get().total;
+  const tablesCount = db.prepare(`SELECT COUNT(*) AS total FROM ${tables.importedTables}`).get().total;
+  const rowsCount = db.prepare(`SELECT COUNT(*) AS total FROM ${tables.importedTableRows}`).get().total;
 
   db.prepare(`
-    INSERT INTO import_meta(id, source_path, imported_at, tables_count, rows_count)
+    INSERT INTO ${tables.importMeta}(id, source_path, imported_at, tables_count, rows_count)
     VALUES (1, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       source_path = excluded.source_path,
@@ -455,27 +531,221 @@ function finalizeImport(db, sourcePath) {
   `).run(sourcePath, importedAt, tablesCount, rowsCount);
 
   db.exec(`
-    UPDATE people_cache
+    UPDATE ${tables.peopleCache}
     SET last_visit_at = (
       SELECT MAX(card_date)
-      FROM service_cards
-      WHERE owner_source_row_id = people_cache.source_row_id
+      FROM ${tables.serviceCards}
+      WHERE owner_source_row_id = ${tables.peopleCache}.source_row_id
     )
     WHERE EXISTS (
       SELECT 1
-      FROM service_cards
-      WHERE owner_source_row_id = people_cache.source_row_id
+      FROM ${tables.serviceCards}
+      WHERE owner_source_row_id = ${tables.peopleCache}.source_row_id
     );
   `);
 
   db.exec(`
-    UPDATE people_cache
+    UPDATE ${tables.peopleCache}
     SET geocode_status = CASE
       WHEN lat IS NOT NULL AND lng IS NOT NULL THEN 'ready'
       WHEN route_address IS NULL OR route_address = '' THEN 'missing-address'
       ELSE 'pending'
     END
   `);
+}
+
+function promoteStagedImport(db, input = {}) {
+  runInTransaction(db, () => {
+    db.exec('DROP TABLE IF EXISTS temp_preserved_people_coordinates;');
+    db.exec(`
+      CREATE TEMP TABLE temp_preserved_people_coordinates AS
+      SELECT
+        source_row_id,
+        route_address,
+        lat,
+        lng,
+        coordinate_source,
+        geocode_status,
+        geocode_error
+      FROM ${ACTIVE_IMPORT_TABLES.peopleCache}
+      WHERE lat IS NOT NULL AND lng IS NOT NULL;
+
+      DELETE FROM ${ACTIVE_IMPORT_TABLES.importedTables};
+      DELETE FROM ${ACTIVE_IMPORT_TABLES.importedTableRows};
+      DELETE FROM ${ACTIVE_IMPORT_TABLES.peopleCache};
+      DELETE FROM ${ACTIVE_IMPORT_TABLES.serviceCards};
+      DELETE FROM ${ACTIVE_IMPORT_TABLES.importMeta};
+
+      INSERT INTO ${ACTIVE_IMPORT_TABLES.importedTables}(name, row_count, columns_json, imported_at)
+      SELECT name, row_count, columns_json, imported_at
+      FROM ${STAGING_IMPORT_TABLES.importedTables};
+
+      INSERT INTO ${ACTIVE_IMPORT_TABLES.importedTableRows}(
+        table_name,
+        source_row_id,
+        raw_json,
+        search_text,
+        imported_at
+      )
+      SELECT
+        table_name,
+        source_row_id,
+        raw_json,
+        search_text,
+        imported_at
+      FROM ${STAGING_IMPORT_TABLES.importedTableRows};
+
+      INSERT INTO ${ACTIVE_IMPORT_TABLES.peopleCache}(
+        source_row_id,
+        full_name,
+        company_name,
+        email,
+        phone,
+        address_text,
+        street,
+        city,
+        county,
+        commune,
+        region,
+        postal_code,
+        country,
+        route_address,
+        lat,
+        lng,
+        coordinate_source,
+        geocode_status,
+        geocode_error,
+        installed_at,
+        last_visit_at,
+        last_payment_at,
+        planned_visit_at,
+        declined_visit_at,
+        device_vendor,
+        device_model,
+        payer_name,
+        current_amount,
+        total_paid,
+        notes_summary,
+        raw_json,
+        search_text,
+        imported_at
+      )
+      SELECT
+        staging.source_row_id,
+        staging.full_name,
+        staging.company_name,
+        staging.email,
+        staging.phone,
+        staging.address_text,
+        staging.street,
+        staging.city,
+        staging.county,
+        staging.commune,
+        staging.region,
+        staging.postal_code,
+        staging.country,
+        staging.route_address,
+        CASE
+          WHEN staging.lat IS NOT NULL AND staging.lng IS NOT NULL THEN staging.lat
+          WHEN preserved.route_address = staging.route_address THEN preserved.lat
+          ELSE NULL
+        END,
+        CASE
+          WHEN staging.lat IS NOT NULL AND staging.lng IS NOT NULL THEN staging.lng
+          WHEN preserved.route_address = staging.route_address THEN preserved.lng
+          ELSE NULL
+        END,
+        CASE
+          WHEN staging.lat IS NOT NULL AND staging.lng IS NOT NULL THEN staging.coordinate_source
+          WHEN preserved.route_address = staging.route_address
+            AND preserved.lat IS NOT NULL
+            AND preserved.lng IS NOT NULL
+            THEN preserved.coordinate_source
+          ELSE staging.coordinate_source
+        END,
+        CASE
+          WHEN staging.lat IS NOT NULL AND staging.lng IS NOT NULL THEN staging.geocode_status
+          WHEN preserved.route_address = staging.route_address
+            AND preserved.lat IS NOT NULL
+            AND preserved.lng IS NOT NULL
+            THEN preserved.geocode_status
+          ELSE staging.geocode_status
+        END,
+        CASE
+          WHEN staging.lat IS NOT NULL AND staging.lng IS NOT NULL THEN staging.geocode_error
+          WHEN preserved.route_address = staging.route_address
+            AND preserved.lat IS NOT NULL
+            AND preserved.lng IS NOT NULL
+            THEN preserved.geocode_error
+          ELSE staging.geocode_error
+        END,
+        staging.installed_at,
+        staging.last_visit_at,
+        staging.last_payment_at,
+        staging.planned_visit_at,
+        staging.declined_visit_at,
+        staging.device_vendor,
+        staging.device_model,
+        staging.payer_name,
+        staging.current_amount,
+        staging.total_paid,
+        staging.notes_summary,
+        staging.raw_json,
+        staging.search_text,
+        staging.imported_at
+      FROM ${STAGING_IMPORT_TABLES.peopleCache} AS staging
+      LEFT JOIN temp_preserved_people_coordinates AS preserved
+        ON preserved.source_row_id = staging.source_row_id;
+
+      INSERT INTO ${ACTIVE_IMPORT_TABLES.serviceCards}(
+        source_row_id,
+        owner_source_row_id,
+        card_date,
+        technician,
+        device,
+        address_text,
+        card_type,
+        event_type,
+        gross_income,
+        raw_json,
+        imported_at
+      )
+      SELECT
+        source_row_id,
+        owner_source_row_id,
+        card_date,
+        technician,
+        device,
+        address_text,
+        card_type,
+        event_type,
+        gross_income,
+        raw_json,
+        imported_at
+      FROM ${STAGING_IMPORT_TABLES.serviceCards};
+
+      INSERT INTO ${ACTIVE_IMPORT_TABLES.importMeta}(id, source_path, imported_at, tables_count, rows_count)
+      SELECT id, source_path, imported_at, tables_count, rows_count
+      FROM ${STAGING_IMPORT_TABLES.importMeta};
+    `);
+
+    setSetting(db, 'lastImportedAccessPath', input.sourcePath || '');
+    setSetting(db, 'lastImportedAccessFingerprint', input.sourceFingerprint || '');
+    clearImportData(db, STAGING_IMPORT_TABLES);
+    db.exec('DROP TABLE IF EXISTS temp_preserved_people_coordinates;');
+  });
+}
+
+function runInTransaction(db, callback) {
+  db.exec('BEGIN');
+  try {
+    const result = callback();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function getDashboardSummary(db) {

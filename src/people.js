@@ -23,6 +23,15 @@ const notesListEl = document.getElementById('person-notes');
 let activePersonId = null;
 let searchTimer = null;
 
+window.appApi.onOperationStatus(async (payload) => {
+  if (
+    payload?.status === 'completed' &&
+    (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
+  ) {
+    await loadPeople(searchInput.value);
+  }
+});
+
 searchInput.addEventListener('input', () => {
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => {

@@ -4,6 +4,8 @@ const path = require('node:path');
 const AdmZip = require('adm-zip');
 const { loadAccessPassword, loadGoogleMapsApiKey } = require('./access-service');
 
+const TRASA_CONTAINER_PREFIX = Buffer.from('MAPSHORTNER_TRASA_V1\n', 'utf8');
+
 function exportTrasaArchive({ app, store, targetPath, appVersion }) {
   const outputPath = ensureTrasaExtension(targetPath);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mapshortner-trasa-'));
@@ -34,13 +36,14 @@ function exportTrasaArchive({ app, store, targetPath, appVersion }) {
       Buffer.from(
         [
           'Pakiet .trasa zawiera pelny snapshot SQLite, raporty JSON oraz sekrety.',
+          'Jest zapisywany jako wlasny kontener aplikacji MapShortner, a nie jako surowy plik ZIP.',
           'Traktuj ten plik jak dane wrazliwe i przechowuj go bezpiecznie.',
           ''
         ].join('\n'),
         'utf8'
       )
     );
-    archive.writeZip(outputPath);
+    fs.writeFileSync(outputPath, wrapTrasaArchiveBuffer(archive.toBuffer()));
 
     return {
       outputPath,
@@ -53,7 +56,7 @@ function exportTrasaArchive({ app, store, targetPath, appVersion }) {
 }
 
 function importTrasaArchive({ app, trasaPath, targetDbPath }) {
-  const archive = new AdmZip(trasaPath);
+  const archive = new AdmZip(readTrasaArchiveBuffer(trasaPath));
   const manifest = readManifest(archive);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mapshortner-trasa-import-'));
 
@@ -80,6 +83,20 @@ function importTrasaArchive({ app, trasaPath, targetDbPath }) {
 
 function ensureTrasaExtension(targetPath) {
   return targetPath.toLowerCase().endsWith('.trasa') ? targetPath : `${targetPath}.trasa`;
+}
+
+function wrapTrasaArchiveBuffer(zipBuffer) {
+  return Buffer.concat([TRASA_CONTAINER_PREFIX, zipBuffer]);
+}
+
+function readTrasaArchiveBuffer(trasaPath) {
+  const payload = fs.readFileSync(trasaPath);
+
+  if (payload.subarray(0, TRASA_CONTAINER_PREFIX.length).equals(TRASA_CONTAINER_PREFIX)) {
+    return payload.subarray(TRASA_CONTAINER_PREFIX.length);
+  }
+
+  return payload;
 }
 
 function createDatabaseZip(snapshotPath) {
@@ -121,10 +138,14 @@ function createSecretsZip(secrets) {
 function buildManifest({ appVersion, outputPath, reports, secrets }) {
   return {
     format: 'mapshortner.trasa',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     applicationVersion: appVersion || null,
     archiveName: path.basename(outputPath),
+    container: {
+      type: 'wrapped-zip',
+      wrapper: 'mapshortner-header-v1'
+    },
     contains: {
       databaseZip: 'database.zip',
       reportsZip: 'reports.zip',

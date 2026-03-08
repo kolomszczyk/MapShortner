@@ -25,6 +25,9 @@ window.appApi.onUpdateStatus((message) => {
 });
 
 window.appApi.onOperationStatus((payload) => {
+  if (payload?.summary) {
+    renderSummary(payload.summary);
+  }
   appendLog(payload?.message || 'Zdarzenie systemowe.');
 });
 

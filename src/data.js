@@ -14,6 +14,15 @@ let currentPage = 1;
 let currentTableName = null;
 let tableColumns = [];
 
+window.appApi.onOperationStatus(async (payload) => {
+  if (
+    payload?.status === 'completed' &&
+    (payload.type === 'import' || payload.type === 'trasa-import')
+  ) {
+    await refreshTables();
+  }
+});
+
 tableSelect.addEventListener('change', async () => {
   currentPage = 1;
   currentTableName = tableSelect.value;
@@ -40,7 +49,10 @@ bootstrap();
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
   applySummary(bootstrapData.summary);
+  await refreshTables();
+}
 
+async function refreshTables() {
   const tables = await window.appApi.getImportTables();
   tableSelect.innerHTML = tables
     .map(
@@ -49,7 +61,12 @@ async function bootstrap() {
     )
     .join('');
 
-  currentTableName = tables[0]?.name || null;
+  if (currentTableName && tables.some((table) => table.name === currentTableName)) {
+    tableSelect.value = currentTableName;
+  } else {
+    currentTableName = tables[0]?.name || null;
+  }
+
   if (currentTableName) {
     tableSelect.value = currentTableName;
     await loadPage();

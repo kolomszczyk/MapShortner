@@ -20,6 +20,9 @@ export function initShell(pageId) {
   if (operationStatusEl) {
     window.appApi.onOperationStatus((payload) => {
       operationStatusEl.textContent = payload?.message || 'Brak aktywnej operacji.';
+      if (payload?.summary) {
+        applySummary(payload.summary);
+      }
     });
   }
 }

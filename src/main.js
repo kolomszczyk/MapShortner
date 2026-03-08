@@ -4,6 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const log = require('electron-log');
 const { createDataStore } = require('./main/data-store');
 const {
+  getAccessFileFingerprint,
   geocodeOrigin,
   geocodePendingPeople,
   importAccessDatabase,
@@ -15,6 +16,10 @@ const { exportTrasaArchive, importTrasaArchive } = require('./main/trasa-service
 let mainWindow;
 let store;
 let autoUpdater = null;
+let exclusiveOperationQueue = Promise.resolve();
+let accessReimportInterval = null;
+
+const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -28,6 +33,186 @@ function sendUpdateStatus(message) {
 
 function sendOperationStatus(payload) {
   sendToRenderer('app:operationStatus', payload);
+}
+
+function enqueueExclusiveOperation(operation) {
+  const task = exclusiveOperationQueue.then(operation);
+  exclusiveOperationQueue = task.catch(() => {});
+  return task;
+}
+
+function buildImportStartMessage(request, hasSnapshot) {
+  if (request.source === 'auto' && request.reason === 'startup') {
+    return 'Uruchomiono startowy reimport Access -> SQLite.';
+  }
+
+  if (request.source === 'auto') {
+    return hasSnapshot
+      ? 'Wykryto zmiane w pliku Access. Rozpoczeto bezpieczny reimport.'
+      : 'Brak lokalnego snapshotu. Rozpoczeto pierwszy automatyczny import Access -> SQLite.';
+  }
+
+  return 'Rozpoczeto bezpieczny import Access -> SQLite.';
+}
+
+function buildImportProgressMessage(progress) {
+  if (progress?.message) {
+    return progress.message;
+  }
+
+  if (progress?.phase === 'promote') {
+    return 'Podmiana aktywnego snapshotu SQLite.';
+  }
+
+  if (progress?.phase === 'preparing') {
+    return 'Przygotowanie bezpiecznego reimportu.';
+  }
+
+  return `Import tabeli ${progress?.tableName || ''}`.trim();
+}
+
+function buildImportCompletedMessage(request) {
+  if (request.source === 'auto' && request.reason === 'startup') {
+    return 'Startowy reimport zakonczony.';
+  }
+
+  if (request.source === 'auto') {
+    return 'Automatyczny reimport zakonczony.';
+  }
+
+  return 'Import zakonczony.';
+}
+
+function buildImportFailedMessage(request, error) {
+  if (request.source === 'auto') {
+    return `Automatyczny reimport nie powiodl sie: ${error.message}`;
+  }
+
+  return `Import nie powiodl sie: ${error.message}`;
+}
+
+async function ensureAccessImport(request = {}) {
+  const accessDbPath = request.accessDbPath || store.getSetting('accessDbPath');
+  if (!accessDbPath) {
+    if (request.source === 'manual') {
+      throw new Error('Najpierw wybierz lokalizacje pliku Access.');
+    }
+    return store.getDashboardSummary();
+  }
+
+  const summaryBeforeImport = store.getDashboardSummary();
+  const hasSnapshot = Boolean(summaryBeforeImport?.importMeta?.imported_at);
+  const importedPath =
+    store.getSetting('lastImportedAccessPath') || summaryBeforeImport?.importMeta?.source_path || '';
+  const importedFingerprint = store.getSetting('lastImportedAccessFingerprint') || '';
+
+  let sourceFingerprint;
+  try {
+    sourceFingerprint = await getAccessFileFingerprint(accessDbPath);
+  } catch (error) {
+    const wrappedError = new Error(`Nie mozna odczytac pliku Access: ${error.message}`);
+    if (request.source === 'auto') {
+      sendOperationStatus({
+        type: 'import',
+        source: request.source,
+        status: 'failed',
+        reason: request.reason,
+        message: buildImportFailedMessage(request, wrappedError),
+        error: wrappedError.message,
+        summary: summaryBeforeImport
+      });
+      return summaryBeforeImport;
+    }
+    throw wrappedError;
+  }
+
+  const shouldImport =
+    Boolean(request.force) ||
+    !hasSnapshot ||
+    importedPath !== accessDbPath ||
+    importedFingerprint !== sourceFingerprint;
+
+  if (!shouldImport) {
+    return summaryBeforeImport;
+  }
+
+  sendOperationStatus({
+    type: 'import',
+    source: request.source || 'manual',
+    status: 'started',
+    reason: request.reason || 'manual',
+    message: buildImportStartMessage(request, hasSnapshot)
+  });
+
+  try {
+    const summary = await importAccessDatabase({
+      app,
+      store,
+      accessDbPath,
+      sourceFingerprint,
+      onProgress: (progress) => {
+        sendOperationStatus({
+          type: 'import',
+          source: request.source || 'manual',
+          status: 'progress',
+          reason: request.reason || 'manual',
+          message: buildImportProgressMessage(progress),
+          progress
+        });
+      }
+    });
+
+    sendOperationStatus({
+      type: 'import',
+      source: request.source || 'manual',
+      status: 'completed',
+      reason: request.reason || 'manual',
+      message: buildImportCompletedMessage(request),
+      summary
+    });
+
+    return summary;
+  } catch (error) {
+    const summary = store.getDashboardSummary();
+    sendOperationStatus({
+      type: 'import',
+      source: request.source || 'manual',
+      status: 'failed',
+      reason: request.reason || 'manual',
+      message: buildImportFailedMessage(request, error),
+      error: error.message,
+      summary
+    });
+    throw error;
+  }
+}
+
+function queueAccessImport(request = {}) {
+  return enqueueExclusiveOperation(() => ensureAccessImport(request));
+}
+
+function startAccessReimportMonitor() {
+  if (accessReimportInterval) {
+    clearInterval(accessReimportInterval);
+  }
+
+  void queueAccessImport({
+    source: 'auto',
+    reason: 'startup',
+    force: true
+  }).catch((error) => {
+    log.error('Startup access reimport failed', error);
+  });
+
+  accessReimportInterval = setInterval(() => {
+    void queueAccessImport({
+      source: 'auto',
+      reason: 'interval',
+      force: false
+    }).catch((error) => {
+      log.error('Scheduled access reimport failed', error);
+    });
+  }, ACCESS_REIMPORT_INTERVAL_MS);
 }
 
 function removeDatabaseSidecars(dbPath) {
@@ -165,7 +350,7 @@ async function pickTrasaImportPath() {
     properties: ['openFile'],
     filters: [
       { name: 'Pakiet trasy', extensions: ['trasa'] },
-      { name: 'Pliki ZIP', extensions: ['zip'] },
+      { name: 'Legacy ZIP', extensions: ['zip'] },
       { name: 'Wszystkie pliki', extensions: ['*'] }
     ]
   });
@@ -181,6 +366,7 @@ app.whenReady().then(() => {
   store = createDataStore(app);
   createWindow();
   configureAutoUpdater();
+  startAccessReimportMonitor();
 
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify();
@@ -196,6 +382,13 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  if (accessReimportInterval) {
+    clearInterval(accessReimportInterval);
+    accessReimportInterval = null;
   }
 });
 
@@ -226,30 +419,32 @@ ipcMain.handle('trasa:export', async (_event, payload = {}) => {
     return null;
   }
 
-  sendOperationStatus({
-    type: 'trasa-export',
-    status: 'started',
-    message: 'Rozpoczeto eksport pakietu .trasa.'
-  });
+  return enqueueExclusiveOperation(async () => {
+    sendOperationStatus({
+      type: 'trasa-export',
+      status: 'started',
+      message: 'Rozpoczeto eksport pakietu .trasa.'
+    });
 
-  const result = exportTrasaArchive({
-    app,
-    store,
-    targetPath,
-    appVersion: app.getVersion()
-  });
+    const result = exportTrasaArchive({
+      app,
+      store,
+      targetPath,
+      appVersion: app.getVersion()
+    });
 
-  sendOperationStatus({
-    type: 'trasa-export',
-    status: 'completed',
-    message: `Wyeksportowano pakiet .trasa do ${result.outputPath}.`,
-    result
-  });
+    sendOperationStatus({
+      type: 'trasa-export',
+      status: 'completed',
+      message: `Wyeksportowano pakiet .trasa do ${result.outputPath}.`,
+      result
+    });
 
-  return {
-    ...result,
-    summary: store.getDashboardSummary()
-  };
+    return {
+      ...result,
+      summary: store.getDashboardSummary()
+    };
+  });
 });
 
 ipcMain.handle('trasa:import', async () => {
@@ -258,58 +453,60 @@ ipcMain.handle('trasa:import', async () => {
     return null;
   }
 
-  sendOperationStatus({
-    type: 'trasa-import',
-    status: 'started',
-    message: 'Rozpoczeto import pakietu .trasa.'
-  });
-
-  const targetDbPath = path.join(app.getPath('userData'), 'data', 'mapshortner.sqlite');
-  const backupPath = path.join(app.getPath('temp'), `mapshortner-before-import-${Date.now()}.sqlite`);
-
-  if (store) {
-    store.exportSnapshot(backupPath);
-    store.close();
-  }
-
-  try {
-    const result = importTrasaArchive({
-      app,
-      trasaPath,
-      targetDbPath
-    });
-
-    store = createDataStore(app);
-
-    const googleMapsApiKey = loadGoogleMapsApiKey();
-    if (googleMapsApiKey) {
-      store.setSetting('googleMapsApiKey', googleMapsApiKey);
-    }
-
-    const summary = store.getDashboardSummary();
+  return enqueueExclusiveOperation(async () => {
     sendOperationStatus({
       type: 'trasa-import',
-      status: 'completed',
-      message: `Wczytano pakiet .trasa z ${trasaPath}.`,
-      result,
-      summary
+      status: 'started',
+      message: 'Rozpoczeto import pakietu .trasa.'
     });
 
-    return {
-      ...result,
-      summary
-    };
-  } catch (error) {
-    if (fs.existsSync(backupPath)) {
-      fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
-      removeDatabaseSidecars(targetDbPath);
-      fs.copyFileSync(backupPath, targetDbPath);
+    const targetDbPath = path.join(app.getPath('userData'), 'data', 'mapshortner.sqlite');
+    const backupPath = path.join(app.getPath('temp'), `mapshortner-before-import-${Date.now()}.sqlite`);
+
+    if (store) {
+      store.exportSnapshot(backupPath);
+      store.close();
     }
-    store = createDataStore(app);
-    throw error;
-  } finally {
-    fs.rmSync(backupPath, { force: true });
-  }
+
+    try {
+      const result = importTrasaArchive({
+        app,
+        trasaPath,
+        targetDbPath
+      });
+
+      store = createDataStore(app);
+
+      const googleMapsApiKey = loadGoogleMapsApiKey();
+      if (googleMapsApiKey) {
+        store.setSetting('googleMapsApiKey', googleMapsApiKey);
+      }
+
+      const summary = store.getDashboardSummary();
+      sendOperationStatus({
+        type: 'trasa-import',
+        status: 'completed',
+        message: `Wczytano pakiet .trasa z ${trasaPath}.`,
+        result,
+        summary
+      });
+
+      return {
+        ...result,
+        summary
+      };
+    } catch (error) {
+      if (fs.existsSync(backupPath)) {
+        fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
+        removeDatabaseSidecars(targetDbPath);
+        fs.copyFileSync(backupPath, targetDbPath);
+      }
+      store = createDataStore(app);
+      throw error;
+    } finally {
+      fs.rmSync(backupPath, { force: true });
+    }
+  });
 });
 
 ipcMain.handle('access:pickFile', async () => {
@@ -326,75 +523,55 @@ ipcMain.handle('access:import', async (_event, payload = {}) => {
     throw new Error('Najpierw wybierz lokalizacje pliku Access.');
   }
 
-  sendOperationStatus({
-    type: 'import',
-    status: 'started',
-    message: 'Rozpoczeto import Access -> SQLite.'
+  return queueAccessImport({
+    source: 'manual',
+    reason: 'manual',
+    force: true,
+    accessDbPath
   });
-
-  const summary = await importAccessDatabase({
-    app,
-    store,
-    accessDbPath,
-    onProgress: (progress) => {
-      sendOperationStatus({
-        type: 'import',
-        status: 'progress',
-        message: `Import tabeli ${progress.tableName || ''}`.trim(),
-        progress
-      });
-    }
-  });
-
-  sendOperationStatus({
-    type: 'import',
-    status: 'completed',
-    message: 'Import zakonczony.',
-    summary
-  });
-
-  return summary;
 });
 
 ipcMain.handle('geocode:run', async (_event, payload = {}) => {
-  const apiKey = (payload.apiKey || store.getSetting('googleMapsApiKey') || '').trim();
-  if (payload.apiKey) {
-    store.setSetting('googleMapsApiKey', apiKey);
-  }
-
-  sendOperationStatus({
-    type: 'geocoding',
-    status: 'started',
-    message: 'Rozpoczeto geokodowanie adresow.'
-  });
-
-  const result = await geocodePendingPeople({
-    store,
-    apiKey,
-    limit: Number(payload.limit || 50),
-    onProgress: (progress) => {
-      sendOperationStatus({
-        type: 'geocoding',
-        status: 'progress',
-        message: `Geokodowanie ${progress.current}/${progress.total}`,
-        progress
-      });
+  return enqueueExclusiveOperation(async () => {
+    const apiKey = (payload.apiKey || store.getSetting('googleMapsApiKey') || '').trim();
+    if (payload.apiKey) {
+      store.setSetting('googleMapsApiKey', apiKey);
     }
-  });
 
-  const summary = store.getDashboardSummary();
-  sendOperationStatus({
-    type: 'geocoding',
-    status: 'completed',
-    message: `Geokodowanie zakonczone. Sukces: ${result.resolved}, bledy: ${result.failed}.`,
-    result,
-    summary
-  });
+    sendOperationStatus({
+      type: 'geocoding',
+      status: 'started',
+      message: 'Rozpoczeto geokodowanie adresow.'
+    });
 
-  return {
-    result,
-    summary
-  };
+    const result = await geocodePendingPeople({
+      store,
+      apiKey,
+      limit: Number(payload.limit || 50),
+      onProgress: (progress) => {
+        sendOperationStatus({
+          type: 'geocoding',
+          status: 'progress',
+          message: `Geokodowanie ${progress.current}/${progress.total}`,
+          progress
+        });
+      }
+    });
+
+    const summary = store.getDashboardSummary();
+    sendOperationStatus({
+      type: 'geocoding',
+      status: 'completed',
+      message: `Geokodowanie zakonczone. Sukces: ${result.resolved}, bledy: ${result.failed}.`,
+      result,
+      summary
+    });
+
+    return {
+      result,
+      summary
+    };
+  });
 });
 
 ipcMain.handle('dashboard:getSummary', () => store.getDashboardSummary());
