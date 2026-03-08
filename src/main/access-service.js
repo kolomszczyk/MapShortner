@@ -13,7 +13,7 @@ async function importAccessDatabase({ app, store, accessDbPath, onProgress, sour
   const password = loadAccessPassword();
   if (!password) {
     throw new Error(
-      'Nie znaleziono hasla do Accessa. Oczekiwany plik: ~/secrets/acces_db_tata z export ACCES_PASSWORD="..."'
+      'Nie znaleziono hasla do Accessa. Wpisz je w aplikacji albo zapisz w ~/secrets/acces_db_tata jako export ACCES_PASSWORD="...".'
     );
   }
 
@@ -202,10 +202,27 @@ async function geocodeOrigin({ store, address, apiKey }) {
 }
 
 function loadAccessPassword() {
-  return loadExportedSecret(path.join(os.homedir(), 'secrets', 'acces_db_tata'), [
-    'ACCES_PASSWORD',
-    'ACCESS_PASSWORD'
-  ]);
+  return loadExportedSecret(getAccessPasswordSecretFile(), ['ACCES_PASSWORD', 'ACCESS_PASSWORD']);
+}
+
+function saveAccessPassword(password) {
+  const normalizedPassword = String(password ?? '').trim();
+  if (!normalizedPassword) {
+    throw new Error('Haslo Accessa nie moze byc puste.');
+  }
+
+  const secretFile = getAccessPasswordSecretFile();
+  fs.mkdirSync(path.dirname(secretFile), { recursive: true });
+  fs.writeFileSync(secretFile, formatExportedSecret('ACCES_PASSWORD', normalizedPassword), {
+    mode: 0o600
+  });
+  fs.chmodSync(secretFile, 0o600);
+
+  // Keep the current process in sync even if the app was launched with a stale shell env.
+  process.env.ACCES_PASSWORD = normalizedPassword;
+  process.env.ACCESS_PASSWORD = normalizedPassword;
+
+  return true;
 }
 
 function loadGoogleMapsApiKey() {
@@ -231,15 +248,78 @@ function loadExportedSecret(secretFile, variableNames) {
   }
 
   const content = fs.readFileSync(secretFile, 'utf8');
+  const lines = content.split(/\r?\n/);
   for (const variableName of variableNames) {
-    const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = content.match(new RegExp(`${escaped}\\s*=\\s*["']?([^"'\\n]+)["']?`));
-    if (match) {
-      return match[1].trim();
+    const value = readSecretFromLines(lines, variableName);
+    if (value) {
+      return value;
     }
   }
 
   return null;
+}
+
+function readSecretFromLines(lines, variableName) {
+  const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?${escaped}\\s*=\\s*(.*)$`);
+
+  for (const line of lines) {
+    const match = line.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    const parsedValue = parseSecretValue(match[1]);
+    if (parsedValue) {
+      return parsedValue;
+    }
+  }
+
+  return null;
+}
+
+function parseSecretValue(rawValue) {
+  const trimmedValue = String(rawValue ?? '').trim();
+  if (!trimmedValue) {
+    return null;
+  }
+
+  const quote = trimmedValue[0];
+  if (quote !== '"' && quote !== "'") {
+    return trimmedValue;
+  }
+
+  let decoded = '';
+  let escaped = false;
+  for (let index = 1; index < trimmedValue.length; index += 1) {
+    const char = trimmedValue[index];
+    if (escaped) {
+      decoded += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === quote) {
+      return decoded;
+    }
+
+    decoded += char;
+  }
+
+  return decoded || null;
+}
+
+function getAccessPasswordSecretFile() {
+  return path.join(os.homedir(), 'secrets', 'acces_db_tata');
+}
+
+function formatExportedSecret(variableName, value) {
+  return `export ${variableName}="${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"\n`;
 }
 
 async function runAccessBridge(app, args) {
@@ -369,5 +449,6 @@ module.exports = {
   geocodePendingPeople,
   importAccessDatabase,
   loadAccessPassword,
-  loadGoogleMapsApiKey
+  loadGoogleMapsApiKey,
+  saveAccessPassword
 };

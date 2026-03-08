@@ -1105,8 +1105,11 @@ function buildRoute(db, input = {}) {
     lastVisit: Number(input.lastVisitWeight || 1)
   };
   const limit = Math.min(50, Math.max(3, Number(input.limit || 12)));
-  const candidates = listPeople(db, { query: input.query || '', limit: 1000 }).filter(
-    (row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)
+  const candidates = filterPeopleByDateRange(
+    listPeople(db, { query: input.query || '', limit: 1000 }).filter(
+      (row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)
+    ),
+    input
   );
 
   const scored = candidates.map((row) => {
@@ -1156,6 +1159,34 @@ function buildRoute(db, input = {}) {
     total: ordered.length,
     points: ordered
   };
+}
+
+function filterPeopleByDateRange(rows, input = {}) {
+  const field = normalizeDateField(input.dateField);
+  let from = normalizeDateOnly(input.dateFrom);
+  let to = normalizeDateOnly(input.dateTo);
+
+  if (!from && !to) {
+    return rows;
+  }
+
+  if (from && to && from > to) {
+    [from, to] = [to, from];
+  }
+
+  return rows.filter((row) => {
+    const value = normalizeDateOnly(row?.[field]);
+    if (!value) {
+      return false;
+    }
+    if (from && value < from) {
+      return false;
+    }
+    if (to && value > to) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function getExportReports(db) {
@@ -1442,6 +1473,16 @@ function normalizeDate(value) {
     return null;
   }
   return date.toISOString();
+}
+
+function normalizeDateOnly(value) {
+  const normalized = normalizeDate(value);
+  return normalized ? normalized.slice(0, 10) : null;
+}
+
+function normalizeDateField(value) {
+  const allowed = new Set(['lastVisitAt', 'lastPaymentAt', 'plannedVisitAt']);
+  return allowed.has(value) ? value : 'lastVisitAt';
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {

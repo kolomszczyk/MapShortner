@@ -2,6 +2,7 @@ import {
   applySummary,
   escapeHtml,
   formatDate,
+  formatDateTime,
   formatMoney,
   initShell,
   renderKeyValueList
@@ -13,6 +14,13 @@ const mapEl = document.getElementById('service-map');
 const pointsSearchInput = document.getElementById('points-search');
 const includeUnresolvedCheckbox = document.getElementById('include-unresolved');
 const refreshPointsBtn = document.getElementById('refresh-points-btn');
+const timeFieldSelect = document.getElementById('time-field');
+const timeFromInput = document.getElementById('time-from');
+const timeToInput = document.getElementById('time-to');
+const clearTimeFilterBtn = document.getElementById('clear-time-filter-btn');
+const timeFilterSummaryEl = document.getElementById('time-filter-summary');
+const showTimeColorsCheckbox = document.getElementById('show-time-colors');
+const timeColorLegendEl = document.getElementById('time-color-legend');
 const pointsListEl = document.getElementById('points-list');
 const routeForm = document.getElementById('route-form');
 const routeResultsEl = document.getElementById('route-results');
@@ -20,14 +28,101 @@ const detailTitleEl = document.getElementById('map-detail-title');
 const detailMetaEl = document.getElementById('map-detail-meta');
 const customPointForm = document.getElementById('custom-point-form');
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_PERSON_MARKER_STYLE = {
+  radius: 7,
+  color: '#23412e',
+  weight: 2,
+  fillColor: '#4db06f',
+  fillOpacity: 0.9
+};
+const MISSING_TIME_COLOR_BUCKET = {
+  key: 'missing',
+  label: 'Brak daty',
+  style: {
+    ...DEFAULT_PERSON_MARKER_STYLE,
+    color: '#6d7370',
+    fillColor: '#c0c6c2'
+  }
+};
+const TIME_COLOR_BUCKETS = [
+  {
+    key: 'future',
+    label: 'Po wczytaniu',
+    minDays: Number.NEGATIVE_INFINITY,
+    maxDays: -1,
+    style: {
+      ...DEFAULT_PERSON_MARKER_STYLE,
+      color: '#1e4f94',
+      fillColor: '#5a8ff0'
+    }
+  },
+  {
+    key: 'fresh',
+    label: '0-30 dni',
+    minDays: 0,
+    maxDays: 30,
+    style: DEFAULT_PERSON_MARKER_STYLE
+  },
+  {
+    key: 'warm',
+    label: '31-90 dni',
+    minDays: 31,
+    maxDays: 90,
+    style: {
+      ...DEFAULT_PERSON_MARKER_STYLE,
+      color: '#816018',
+      fillColor: '#d6b24f'
+    }
+  },
+  {
+    key: 'stale',
+    label: '91-180 dni',
+    minDays: 91,
+    maxDays: 180,
+    style: {
+      ...DEFAULT_PERSON_MARKER_STYLE,
+      color: '#8a4d1d',
+      fillColor: '#dc8a49'
+    }
+  },
+  {
+    key: 'old',
+    label: '180+ dni',
+    minDays: 181,
+    maxDays: Number.POSITIVE_INFINITY,
+    style: {
+      ...DEFAULT_PERSON_MARKER_STYLE,
+      color: '#7c261c',
+      fillColor: '#da6053'
+    }
+  }
+];
+
+const TIME_FIELD_META = {
+  lastVisitAt: {
+    label: 'ostatniej wizyty'
+  },
+  lastPaymentAt: {
+    label: 'ostatniej wplaty'
+  },
+  plannedVisitAt: {
+    label: 'planowanej wizyty'
+  }
+};
+
 let mapInstance;
 let peopleLayer;
 let customLayer;
 let routeLayer;
+let allPeople = [];
 let currentPeople = [];
 let currentCustomPoints = [];
+let hasRoutePreview = false;
+let lastImportedAt = '';
 
 window.appApi.onOperationStatus(async (payload) => {
+  updateImportReference(payload?.summary);
   if (
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
@@ -41,10 +136,24 @@ bootstrap();
 refreshPointsBtn.addEventListener('click', () => loadPoints());
 pointsSearchInput.addEventListener('input', () => loadPoints());
 includeUnresolvedCheckbox.addEventListener('change', () => loadPoints());
+timeFieldSelect.addEventListener('change', () => applyPointFilters());
+timeFromInput.addEventListener('input', () => applyPointFilters());
+timeToInput.addEventListener('input', () => applyPointFilters());
+showTimeColorsCheckbox.addEventListener('change', () => {
+  const timeFilter = getTimeFilter();
+  renderTimeColorLegend(timeFilter);
+  renderMarkers(timeFilter);
+});
+clearTimeFilterBtn.addEventListener('click', () => {
+  timeFromInput.value = '';
+  timeToInput.value = '';
+  applyPointFilters();
+});
 
 routeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = new FormData(routeForm);
+  const timeFilter = getTimeFilter();
   try {
     const route = await window.appApi.buildRoute({
       originAddress: form.get('originAddress'),
@@ -53,10 +162,15 @@ routeForm.addEventListener('submit', async (event) => {
       lastVisitWeight: Number(form.get('lastVisitWeight')),
       distanceWeight: Number(form.get('distanceWeight')),
       limit: Number(form.get('limit')),
-      query: pointsSearchInput.value
+      query: pointsSearchInput.value,
+      dateField: timeFilter.field,
+      dateFrom: timeFilter.from || null,
+      dateTo: timeFilter.to || null
     });
     renderRoute(route);
   } catch (error) {
+    routeLayer?.clearLayers();
+    hasRoutePreview = false;
     routeResultsEl.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
   }
 });
@@ -76,6 +190,7 @@ customPointForm.addEventListener('submit', async (event) => {
 
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
+  updateImportReference(bootstrapData.summary);
   applySummary(bootstrapData.summary);
   buildMap();
   await loadPoints();
@@ -112,11 +227,20 @@ async function loadPoints() {
     query: pointsSearchInput.value,
     includeUnresolved: includeUnresolvedCheckbox.checked
   });
-  currentPeople = payload.people || [];
+  allPeople = payload.people || [];
   currentCustomPoints = payload.customPoints || [];
+  applyPointFilters();
+}
 
+function applyPointFilters() {
+  const timeFilter = getTimeFilter();
+  currentPeople = allPeople.filter((person) => matchesTimeFilter(person, timeFilter));
+  syncTimeInputs(timeFilter.field);
+  invalidateRoutePreview('Zmieniono filtry punktow. Wylicz trase ponownie.');
+  renderTimeFilterSummary(timeFilter);
+  renderTimeColorLegend(timeFilter);
   renderPointList();
-  renderMarkers();
+  renderMarkers(timeFilter);
 }
 
 function renderPointList() {
@@ -175,31 +299,26 @@ function renderPointList() {
   });
 }
 
-function renderMarkers() {
+function renderMarkers(timeFilter = getTimeFilter()) {
   if (!mapInstance) {
     return;
   }
 
   peopleLayer.clearLayers();
   customLayer.clearLayers();
-  routeLayer.clearLayers();
 
   currentPeople.forEach((person) => {
     if (!Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
       return;
     }
 
-    const marker = L.circleMarker([person.lat, person.lng], {
-      radius: 7,
-      color: '#23412e',
-      weight: 2,
-      fillColor: '#4db06f',
-      fillOpacity: 0.9
-    });
+    const markerColorMeta = getPersonTimeColorMeta(person, timeFilter);
+    const marker = L.circleMarker([person.lat, person.lng], markerColorMeta.style);
     marker.bindPopup(
       `
         <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong><br>
         ${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}<br>
+        ${markerColorMeta.description ? `${escapeHtml(markerColorMeta.description)}<br>` : ''}
         Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}<br>
         Ostatnia wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}
       `
@@ -221,6 +340,75 @@ function renderMarkers() {
   });
 }
 
+function renderTimeFilterSummary(timeFilter) {
+  const bounds = getDateBounds(timeFilter.field);
+  const label = TIME_FIELD_META[timeFilter.field]?.label || 'daty';
+
+  if (!bounds) {
+    timeFilterSummaryEl.innerHTML = `
+      <strong>0 z ${allPeople.length} punktow serwisowych</strong>
+      <span>Brak zapisanych dat dla pola ${escapeHtml(label)}.</span>
+    `;
+    return;
+  }
+
+  const selectedRange =
+    timeFilter.from || timeFilter.to
+      ? `${formatDate(timeFilter.from || bounds.min)} - ${formatDate(timeFilter.to || bounds.max)}`
+      : 'Wszystkie daty';
+
+  timeFilterSummaryEl.innerHTML = `
+    <strong>${currentPeople.length} z ${allPeople.length} punktow serwisowych</strong>
+    <span>Filtr: ${escapeHtml(label)} | Zakres: ${escapeHtml(selectedRange)}</span>
+    <span>Dostepne daty: ${escapeHtml(formatDate(bounds.min))} - ${escapeHtml(formatDate(bounds.max))}</span>
+  `;
+}
+
+function renderTimeColorLegend(timeFilter) {
+  if (!timeColorLegendEl) {
+    return;
+  }
+
+  const label = TIME_FIELD_META[timeFilter.field]?.label || 'wybranego pola czasu';
+  if (!showTimeColorsCheckbox?.checked) {
+    timeColorLegendEl.innerHTML = `
+      <strong>Kolory punktow sa wylaczone.</strong>
+      <span>Wlacz opcje, aby kolorowac kropki wzgledem ostatniego wczytania i pola ${escapeHtml(label)}.</span>
+    `;
+    return;
+  }
+
+  if (!normalizeDateKey(lastImportedAt)) {
+    timeColorLegendEl.innerHTML = `
+      <strong>Brak czasu ostatniego wczytania.</strong>
+      <span>Kolory pojawia sie po imporcie danych do SQLite.</span>
+    `;
+    return;
+  }
+
+  const swatches = [...TIME_COLOR_BUCKETS, MISSING_TIME_COLOR_BUCKET]
+    .map(
+      (bucket) => `
+        <span
+          class="legend-chip"
+          style="--swatch-fill: ${bucket.style.fillColor}; --swatch-border: ${bucket.style.color};"
+        >
+          <i aria-hidden="true"></i>
+          ${escapeHtml(bucket.label)}
+        </span>
+      `
+    )
+    .join('');
+
+  timeColorLegendEl.innerHTML = `
+    <strong>
+      Kolory liczone wzgledem wczytania z ${escapeHtml(formatDateTime(lastImportedAt))}
+    </strong>
+    <span>Skala porownuje wybrane pole czasu z chwila ostatniego importu danych.</span>
+    <div class="legend-swatches">${swatches}</div>
+  `;
+}
+
 async function renderPersonDetails(sourceRowId) {
   const details = await window.appApi.getPersonDetails(sourceRowId);
   if (!details) {
@@ -240,6 +428,7 @@ async function renderPersonDetails(sourceRowId) {
 }
 
 function renderRoute(route) {
+  hasRoutePreview = true;
   routeLayer.clearLayers();
 
   const latlngs = [[route.origin.lat, route.origin.lng]];
@@ -274,6 +463,158 @@ function renderRoute(route) {
         )
         .join('')
     : '<p class="empty-state">Brak punktow do trasy.</p>';
+}
+
+function invalidateRoutePreview(message) {
+  routeLayer?.clearLayers();
+
+  if (!hasRoutePreview) {
+    return;
+  }
+
+  routeResultsEl.innerHTML = `<p class="empty-state">${escapeHtml(message)}</p>`;
+  hasRoutePreview = false;
+}
+
+function getTimeFilter() {
+  const field = Object.prototype.hasOwnProperty.call(TIME_FIELD_META, timeFieldSelect.value)
+    ? timeFieldSelect.value
+    : 'lastVisitAt';
+  let from = normalizeDateKey(timeFromInput.value);
+  let to = normalizeDateKey(timeToInput.value);
+
+  if (from && to && from > to) {
+    [from, to] = [to, from];
+  }
+
+  return { field, from, to };
+}
+
+function matchesTimeFilter(person, timeFilter) {
+  if (!timeFilter.from && !timeFilter.to) {
+    return true;
+  }
+
+  const pointDate = getDateKey(person?.[timeFilter.field]);
+  if (!pointDate) {
+    return false;
+  }
+  if (timeFilter.from && pointDate < timeFilter.from) {
+    return false;
+  }
+  if (timeFilter.to && pointDate > timeFilter.to) {
+    return false;
+  }
+  return true;
+}
+
+function syncTimeInputs(field) {
+  const bounds = getDateBounds(field);
+
+  timeFromInput.min = bounds?.min || '';
+  timeFromInput.max = bounds?.max || '';
+  timeToInput.min = bounds?.min || '';
+  timeToInput.max = bounds?.max || '';
+}
+
+function getDateBounds(field) {
+  let min = '';
+  let max = '';
+
+  for (const person of allPeople) {
+    const value = getDateKey(person?.[field]);
+    if (!value) {
+      continue;
+    }
+    if (!min || value < min) {
+      min = value;
+    }
+    if (!max || value > max) {
+      max = value;
+    }
+  }
+
+  return min && max ? { min, max } : null;
+}
+
+function getDateKey(value) {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeDateKey(value) {
+  if (!value) {
+    return '';
+  }
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : getDateKey(value);
+}
+
+function updateImportReference(summary) {
+  if (!summary) {
+    return;
+  }
+  lastImportedAt = summary?.importMeta?.imported_at || '';
+}
+
+function getPersonTimeColorMeta(person, timeFilter) {
+  if (!showTimeColorsCheckbox?.checked || !normalizeDateKey(lastImportedAt)) {
+    return {
+      style: DEFAULT_PERSON_MARKER_STYLE,
+      description: ''
+    };
+  }
+
+  const daysBeforeImport = getDaysBeforeImport(person?.[timeFilter.field]);
+  const bucket = getTimeColorBucket(daysBeforeImport);
+
+  return {
+    style: bucket.style,
+    description: getTimeColorDescription(bucket)
+  };
+}
+
+function getTimeColorBucket(daysBeforeImport) {
+  if (daysBeforeImport == null) {
+    return MISSING_TIME_COLOR_BUCKET;
+  }
+
+  return (
+    TIME_COLOR_BUCKETS.find(
+      (bucket) => daysBeforeImport >= bucket.minDays && daysBeforeImport <= bucket.maxDays
+    ) || TIME_COLOR_BUCKETS[TIME_COLOR_BUCKETS.length - 1]
+  );
+}
+
+function getTimeColorDescription(bucket) {
+  if (bucket.key === 'missing') {
+    return 'Kolor: brak daty w wybranym polu czasu.';
+  }
+  if (bucket.key === 'future') {
+    return 'Kolor: data wypada po czasie ostatniego wczytania.';
+  }
+  return `Kolor: ${bucket.label} przed ostatnim wczytaniem.`;
+}
+
+function getDaysBeforeImport(value) {
+  const pointDateKey = normalizeDateKey(value);
+  const importedDateKey = normalizeDateKey(lastImportedAt);
+
+  if (!pointDateKey || !importedDateKey) {
+    return null;
+  }
+
+  return Math.round((dateKeyToUtcMs(importedDateKey) - dateKeyToUtcMs(pointDateKey)) / MS_PER_DAY);
+}
+
+function dateKeyToUtcMs(dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return Date.UTC(year, month - 1, day);
 }
 
 function focusMapPoint(lat, lng) {

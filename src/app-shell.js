@@ -1,5 +1,8 @@
+let startupUpdateOverlay = null;
+
 export function initShell(pageId) {
   document.body.dataset.page = pageId;
+  bindHiddenDashboardShortcut(pageId);
 
   const navLinks = document.querySelectorAll('[data-page-link]');
   for (const link of navLinks) {
@@ -17,6 +20,23 @@ export function initShell(pageId) {
     });
   }
 
+  window.appApi.onUpdaterState((state) => {
+    if (updaterStatusEl && state?.message) {
+      updaterStatusEl.textContent = state.message;
+    }
+    syncStartupUpdateOverlay(state);
+  });
+
+  void window.appApi
+    .getUpdaterState()
+    .then((state) => {
+      if (updaterStatusEl && state?.message) {
+        updaterStatusEl.textContent = state.message;
+      }
+      syncStartupUpdateOverlay(state);
+    })
+    .catch(() => {});
+
   if (operationStatusEl) {
     window.appApi.onOperationStatus((payload) => {
       operationStatusEl.textContent = payload?.message || 'Brak aktywnej operacji.';
@@ -25,6 +45,118 @@ export function initShell(pageId) {
       }
     });
   }
+}
+
+function ensureStartupUpdateOverlay() {
+  if (startupUpdateOverlay) {
+    return startupUpdateOverlay;
+  }
+
+  const layer = document.createElement('div');
+  layer.className = 'startup-update-layer';
+  layer.hidden = true;
+  layer.innerHTML = `
+    <div class="startup-update-card" role="dialog" aria-modal="true" aria-labelledby="startup-update-title">
+      <span class="startup-update-kicker">Start aplikacji</span>
+      <h2 id="startup-update-title" class="startup-update-title"></h2>
+      <p class="startup-update-copy"></p>
+      <div class="startup-update-progress" hidden>
+        <div class="startup-update-progress-bar"></div>
+      </div>
+      <button type="button" class="startup-update-skip">Pomin tym razem</button>
+    </div>
+  `;
+
+  document.body.appendChild(layer);
+
+  const skipButton = layer.querySelector('.startup-update-skip');
+  skipButton.addEventListener('click', async () => {
+    skipButton.disabled = true;
+    try {
+      await window.appApi.skipStartupUpdate();
+    } finally {
+      skipButton.disabled = false;
+    }
+  });
+
+  startupUpdateOverlay = {
+    layer,
+    title: layer.querySelector('.startup-update-title'),
+    copy: layer.querySelector('.startup-update-copy'),
+    progress: layer.querySelector('.startup-update-progress'),
+    progressBar: layer.querySelector('.startup-update-progress-bar'),
+    skipButton
+  };
+
+  return startupUpdateOverlay;
+}
+
+function getStartupUpdateTitle(state) {
+  switch (state?.phase) {
+    case 'checking':
+      return 'Sprawdzanie aktualizacji';
+    case 'downloading':
+      return state?.version ? `Pobieranie ${state.version}` : 'Pobieranie aktualizacji';
+    case 'downloaded':
+      return 'Aktualizacja gotowa';
+    case 'installing':
+      return 'Instalowanie aktualizacji';
+    case 'up-to-date':
+      return 'Aplikacja jest aktualna';
+    case 'error':
+      return 'Aktualizacja niedostepna';
+    default:
+      return 'Aktualizacja aplikacji';
+  }
+}
+
+function syncStartupUpdateOverlay(state) {
+  const overlay = ensureStartupUpdateOverlay();
+  const isVisible = Boolean(state?.visible);
+
+  overlay.layer.hidden = !isVisible;
+  overlay.layer.classList.toggle('is-visible', isVisible);
+  if (!isVisible) {
+    return;
+  }
+
+  overlay.title.textContent = getStartupUpdateTitle(state);
+  overlay.copy.textContent = state?.message || 'Sprawdzanie statusu aktualizacji.';
+
+  const shouldShowProgress =
+    state?.phase === 'checking' ||
+    state?.phase === 'downloading' ||
+    state?.phase === 'downloaded' ||
+    state?.phase === 'installing';
+
+  overlay.progress.hidden = !shouldShowProgress;
+  overlay.progress.classList.toggle('is-indeterminate', state?.phase === 'checking');
+
+  let progressWidth = '100%';
+  if (state?.phase === 'checking') {
+    progressWidth = '36%';
+  } else if (state?.phase === 'downloading') {
+    const clamped = Math.max(6, Math.min(100, Number(state?.progressPercent || 0)));
+    progressWidth = `${clamped}%`;
+  }
+  overlay.progressBar.style.width = progressWidth;
+
+  overlay.skipButton.hidden = !state?.canSkip;
+}
+
+function bindHiddenDashboardShortcut(pageId) {
+  window.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) {
+      return;
+    }
+
+    if (event.key.toLowerCase() !== 'd' || pageId === 'dashboard') {
+      return;
+    }
+
+    event.preventDefault();
+    window.location.href = './index.html';
+  });
 }
 
 export function formatDate(value) {

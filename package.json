@@ -22,7 +22,8 @@
   },
   "build": {
     "appId": "com.moonboy.mapshortner",
-    "productName": "MapShortner",
+    "productName": "Elrond - wyszukiwanie trasy",
+    "icon": "src/assets/icon.png",
     "directories": {
       "output": "release"
     },
@@ -45,10 +46,12 @@
       }
     ],
     "win": {
+      "icon": "src/assets/icon.ico",
       "target": "nsis",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "linux": {
+      "icon": "src/assets/icon.png",
       "target": "AppImage",
       "artifactName": "${productName}-${version}.${ext}"
     }

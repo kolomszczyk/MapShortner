@@ -3,11 +3,13 @@ import { applySummary, formatDateTime, initShell, setButtonBusy, summarizePath }
 initShell('dashboard');
 
 const accessPathEl = document.getElementById('access-path');
+const accessPasswordInput = document.getElementById('access-password');
 const passwordStatusEl = document.getElementById('password-status');
 const importStatusEl = document.getElementById('import-status');
 const checkBtn = document.getElementById('check-btn');
 const installBtn = document.getElementById('install-btn');
 const chooseFileBtn = document.getElementById('choose-file-btn');
+const saveAccessPasswordBtn = document.getElementById('save-access-password-btn');
 const importBtn = document.getElementById('import-btn');
 const geocodeBtn = document.getElementById('geocode-btn');
 const saveApiKeyBtn = document.getElementById('save-api-key-btn');
@@ -17,11 +19,10 @@ const apiKeyInput = document.getElementById('google-api-key');
 const geocodeLimitInput = document.getElementById('geocode-limit');
 const operationLogEl = document.getElementById('operation-log');
 const importMetaEl = document.getElementById('import-meta');
+let lastUpdaterState = null;
 
-window.appApi.onUpdateStatus((message) => {
-  if (message.includes('gotowa')) {
-    installBtn.disabled = false;
-  }
+window.appApi.onUpdaterState((state) => {
+  syncUpdaterControls(state);
 });
 
 window.appApi.onOperationStatus((payload) => {
@@ -39,6 +40,7 @@ checkBtn.addEventListener('click', async () => {
     appendLog(`Nie udalo sie sprawdzic aktualizacji: ${error.message}`);
   } finally {
     setButtonBusy(checkBtn, false);
+    syncUpdaterControls();
   }
 });
 
@@ -52,6 +54,18 @@ chooseFileBtn.addEventListener('click', async () => {
   accessPathEl.textContent = summarizePath(pathValue);
   if (result?.summary) {
     renderSummary(result.summary);
+  }
+});
+
+saveAccessPasswordBtn.addEventListener('click', async () => {
+  try {
+    await persistAccessPassword({
+      requireValue: true,
+      button: saveAccessPasswordBtn,
+      successMessage: 'Zapisano haslo Accessa.'
+    });
+  } catch (error) {
+    appendLog(`Nie udalo sie zapisac hasla Accessa: ${error.message}`);
   }
 });
 
@@ -94,6 +108,8 @@ importTrasaBtn.addEventListener('click', async () => {
       return;
     }
     renderSummary(result.summary);
+    setAccessPasswordStatus(Boolean(result.passwordConfigured));
+    accessPasswordInput.value = '';
     apiKeyInput.value = result.summary?.settings?.googleMapsApiKey || '';
     appendLog('Pakiet .trasa zostal wczytany do aplikacji.');
   } catch (error) {
@@ -106,6 +122,7 @@ importTrasaBtn.addEventListener('click', async () => {
 importBtn.addEventListener('click', async () => {
   setButtonBusy(importBtn, true, 'Import trwa...');
   try {
+    await persistAccessPassword();
     const summary = await window.appApi.importAccessDatabase({});
     renderSummary(summary);
     appendLog('Import Access -> SQLite zakonczony.');
@@ -139,15 +156,61 @@ bootstrap();
 
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
-  passwordStatusEl.textContent = bootstrapData.passwordConfigured
-    ? 'Haslo Accessa jest skonfigurowane.'
-    : 'Brak hasla Accessa w ~/secrets/acces_db_tata.';
+  syncUpdaterControls(bootstrapData.updater);
+  setAccessPasswordStatus(Boolean(bootstrapData.passwordConfigured));
   apiKeyInput.value = bootstrapData.summary?.settings?.googleMapsApiKey || '';
   if (!apiKeyInput.value && bootstrapData.googleMapsConfigured) {
     apiKeyInput.placeholder = 'Klucz ladowany automatycznie z ~/secrets/google_maps_api';
   }
   renderSummary(bootstrapData.summary);
   appendLog('Aplikacja gotowa do pracy.');
+}
+
+async function persistAccessPassword({ requireValue = false, button = null, successMessage = null } = {}) {
+  const password = accessPasswordInput.value;
+  if (!password.trim()) {
+    if (requireValue) {
+      throw new Error('Wpisz haslo Accessa przed zapisem.');
+    }
+    return null;
+  }
+
+  if (button) {
+    setButtonBusy(button, true, 'Zapisywanie...');
+  }
+
+  try {
+    const result = await window.appApi.saveAccessPassword(password);
+    if (result?.summary) {
+      renderSummary(result.summary);
+    }
+    setAccessPasswordStatus(Boolean(result?.passwordConfigured));
+    accessPasswordInput.value = '';
+    if (successMessage) {
+      appendLog(successMessage);
+    }
+    return result;
+  } finally {
+    if (button) {
+      setButtonBusy(button, false);
+    }
+  }
+}
+
+function setAccessPasswordStatus(isConfigured) {
+  passwordStatusEl.textContent = isConfigured
+    ? 'Haslo Accessa jest skonfigurowane.'
+    : 'Brak hasla Accessa. Wpisz je ponizej.';
+
+  accessPasswordInput.placeholder = isConfigured
+    ? 'Haslo zapisane lokalnie. Wpisz nowe, aby nadpisac'
+    : 'Wpisz haslo do pliku .accdb';
+}
+
+function syncUpdaterControls(state = lastUpdaterState) {
+  lastUpdaterState = state || null;
+  installBtn.disabled = !lastUpdaterState?.readyToInstall;
+  checkBtn.disabled = ['checking', 'downloading', 'installing'].includes(lastUpdaterState?.phase);
 }
 
 function renderSummary(summary) {

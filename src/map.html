@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MapShortner | Mapa i trasy</title>
+    <title>Elrond - wyszukiwanie trasy | Mapa i trasy</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -22,7 +22,7 @@
     <div class="shell">
       <header class="shell-header compact-header">
         <div class="brand-block">
-          <span class="brand-kicker">MapShortner</span>
+          <span class="brand-kicker">Elrond</span>
           <h1>Mapa punktow i planowanie trasy</h1>
           <p>
             Punkty sa zasilane z SQLite po imporcie z Accessa. Trase mozna liczyc wedlug odleglosci
@@ -31,13 +31,13 @@
         </div>
 
         <nav class="top-nav">
-          <a href="./index.html" data-page-link="dashboard">Dashboard</a>
           <a href="./map.html" data-page-link="map">Mapa i trasy</a>
           <a href="./people.html" data-page-link="people">Osoby</a>
           <a href="./data.html" data-page-link="data">Dane</a>
         </nav>
 
         <div class="status-ribbon">
+          <a class="info-chip utility-link" href="./index.html">Dashboard</a>
           <span class="status-pill" data-updater-status>Oczekiwanie na status aktualizacji...</span>
           <span class="status-pill status-pill-soft" data-operation-status>Brak aktywnej operacji.</span>
         </div>
@@ -58,6 +58,53 @@
               <button id="refresh-points-btn" type="button">Odswiez punkty</button>
             </div>
           </div>
+
+          <section class="subpanel time-filter-panel">
+            <div class="subpanel-header">
+              <div>
+                <span class="eyebrow">Zakres czasu</span>
+                <h3>Pokaz kropki z wybranego przedzialu</h3>
+              </div>
+              <button id="clear-time-filter-btn" type="button" class="button-muted">
+                Wyczysc zakres
+              </button>
+            </div>
+
+            <div class="time-filter-grid">
+              <label class="field">
+                <span>Filtruj wedlug</span>
+                <select id="time-field">
+                  <option value="lastVisitAt">Ostatnia wizyta</option>
+                  <option value="lastPaymentAt">Ostatnia wplata</option>
+                  <option value="plannedVisitAt">Planowana wizyta</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Od</span>
+                <input id="time-from" type="date" />
+              </label>
+              <label class="field">
+                <span>Do</span>
+                <input id="time-to" type="date" />
+              </label>
+              <div class="field">
+                <span>Widoczne punkty</span>
+                <div id="time-filter-summary" class="time-filter-summary" aria-live="polite">
+                  Ladowanie zakresu dat...
+                </div>
+              </div>
+            </div>
+
+            <div class="time-color-tools">
+              <label class="checkbox-field">
+                <input id="show-time-colors" type="checkbox" checked />
+                <span>Pokaz kolory wzgledem ostatniego wczytania</span>
+              </label>
+              <div id="time-color-legend" class="time-color-legend" aria-live="polite">
+                Przygotowywanie skali kolorow...
+              </div>
+            </div>
+          </section>
 
           <div id="service-map" class="service-map" aria-label="Mapa punktow serwisowych"></div>
 

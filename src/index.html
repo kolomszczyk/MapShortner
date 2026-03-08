@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MapShortner | Centrum operacyjne</title>
+    <title>Elrond - wyszukiwanie trasy | Centrum operacyjne</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,7 +16,7 @@
     <div class="shell">
       <header class="shell-header">
         <div class="brand-block">
-          <span class="brand-kicker">MapShortner</span>
+          <span class="brand-kicker">Elrond</span>
           <h1>Centrum serwisu, mapy i danych</h1>
           <p>
             Access pozostaje tylko zrodlem. Aplikacja importuje dane do lokalnego SQLite, geokoduje
@@ -25,7 +25,6 @@
         </div>
 
         <nav class="top-nav">
-          <a href="./index.html" data-page-link="dashboard">Dashboard</a>
           <a href="./map.html" data-page-link="map">Mapa i trasy</a>
           <a href="./people.html" data-page-link="people">Osoby</a>
           <a href="./data.html" data-page-link="data">Dane</a>
@@ -43,8 +42,9 @@
             <span class="eyebrow">Tryb operacyjny</span>
             <h2>Najpierw wybierz `.accdb`, potem import i geokodowanie.</h2>
             <p>
-              Haslo do Accessa jest czytane z pliku sekretu, a wszystkie robocze notatki, punkty i
-              widoki zapisywane sa w lokalnym SQLite. Oryginalna baza nie jest modyfikowana.
+              Haslo do Accessa mozna wpisac bezposrednio w aplikacji albo trzymac w pliku sekretu.
+              Wszystkie robocze notatki, punkty i widoki zapisywane sa w lokalnym SQLite.
+              Oryginalna baza nie jest modyfikowana.
             </p>
           </div>
 
@@ -84,8 +84,19 @@
             SQLite jest gotowe, ale baza Access nie zostala jeszcze zaimportowana.
           </p>
 
+          <label class="field">
+            <span>Haslo do bazy Access</span>
+            <input
+              id="access-password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Wpisz haslo do pliku .accdb"
+            />
+          </label>
+
           <div class="action-row">
             <button type="button" id="choose-file-btn">Wybierz plik .accdb</button>
+            <button type="button" id="save-access-password-btn">Zapisz haslo</button>
             <button type="button" id="import-btn" class="button-strong">Importuj do SQLite</button>
           </div>
 
@@ -161,7 +172,7 @@
           </div>
 
           <p class="copy">
-            Pakiet `.trasa` jest wlasnym kontenerem MapShortner. W srodku nadal zawiera
+            Pakiet `.trasa` jest wlasnym kontenerem aplikacji Elrond - wyszukiwanie trasy. W srodku nadal zawiera
             `database.zip`, `reports.zip`, `secrets.zip` i manifest, ale plik nie zapisuje sie
             jako zwykly ZIP rozpoznawany przez system.
           </p>

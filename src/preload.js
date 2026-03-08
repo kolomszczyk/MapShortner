@@ -2,8 +2,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('appApi', {
   getBootstrap: () => ipcRenderer.invoke('app:getBootstrap'),
+  getUpdaterState: () => ipcRenderer.invoke('updater:getState'),
   checkNow: () => ipcRenderer.invoke('updater:checkNow'),
   installNow: () => ipcRenderer.invoke('updater:installNow'),
+  skipStartupUpdate: () => ipcRenderer.invoke('updater:skipStartup'),
+  saveAccessPassword: (password) => ipcRenderer.invoke('settings:saveAccessPassword', password),
   saveGoogleMapsApiKey: (apiKey) => ipcRenderer.invoke('settings:saveGoogleMapsApiKey', apiKey),
   exportTrasaArchive: (payload) => ipcRenderer.invoke('trasa:export', payload),
   importTrasaArchive: () => ipcRenderer.invoke('trasa:import'),
@@ -21,6 +24,9 @@ contextBridge.exposeInMainWorld('appApi', {
   addCustomPoint: (payload) => ipcRenderer.invoke('customPoints:add', payload),
   onUpdateStatus: (callback) => {
     ipcRenderer.on('updater:status', (_event, message) => callback(message));
+  },
+  onUpdaterState: (callback) => {
+    ipcRenderer.on('updater:state', (_event, state) => callback(state));
   },
   onOperationStatus: (callback) => {
     ipcRenderer.on('app:operationStatus', (_event, payload) => callback(payload));

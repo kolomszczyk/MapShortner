@@ -9,7 +9,8 @@ const {
   geocodePendingPeople,
   importAccessDatabase,
   loadAccessPassword,
-  loadGoogleMapsApiKey
+  loadGoogleMapsApiKey,
+  saveAccessPassword
 } = require('./main/access-service');
 const { exportTrasaArchive, importTrasaArchive } = require('./main/trasa-service');
 
@@ -21,6 +22,26 @@ let accessReimportInterval = null;
 
 const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
 const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
+const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
+const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
+const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
+
+let updaterState = {
+  phase: 'idle',
+  message: 'Oczekiwanie na status aktualizacji...',
+  visible: false,
+  canSkip: false,
+  readyToInstall: false,
+  progressPercent: null,
+  version: null,
+  source: null
+};
+let currentUpdateCheckSource = null;
+let startupUpdateFlowPromise = null;
+let resolveStartupUpdateFlowPromise = null;
+let startupUpdateResolutionTimer = null;
+let startupUpdateInstallTimer = null;
+let startupUpdateInstallArmed = false;
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -32,8 +53,140 @@ function sendUpdateStatus(message) {
   sendToRenderer('updater:status', message);
 }
 
+function getUpdaterState() {
+  return { ...updaterState };
+}
+
+function setUpdaterState(patch) {
+  updaterState = {
+    ...updaterState,
+    ...patch
+  };
+  sendToRenderer('updater:state', getUpdaterState());
+}
+
 function sendOperationStatus(payload) {
   sendToRenderer('app:operationStatus', payload);
+}
+
+function clearStartupUpdateResolutionTimer() {
+  if (startupUpdateResolutionTimer) {
+    clearTimeout(startupUpdateResolutionTimer);
+    startupUpdateResolutionTimer = null;
+  }
+}
+
+function clearStartupUpdateInstallTimer() {
+  if (startupUpdateInstallTimer) {
+    clearTimeout(startupUpdateInstallTimer);
+    startupUpdateInstallTimer = null;
+  }
+}
+
+function resolveStartupUpdateFlow() {
+  clearStartupUpdateResolutionTimer();
+  const resolve = resolveStartupUpdateFlowPromise;
+  resolveStartupUpdateFlowPromise = null;
+  startupUpdateFlowPromise = null;
+  if (resolve) {
+    resolve();
+  }
+}
+
+function queueStartupUpdateFlowResolution(delayMs, patch = {}) {
+  if (!startupUpdateFlowPromise) {
+    return;
+  }
+
+  clearStartupUpdateResolutionTimer();
+  startupUpdateResolutionTimer = setTimeout(() => {
+    startupUpdateResolutionTimer = null;
+    setUpdaterState({
+      visible: false,
+      canSkip: false,
+      ...patch
+    });
+    resolveStartupUpdateFlow();
+  }, delayMs);
+}
+
+async function runStartupUpdateFlow() {
+  if (!autoUpdater) {
+    return;
+  }
+
+  if (startupUpdateFlowPromise) {
+    return startupUpdateFlowPromise;
+  }
+
+  clearStartupUpdateResolutionTimer();
+  clearStartupUpdateInstallTimer();
+
+  startupUpdateInstallArmed = true;
+  currentUpdateCheckSource = 'startup';
+
+  setUpdaterState({
+    phase: 'checking',
+    message: 'Sprawdzanie aktualizacji...',
+    visible: true,
+    canSkip: true,
+    readyToInstall: false,
+    progressPercent: null,
+    version: null,
+    source: 'startup'
+  });
+
+  startupUpdateFlowPromise = new Promise((resolve) => {
+    resolveStartupUpdateFlowPromise = resolve;
+  });
+
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    log.error('Startup auto-update check failed', error);
+
+    const message = formatUpdaterError(error);
+    sendUpdateStatus(message);
+    setUpdaterState({
+      phase: 'error',
+      message,
+      visible: true,
+      canSkip: true,
+      progressPercent: null,
+      source: 'startup'
+    });
+    queueStartupUpdateFlowResolution(STARTUP_UPDATE_ERROR_HIDE_DELAY_MS, {
+      phase: 'idle'
+    });
+  }
+
+  return startupUpdateFlowPromise;
+}
+
+function skipStartupUpdateFlow() {
+  if (!startupUpdateFlowPromise) {
+    return false;
+  }
+
+  startupUpdateInstallArmed = false;
+  clearStartupUpdateResolutionTimer();
+  clearStartupUpdateInstallTimer();
+
+  const message = updaterState.readyToInstall
+    ? 'Aktualizacja jest juz pobrana i zainstaluje sie po zamknieciu aplikacji.'
+    : 'Aktualizacja zostala pominieta na starcie. Pobieranie moze trwac dalej w tle.';
+
+  sendUpdateStatus(message);
+  setUpdaterState({
+    phase: 'dismissed',
+    message,
+    visible: false,
+    canSkip: false,
+    source: 'startup'
+  });
+  resolveStartupUpdateFlow();
+
+  return true;
 }
 
 function enqueueExclusiveOperation(operation) {
@@ -262,6 +415,7 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#ebefe6',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -270,7 +424,7 @@ function createWindow() {
   });
 
   mainWindow.removeMenu();
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, 'map.html'));
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.maximize();
@@ -290,29 +444,137 @@ function configureAutoUpdater() {
 
   autoUpdater.on('checking-for-update', () => {
     sendUpdateStatus('Sprawdzanie aktualizacji...');
+    setUpdaterState({
+      phase: 'checking',
+      message: 'Sprawdzanie aktualizacji...',
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      readyToInstall: false,
+      progressPercent: null,
+      source: currentUpdateCheckSource
+    });
   });
 
   autoUpdater.on('update-available', (info) => {
     sendUpdateStatus(`Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`);
+    setUpdaterState({
+      phase: 'downloading',
+      message: `Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`,
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      readyToInstall: false,
+      progressPercent: 0,
+      version: info.version,
+      source: currentUpdateCheckSource
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
     sendUpdateStatus('Brak nowych aktualizacji.');
+    setUpdaterState({
+      phase: currentUpdateCheckSource === 'startup' ? 'up-to-date' : 'idle',
+      message: 'Brak nowych aktualizacji.',
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: null,
+      version: null,
+      source: currentUpdateCheckSource
+    });
+
+    if (currentUpdateCheckSource === 'startup' && startupUpdateFlowPromise) {
+      queueStartupUpdateFlowResolution(STARTUP_UPDATE_HIDE_DELAY_MS, {
+        phase: 'idle'
+      });
+    }
   });
 
   autoUpdater.on('error', (err) => {
-    sendUpdateStatus(formatUpdaterError(err));
+    const message = formatUpdaterError(err);
+    sendUpdateStatus(message);
+    setUpdaterState({
+      phase: 'error',
+      message,
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      progressPercent: null,
+      source: currentUpdateCheckSource
+    });
+
+    if (currentUpdateCheckSource === 'startup' && startupUpdateFlowPromise) {
+      queueStartupUpdateFlowResolution(STARTUP_UPDATE_ERROR_HIDE_DELAY_MS, {
+        phase: 'idle'
+      });
+    }
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
     const percent = progressObj.percent.toFixed(1);
     sendUpdateStatus(`Pobieranie aktualizacji: ${percent}%`);
+    setUpdaterState({
+      phase: 'downloading',
+      message: `Pobieranie aktualizacji: ${percent}%`,
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      readyToInstall: false,
+      progressPercent: Number(percent),
+      source: currentUpdateCheckSource
+    });
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    clearStartupUpdateInstallTimer();
+
+    const startupFlowActive = currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise);
+    if (startupFlowActive && startupUpdateInstallArmed) {
+      const message = `Aktualizacja ${info.version} pobrana. Za chwile instalacja i restart aplikacji.`;
+      sendUpdateStatus(message);
+      setUpdaterState({
+        phase: 'downloaded',
+        message,
+        visible: true,
+        canSkip: true,
+        readyToInstall: true,
+        progressPercent: 100,
+        version: info.version,
+        source: 'startup'
+      });
+
+      startupUpdateInstallTimer = setTimeout(() => {
+        startupUpdateInstallTimer = null;
+        if (!startupUpdateFlowPromise || !startupUpdateInstallArmed) {
+          return;
+        }
+
+        sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
+        setUpdaterState({
+          phase: 'installing',
+          message: 'Instalowanie aktualizacji i ponowne uruchamianie...',
+          visible: true,
+          canSkip: false,
+          readyToInstall: true,
+          progressPercent: 100,
+          source: 'startup'
+        });
+        autoUpdater.quitAndInstall();
+      }, STARTUP_UPDATE_INSTALL_DELAY_MS);
+
+      return;
+    }
+
     sendUpdateStatus(
       `Aktualizacja ${info.version} gotowa. Kliknij "Zainstaluj i uruchom ponownie".`
     );
+    setUpdaterState({
+      phase: 'downloaded',
+      message: `Aktualizacja ${info.version} gotowa. Kliknij "Zainstaluj i uruchom ponownie".`,
+      visible: false,
+      canSkip: false,
+      readyToInstall: true,
+      progressPercent: 100,
+      version: info.version,
+      source: currentUpdateCheckSource
+    });
   });
 }
 
@@ -336,7 +598,7 @@ async function pickAccessDatabase() {
 }
 
 async function pickTrasaExportPath() {
-  const suggestedName = `MapShortner-${new Date().toISOString().slice(0, 10)}.trasa`;
+  const suggestedName = `Elrond-wyszukiwanie-trasy-${new Date().toISOString().slice(0, 10)}.trasa`;
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Eksportuj pakiet .trasa',
     defaultPath: path.join(app.getPath('documents'), suggestedName),
@@ -427,6 +689,11 @@ async function importTrasaFile(trasaPath, options = {}) {
     }
     if (accessDbPathOverride) {
       store.setSetting('accessDbPath', accessDbPathOverride);
+    } else {
+      const importedAccessDbPath = (store.getSetting('accessDbPath') || '').trim();
+      if (importedAccessDbPath && !fs.existsSync(importedAccessDbPath)) {
+        store.setSetting('accessDbPath', '');
+      }
     }
 
     const summary = store.getDashboardSummary();
@@ -493,7 +760,7 @@ async function runFirstLaunchSetup() {
     title: 'Pierwsze uruchomienie',
     message: 'Czy masz pakiet .trasa do wczytania?',
     detail:
-      'To opcjonalne. Jesli masz wczesniej wyeksportowany pakiet MapShortner, mozesz go teraz zaimportowac.',
+      'To opcjonalne. Jesli masz wczesniej wyeksportowany pakiet Elrond - wyszukiwanie trasy, mozesz go teraz zaimportowac.',
     buttons: ['Wczytaj .trasa', 'Pomin'],
     defaultId: 0,
     cancelId: 1,
@@ -524,6 +791,8 @@ app.whenReady().then(async () => {
   configureAutoUpdater();
   await windowReady;
 
+  await runStartupUpdateFlow();
+
   try {
     await runFirstLaunchSetup();
   } catch (error) {
@@ -538,10 +807,6 @@ app.whenReady().then(async () => {
   }
 
   startAccessReimportMonitor();
-
-  setTimeout(() => {
-    autoUpdater.checkForUpdatesAndNotify();
-  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -561,27 +826,58 @@ app.on('before-quit', () => {
     clearInterval(accessReimportInterval);
     accessReimportInterval = null;
   }
+  clearStartupUpdateResolutionTimer();
+  clearStartupUpdateInstallTimer();
 });
 
 ipcMain.handle('app:getBootstrap', async () => ({
   version: app.getVersion(),
   passwordConfigured: Boolean(loadAccessPassword()),
   googleMapsConfigured: Boolean(loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey')),
-  summary: store.getDashboardSummary()
+  summary: store.getDashboardSummary(),
+  updater: getUpdaterState()
 }));
 
+ipcMain.handle('updater:getState', async () => getUpdaterState());
+
 ipcMain.handle('updater:checkNow', async () => {
+  if (updaterState.readyToInstall) {
+    sendUpdateStatus('Aktualizacja jest juz pobrana i czeka na instalacje.');
+    return true;
+  }
+
+  currentUpdateCheckSource = 'manual';
   await autoUpdater.checkForUpdates();
   return true;
 });
 
 ipcMain.handle('updater:installNow', () => {
+  clearStartupUpdateInstallTimer();
+  sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
+  setUpdaterState({
+    phase: 'installing',
+    message: 'Instalowanie aktualizacji i ponowne uruchamianie...',
+    visible: false,
+    canSkip: false,
+    readyToInstall: true,
+    progressPercent: 100
+  });
   autoUpdater.quitAndInstall();
 });
+
+ipcMain.handle('updater:skipStartup', async () => skipStartupUpdateFlow());
 
 ipcMain.handle('settings:saveGoogleMapsApiKey', async (_event, apiKey) => {
   store.setSetting('googleMapsApiKey', apiKey ? String(apiKey).trim() : '');
   return store.getDashboardSummary();
+});
+
+ipcMain.handle('settings:saveAccessPassword', async (_event, password) => {
+  saveAccessPassword(password);
+  return {
+    summary: store.getDashboardSummary(),
+    passwordConfigured: Boolean(loadAccessPassword())
+  };
 });
 
 ipcMain.handle('trasa:export', async (_event, payload = {}) => {
@@ -624,7 +920,13 @@ ipcMain.handle('trasa:import', async () => {
     return null;
   }
 
-  return enqueueExclusiveOperation(() => importTrasaFile(trasaPath));
+  return enqueueExclusiveOperation(async () => {
+    const result = await importTrasaFile(trasaPath);
+    return {
+      ...result,
+      passwordConfigured: Boolean(loadAccessPassword())
+    };
+  });
 });
 
 ipcMain.handle('access:pickFile', async () => {
