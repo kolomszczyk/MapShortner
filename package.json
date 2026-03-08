@@ -1,0 +1,48 @@
+{
+  "name": "mapshortner-electron",
+  "version": "0.1.0",
+  "description": "Podstawowa aplikacja Electron z auto-update przez GitHub Releases",
+  "main": "src/main.js",
+  "author": "moonboy",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder",
+    "release": "electron-builder --publish always"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.4",
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "electron": "^35.0.2",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.moonboy.mapshortner",
+    "productName": "MapShortner",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kolomszczyk",
+        "repo": "MapShortner"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "artifactName": "${productName}-${version}.${ext}"
+    }
+  }
+}

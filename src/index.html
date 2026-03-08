@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MapShortner</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>MapShortner</h1>
+      <p class="subtitle">Podstawowa aplikacja Electron z auto-update przez GitHub Releases</p>
+
+      <section class="card">
+        <h2>Status aktualizacji</h2>
+        <p id="status" class="status">Aplikacja uruchomiona. Oczekiwanie na pierwszy check...</p>
+        <div class="actions">
+          <button id="check-btn" type="button">Sprawdź aktualizacje</button>
+          <button id="install-btn" type="button" disabled>Zainstaluj i uruchom ponownie</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
