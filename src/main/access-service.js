@@ -175,25 +175,16 @@ function loadAccessPassword() {
 }
 
 async function runAccessBridge(app, args) {
+  const bundledRoot = getBundledRoot(app);
   const { classPath } = await resolveBridgePaths(app);
-  const { stdout, stderr } = await execFileAsync(
+  const { stdout } = await execFileAsync(
     'java',
     ['-cp', classPath, JAVA_MAIN_CLASS, ...args],
     {
-      cwd: app.getAppPath(),
+      cwd: bundledRoot,
       maxBuffer: 1024 * 1024 * 64
     }
   );
-
-  if (stderr && stderr.trim()) {
-    const nonWarningLines = stderr
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line && !line.includes('WARNING: unsupported collating sort order'));
-    if (nonWarningLines.length > 0) {
-      throw new Error(nonWarningLines.join('\n'));
-    }
-  }
 
   return JSON.parse(stdout);
 }

@@ -1,79 +1,83 @@
-const countryPolygon = [
-  { lat: 54.52, lng: 14.12 },
-  { lat: 54.58, lng: 15.28 },
-  { lat: 54.72, lng: 16.58 },
-  { lat: 54.78, lng: 18.75 },
-  { lat: 54.47, lng: 19.92 },
-  { lat: 54.36, lng: 22.85 },
-  { lat: 53.89, lng: 23.88 },
-  { lat: 52.95, lng: 23.64 },
-  { lat: 51.52, lng: 24.12 },
-  { lat: 49.38, lng: 22.84 },
-  { lat: 49.05, lng: 22.07 },
-  { lat: 49.18, lng: 20.24 },
-  { lat: 49.56, lng: 18.81 },
-  { lat: 50.31, lng: 17.16 },
-  { lat: 50.87, lng: 15.01 },
-  { lat: 51.58, lng: 14.61 },
-  { lat: 52.82, lng: 14.15 }
-];
+import {
+  applySummary,
+  escapeHtml,
+  formatDate,
+  formatMoney,
+  initShell,
+  renderKeyValueList
+} from './app-shell.js';
 
-const mapEl = document.getElementById('poland-map');
+initShell('map');
+
+const mapEl = document.getElementById('service-map');
+const pointsSearchInput = document.getElementById('points-search');
+const includeUnresolvedCheckbox = document.getElementById('include-unresolved');
+const refreshPointsBtn = document.getElementById('refresh-points-btn');
 const pointsListEl = document.getElementById('points-list');
-const fallbackCenter = [52.1, 19.4];
-const fallbackZoom = 6;
+const routeForm = document.getElementById('route-form');
+const routeResultsEl = document.getElementById('route-results');
+const detailTitleEl = document.getElementById('map-detail-title');
+const detailMetaEl = document.getElementById('map-detail-meta');
+const customPointForm = document.getElementById('custom-point-form');
 
 let mapInstance;
-let markerLayer;
+let peopleLayer;
+let customLayer;
+let routeLayer;
+let currentPeople = [];
+let currentCustomPoints = [];
 
-function pointInPolygon(point, polygon) {
-  let inside = false;
+bootstrap();
 
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const current = polygon[i];
-    const previous = polygon[j];
-    const intersects =
-      current.lat > point.lat !== previous.lat > point.lat &&
-      point.lng <
-        ((previous.lng - current.lng) * (point.lat - current.lat)) /
-          (previous.lat - current.lat) +
-          current.lng;
+refreshPointsBtn.addEventListener('click', () => loadPoints());
+pointsSearchInput.addEventListener('input', () => loadPoints());
+includeUnresolvedCheckbox.addEventListener('change', () => loadPoints());
 
-    if (intersects) {
-      inside = !inside;
-    }
+routeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = new FormData(routeForm);
+  try {
+    const route = await window.appApi.buildRoute({
+      originAddress: form.get('originAddress'),
+      originLat: Number(form.get('originLat')),
+      originLng: Number(form.get('originLng')),
+      lastVisitWeight: Number(form.get('lastVisitWeight')),
+      lastPaymentWeight: Number(form.get('lastPaymentWeight')),
+      distanceWeight: Number(form.get('distanceWeight')),
+      limit: Number(form.get('limit')),
+      query: pointsSearchInput.value
+    });
+    renderRoute(route);
+  } catch (error) {
+    routeResultsEl.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
   }
+});
 
-  return inside;
-}
-
-function renderPointsList(points) {
-  pointsListEl.replaceChildren();
-
-  points.forEach((point, index) => {
-    const item = document.createElement('li');
-    item.className = 'point-item';
-    item.innerHTML = `
-      <span class="point-index">Punkt ${index + 1}</span>
-      <span class="point-coords">
-        <strong>${point.lat.toFixed(4)}</strong> N,
-        <strong>${point.lng.toFixed(4)}</strong> E
-      </span>
-    `;
-    pointsListEl.appendChild(item);
+customPointForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = new FormData(customPointForm);
+  await window.appApi.addCustomPoint({
+    label: form.get('label'),
+    addressText: form.get('addressText'),
+    lat: Number(form.get('lat')),
+    lng: Number(form.get('lng'))
   });
+  customPointForm.reset();
+  await loadPoints();
+});
+
+async function bootstrap() {
+  const bootstrapData = await window.appApi.getBootstrap();
+  applySummary(bootstrapData.summary);
+  buildMap();
+  await loadPoints();
 }
 
-function renderScene(points) {
-  renderMarkers(points);
-  renderPointsList(points);
-}
-
-function buildLeafletMap() {
+function buildMap() {
   if (typeof L === 'undefined') {
     mapEl.innerHTML = `
       <div class="map-error">
-        Nie udalo sie zaladowac biblioteki mapy. Widok OpenStreetMap wymaga dostepu do internetu.
+        Nie udalo sie zaladowac biblioteki mapy.
       </div>
     `;
     return;
@@ -81,70 +85,192 @@ function buildLeafletMap() {
 
   mapInstance = L.map(mapEl, {
     zoomControl: true,
-    minZoom: 2,
+    minZoom: 5,
     maxZoom: 18
   });
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(mapInstance);
 
-  markerLayer = L.layerGroup().addTo(mapInstance);
-  mapInstance.setView(fallbackCenter, fallbackZoom);
-}
-
-function renderMarkers(points) {
-  if (!mapInstance || !markerLayer) {
-    return;
-  }
-
-  markerLayer.clearLayers();
-
-  points.forEach((point, index) => {
-    if (!pointInPolygon(point, countryPolygon)) {
-      return;
-    }
-
-    const marker = L.circleMarker([point.lat, point.lng], {
-      radius: 8,
-      color: '#9a3412',
-      weight: 2,
-      fillColor: '#f97316',
-      fillOpacity: 0.9
-    });
-
-    marker.bindPopup(
-      `Punkt ${index + 1}<br>${point.lat.toFixed(4)} N, ${point.lng.toFixed(4)} E`
-    );
-    markerLayer.addLayer(marker);
-  });
+  mapInstance.setView([52.1, 19.4], 6);
+  peopleLayer = L.layerGroup().addTo(mapInstance);
+  customLayer = L.layerGroup().addTo(mapInstance);
+  routeLayer = L.layerGroup().addTo(mapInstance);
 }
 
 async function loadPoints() {
-  try {
-    const points = await window.appApi.getMapPoints();
+  const payload = await window.appApi.getMapPoints({
+    query: pointsSearchInput.value,
+    includeUnresolved: includeUnresolvedCheckbox.checked
+  });
+  currentPeople = payload.people || [];
+  currentCustomPoints = payload.customPoints || [];
 
-    if (!Array.isArray(points)) {
-      throw new Error('Plik JSON nie zawiera tablicy punktow.');
+  renderPointList();
+  renderMarkers();
+}
+
+function renderPointList() {
+  const combined = [
+    ...currentPeople.map((person) => ({ kind: 'person', ...person })),
+    ...currentCustomPoints.map((point) => ({ kind: 'custom', ...point }))
+  ];
+
+  pointsListEl.innerHTML = combined.length
+    ? combined
+        .map((entry) =>
+          entry.kind === 'person'
+            ? `
+              <button type="button" class="point-card" data-point-id="${escapeHtml(entry.sourceRowId)}">
+                <strong>${escapeHtml(entry.fullName || entry.companyName || 'Bez nazwy')}</strong>
+                <span>${escapeHtml(entry.routeAddress || entry.addressText || 'Brak adresu')}</span>
+                <span>Wizyta: ${escapeHtml(formatDate(entry.lastVisitAt))}</span>
+                <span>Wplata: ${escapeHtml(formatDate(entry.lastPaymentAt))}</span>
+              </button>
+            `
+            : `
+              <button type="button" class="point-card point-card-custom" data-custom-point-id="${entry.id}">
+                <strong>${escapeHtml(entry.label)}</strong>
+                <span>${escapeHtml(entry.addressText || 'Punkt lokalny')}</span>
+                <span>${escapeHtml(`${entry.lat.toFixed(4)}, ${entry.lng.toFixed(4)}`)}</span>
+              </button>
+            `
+        )
+        .join('')
+    : '<p class="empty-state">Brak punktow do wyswietlenia.</p>';
+
+  pointsListEl.querySelectorAll('[data-point-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const personId = button.dataset.pointId;
+      const person = currentPeople.find((entry) => entry.sourceRowId === personId);
+      if (person) {
+        focusMapPoint(person.lat, person.lng);
+      }
+      await renderPersonDetails(personId);
+    });
+  });
+
+  pointsListEl.querySelectorAll('[data-custom-point-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const point = currentCustomPoints.find((entry) => String(entry.id) === button.dataset.customPointId);
+      if (!point) {
+        return;
+      }
+      focusMapPoint(point.lat, point.lng);
+      detailTitleEl.textContent = point.label;
+      detailMetaEl.innerHTML = renderKeyValueList([
+        { label: 'Adres', value: point.addressText || 'Punkt lokalny' },
+        { label: 'Wspolrzedne', value: `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}` }
+      ]);
+    });
+  });
+}
+
+function renderMarkers() {
+  if (!mapInstance) {
+    return;
+  }
+
+  peopleLayer.clearLayers();
+  customLayer.clearLayers();
+  routeLayer.clearLayers();
+
+  currentPeople.forEach((person) => {
+    if (!Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
+      return;
     }
 
-    return points.filter((point) => pointInPolygon(point, countryPolygon));
-  } catch (error) {
-    mapEl.innerHTML = `
-      <div class="map-error">
-        Nie udalo sie wczytac punktow z pliku JSON: ${error.message}
-      </div>
-    `;
-    return [];
+    const marker = L.circleMarker([person.lat, person.lng], {
+      radius: 7,
+      color: '#23412e',
+      weight: 2,
+      fillColor: '#4db06f',
+      fillOpacity: 0.9
+    });
+    marker.bindPopup(
+      `
+        <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong><br>
+        ${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}<br>
+        Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}<br>
+        Ostatnia wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}
+      `
+    );
+    marker.on('click', () => {
+      renderPersonDetails(person.sourceRowId);
+    });
+    peopleLayer.addLayer(marker);
+  });
+
+  currentCustomPoints.forEach((point) => {
+    const marker = L.marker([point.lat, point.lng], {
+      title: point.label
+    });
+    marker.bindPopup(
+      `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(point.addressText || 'Punkt lokalny')}`
+    );
+    customLayer.addLayer(marker);
+  });
+}
+
+async function renderPersonDetails(sourceRowId) {
+  const details = await window.appApi.getPersonDetails(sourceRowId);
+  if (!details) {
+    return;
   }
+
+  detailTitleEl.textContent = details.person.fullName || 'Szczegoly punktu';
+  detailMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Adres', value: details.person.routeAddress || details.person.addressText },
+    { label: 'Telefon', value: details.person.phone },
+    { label: 'Ostatnia wizyta', value: formatDate(details.person.lastVisitAt) },
+    { label: 'Ostatnia wplata', value: formatDate(details.person.lastPaymentAt) },
+    { label: 'Planowana wizyta', value: formatDate(details.person.plannedVisitAt) },
+    { label: 'Suma wplat', value: formatMoney(details.person.raw['Suma wpłat']) },
+    { label: 'Uwagi', value: details.person.raw.Uwagi || 'Brak' }
+  ]);
 }
 
-async function initMapPage() {
-  buildLeafletMap();
+function renderRoute(route) {
+  routeLayer.clearLayers();
 
-  const points = await loadPoints();
-  renderScene(points);
+  const latlngs = [[route.origin.lat, route.origin.lng]];
+  route.points.forEach((point) => {
+    latlngs.push([point.lat, point.lng]);
+  });
+
+  if (latlngs.length > 1) {
+    const polyline = L.polyline(latlngs, {
+      color: '#c84f23',
+      weight: 4,
+      opacity: 0.85,
+      dashArray: '10 8'
+    });
+    routeLayer.addLayer(polyline);
+    mapInstance.fitBounds(polyline.getBounds().pad(0.15));
+  }
+
+  routeResultsEl.innerHTML = route.points.length
+    ? route.points
+        .map(
+          (point, index) => `
+            <article class="list-card route-card">
+              <div class="list-card-heading">
+                <strong>${index + 1}. ${escapeHtml(point.fullName || point.companyName || 'Bez nazwy')}</strong>
+                <span>${point.hopDistanceKm.toFixed(1)} km</span>
+              </div>
+              <p>${escapeHtml(point.routeAddress || point.addressText || 'Brak adresu')}</p>
+              <p>Score: ${point.routeScore.toFixed(1)} | Wizyta: ${point.daysSinceVisit} dni | Wplata: ${point.daysSincePayment} dni</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<p class="empty-state">Brak punktow do trasy.</p>';
 }
 
-initMapPage();
+function focusMapPoint(lat, lng) {
+  if (!mapInstance || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return;
+  }
+  mapInstance.setView([lat, lng], 10, { animate: true });
+}

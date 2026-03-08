@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MapShortner | Osoby</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="shell-header compact-header">
+        <div class="brand-block">
+          <span class="brand-kicker">MapShortner</span>
+          <h1>Osoby i historia serwisowa</h1>
+          <p>Osobna strona do wyszukiwania klientow, przegladu kart serwisowych i lokalnych notatek.</p>
+        </div>
+
+        <nav class="top-nav">
+          <a href="./index.html" data-page-link="dashboard">Dashboard</a>
+          <a href="./map.html" data-page-link="map">Mapa i trasy</a>
+          <a href="./people.html" data-page-link="people">Osoby</a>
+          <a href="./data.html" data-page-link="data">Dane</a>
+        </nav>
+
+        <div class="status-ribbon">
+          <span class="status-pill" data-updater-status>Oczekiwanie na status aktualizacji...</span>
+          <span class="status-pill status-pill-soft" data-operation-status>Brak aktywnej operacji.</span>
+        </div>
+      </header>
+
+      <main class="split-layout">
+        <section class="panel panel-stack side-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Wyszukiwanie</span>
+              <h2>Osoby</h2>
+            </div>
+            <span class="info-chip" id="people-result-count">0 rekordow</span>
+          </div>
+
+          <label class="field">
+            <span>Szukaj po imieniu, nazwisku, adresie lub telefonie</span>
+            <input id="people-search" type="search" placeholder="Np. Nabialek, Przyrow, 600..." />
+          </label>
+
+          <div class="vertical-list" id="people-results"></div>
+        </section>
+
+        <section class="panel panel-stack content-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Szczegoly</span>
+              <h2 id="person-detail-title">Wybierz osobe z listy</h2>
+            </div>
+          </div>
+
+          <div class="kv-grid" id="person-detail-meta"></div>
+
+          <section class="subpanel">
+            <div class="subpanel-header">
+              <h3>Lokalne notatki</h3>
+            </div>
+            <form id="person-note-form" class="note-form">
+              <textarea
+                id="person-note-input"
+                placeholder="Dodaj wiadomosc lub notatke robocza do SQLite..."
+              ></textarea>
+              <button type="submit">Zapisz notatke</button>
+            </form>
+            <div id="person-notes" class="stacked-cards"></div>
+          </section>
+
+          <section class="subpanel">
+            <div class="subpanel-header">
+              <h3>Ostatnie karty serwisowe</h3>
+            </div>
+            <div id="person-service-cards" class="stacked-cards"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./people.js"></script>
+  </body>
+</html>

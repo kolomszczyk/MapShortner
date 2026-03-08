@@ -3,38 +3,193 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MapShortner</title>
+    <title>MapShortner | Centrum operacyjne</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="app">
-      <div class="hero">
-        <div>
-          <h1>MapShortner</h1>
-          <p class="subtitle">Podstawowa aplikacja Electron z auto-update przez GitHub Releases</p>
+    <div class="shell">
+      <header class="shell-header">
+        <div class="brand-block">
+          <span class="brand-kicker">MapShortner</span>
+          <h1>Centrum serwisu, mapy i danych</h1>
+          <p>
+            Access pozostaje tylko zrodlem. Aplikacja importuje dane do lokalnego SQLite, geokoduje
+            adresy i buduje widoki robocze pod trase, osoby i podglad tabel.
+          </p>
         </div>
-        <a class="nav-link" href="./map.html">Otwórz mapę Polski</a>
-      </div>
 
-      <section class="card">
-        <h2>Status aktualizacji</h2>
-        <p id="status" class="status">Aplikacja uruchomiona. Oczekiwanie na pierwszy check...</p>
-        <div class="actions">
-          <button id="check-btn" type="button">Sprawdź aktualizacje</button>
-          <button id="install-btn" type="button" disabled>Zainstaluj i uruchom ponownie</button>
+        <nav class="top-nav">
+          <a href="./index.html" data-page-link="dashboard">Dashboard</a>
+          <a href="./map.html" data-page-link="map">Mapa i trasy</a>
+          <a href="./people.html" data-page-link="people">Osoby</a>
+          <a href="./data.html" data-page-link="data">Dane</a>
+        </nav>
+
+        <div class="status-ribbon">
+          <span class="status-pill" data-updater-status>Oczekiwanie na status aktualizacji...</span>
+          <span class="status-pill status-pill-soft" data-operation-status>Brak aktywnej operacji.</span>
         </div>
-      </section>
+      </header>
 
-      <section class="card card-secondary">
-        <h2>Nowa strona mapy</h2>
-        <p class="card-copy">
-          Widok mapy pokazuje 10 punktów zapisanych w pliku JSON na terenie Polski na podstawie
-          szerokości i długości geograficznej.
-        </p>
-        <a class="nav-link nav-link-inline" href="./map.html">Przejdź do mapy</a>
-      </section>
-    </main>
+      <main class="dashboard-layout">
+        <section class="hero-panel panel-gradient">
+          <div class="hero-copy">
+            <span class="eyebrow">Tryb operacyjny</span>
+            <h2>Najpierw wybierz `.accdb`, potem import i geokodowanie.</h2>
+            <p>
+              Haslo do Accessa jest czytane z pliku sekretu, a wszystkie robocze notatki, punkty i
+              widoki zapisywane sa w lokalnym SQLite. Oryginalna baza nie jest modyfikowana.
+            </p>
+          </div>
 
-    <script src="./renderer.js"></script>
+          <div class="hero-stats">
+            <article class="stat-card">
+              <span>Tabele</span>
+              <strong data-stat="totalTables">0</strong>
+            </article>
+            <article class="stat-card">
+              <span>Wiersze</span>
+              <strong data-stat="totalRows">0</strong>
+            </article>
+            <article class="stat-card">
+              <span>Osoby</span>
+              <strong data-stat="totalPeople">0</strong>
+            </article>
+            <article class="stat-card">
+              <span>Punkty gotowe</span>
+              <strong data-stat="geocodedPeople">0</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Zrodlo danych</span>
+              <h2>Access i import do SQLite</h2>
+            </div>
+            <div class="chip-line">
+              <span class="info-chip" id="password-status">Sprawdzanie hasla...</span>
+              <span class="info-chip" data-access-path id="access-path">Nie wybrano pliku</span>
+            </div>
+          </div>
+
+          <p class="copy" id="import-status">
+            SQLite jest gotowe, ale baza Access nie zostala jeszcze zaimportowana.
+          </p>
+
+          <div class="action-row">
+            <button type="button" id="choose-file-btn">Wybierz plik .accdb</button>
+            <button type="button" id="import-btn" class="button-strong">Importuj do SQLite</button>
+          </div>
+
+          <ul class="meta-list" id="import-meta"></ul>
+        </section>
+
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Geokodowanie</span>
+              <h2>Google Maps API</h2>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>Klucz API</span>
+            <input id="google-api-key" type="password" placeholder="Wklej klucz Google Maps API" />
+          </label>
+
+          <label class="field">
+            <span>Liczba rekordow na przebieg</span>
+            <input id="geocode-limit" type="number" min="1" max="300" value="50" />
+          </label>
+
+          <div class="action-row">
+            <button type="button" id="save-api-key-btn">Zapisz klucz</button>
+            <button type="button" id="geocode-btn" class="button-strong">
+              Geokoduj brakujace adresy
+            </button>
+          </div>
+
+          <div class="mini-stats">
+            <article>
+              <span>Oczekuje</span>
+              <strong data-stat="pendingGeocodes">0</strong>
+            </article>
+            <article>
+              <span>Notatki</span>
+              <strong data-stat="totalNotes">0</strong>
+            </article>
+            <article>
+              <span>Punkty lokalne</span>
+              <strong data-stat="totalCustomPoints">0</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Publikacja</span>
+              <h2>Aktualizacje aplikacji</h2>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button id="check-btn" type="button">Sprawdz aktualizacje</button>
+            <button id="install-btn" type="button" disabled>Zainstaluj i uruchom ponownie</button>
+          </div>
+
+          <p class="copy">
+            Auto-update zostal zachowany. Ostatni import zapisuje sie lokalnie i jest niezalezny od
+            procesu wydania aplikacji.
+          </p>
+        </section>
+
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Nawigacja</span>
+              <h2>Widoki robocze</h2>
+            </div>
+          </div>
+
+          <div class="nav-cards">
+            <a class="nav-card" href="./map.html">
+              <strong>Mapa i trasy</strong>
+              <span>Wizualizacja punktow, lokalne kropki i ranking trasy po wizycie, wplacie i odleglosci.</span>
+            </a>
+            <a class="nav-card" href="./people.html">
+              <strong>Osoby</strong>
+              <span>Oddzielna strona wyszukiwania, szczegoly klienta, karty serwisowe i lokalne notatki.</span>
+            </a>
+            <a class="nav-card" href="./data.html">
+              <strong>Podglad danych</strong>
+              <span>Wszystkie zaimportowane tabele Accessa w trybie tylko do odczytu.</span>
+            </a>
+          </div>
+        </section>
+
+        <section class="panel panel-stack full-width">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Log operacji</span>
+              <h2>Ostatnie zdarzenia</h2>
+            </div>
+            <span class="info-chip" data-imported-at>Jeszcze nie importowano</span>
+          </div>
+
+          <ol class="log-list" id="operation-log"></ol>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./dashboard.js"></script>
   </body>
 </html>

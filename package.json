@@ -27,7 +27,13 @@
     },
     "files": [
       "src/**/*",
+      "tools/access-bridge/**/*",
+      "vendor/ucanaccess/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "tools/access-bridge/**/*",
+      "vendor/ucanaccess/**/*"
     ],
     "publish": [
       {
