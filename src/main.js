@@ -20,6 +20,7 @@ let exclusiveOperationQueue = Promise.resolve();
 let accessReimportInterval = null;
 
 const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
+const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -248,6 +249,11 @@ function formatUpdaterError(err) {
 }
 
 function createWindow() {
+  let resolveReady;
+  const readyPromise = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+
   mainWindow = new BrowserWindow({
     width: 1480,
     height: 980,
@@ -268,7 +274,10 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.maximize();
+    resolveReady();
   });
+
+  return readyPromise;
 }
 
 function configureAutoUpdater() {
@@ -362,10 +371,172 @@ async function pickTrasaImportPath() {
   return result.filePaths[0];
 }
 
-app.whenReady().then(() => {
+function shouldRunFirstLaunchSetup() {
+  if (store.getSetting(FIRST_LAUNCH_SETUP_KEY) === '1') {
+    return false;
+  }
+
+  const summary = store.getDashboardSummary();
+  const hasExistingSetup = Boolean(
+    summary?.settings?.accessDbPath ||
+      summary?.importMeta?.source_path ||
+      summary?.importMeta?.imported_at ||
+      summary?.stats?.totalRows ||
+      summary?.stats?.totalCustomPoints ||
+      summary?.stats?.totalNotes
+  );
+
+  if (hasExistingSetup) {
+    store.setSetting(FIRST_LAUNCH_SETUP_KEY, '1');
+    return false;
+  }
+
+  return true;
+}
+
+async function importTrasaFile(trasaPath, options = {}) {
+  const { accessDbPathOverride = null, emitStatus = true } = options;
+  const targetDbPath = path.join(app.getPath('userData'), 'data', 'mapshortner.sqlite');
+  const backupPath = path.join(app.getPath('temp'), `mapshortner-before-import-${Date.now()}.sqlite`);
+
+  if (emitStatus) {
+    sendOperationStatus({
+      type: 'trasa-import',
+      status: 'started',
+      message: 'Rozpoczeto import pakietu .trasa.'
+    });
+  }
+
+  if (store) {
+    store.exportSnapshot(backupPath);
+    store.close();
+  }
+
+  try {
+    const result = importTrasaArchive({
+      app,
+      trasaPath,
+      targetDbPath
+    });
+
+    store = createDataStore(app);
+
+    const googleMapsApiKey = loadGoogleMapsApiKey();
+    if (googleMapsApiKey) {
+      store.setSetting('googleMapsApiKey', googleMapsApiKey);
+    }
+    if (accessDbPathOverride) {
+      store.setSetting('accessDbPath', accessDbPathOverride);
+    }
+
+    const summary = store.getDashboardSummary();
+    if (emitStatus) {
+      sendOperationStatus({
+        type: 'trasa-import',
+        status: 'completed',
+        message: `Wczytano pakiet .trasa z ${trasaPath}.`,
+        result,
+        summary
+      });
+    }
+
+    return {
+      ...result,
+      summary
+    };
+  } catch (error) {
+    if (fs.existsSync(backupPath)) {
+      fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
+      removeDatabaseSidecars(targetDbPath);
+      fs.copyFileSync(backupPath, targetDbPath);
+    }
+    store = createDataStore(app);
+    if (accessDbPathOverride) {
+      store.setSetting('accessDbPath', accessDbPathOverride);
+    }
+    throw error;
+  } finally {
+    fs.rmSync(backupPath, { force: true });
+  }
+}
+
+async function runFirstLaunchSetup() {
+  if (!shouldRunFirstLaunchSetup()) {
+    return;
+  }
+
+  sendOperationStatus({
+    type: 'first-launch',
+    status: 'started',
+    message: 'Pierwsze uruchomienie: konfiguracja plikow startowych.'
+  });
+
+  const accessPrompt = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: 'Pierwsze uruchomienie',
+    message: 'Czy chcesz teraz wskazac plik Access .accdb?',
+    detail:
+      'Jesli wybierzesz plik teraz, aplikacja od razu po konfiguracji uruchomi pierwszy automatyczny import do SQLite.',
+    buttons: ['Wybierz .accdb', 'Pomin'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+
+  let selectedAccessPath = store.getSetting('accessDbPath');
+  if (accessPrompt.response === 0) {
+    selectedAccessPath = await pickAccessDatabase();
+  }
+
+  const trasaPrompt = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: 'Pierwsze uruchomienie',
+    message: 'Czy masz pakiet .trasa do wczytania?',
+    detail:
+      'To opcjonalne. Jesli masz wczesniej wyeksportowany pakiet MapShortner, mozesz go teraz zaimportowac.',
+    buttons: ['Wczytaj .trasa', 'Pomin'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+
+  if (trasaPrompt.response === 0) {
+    const trasaPath = await pickTrasaImportPath();
+    if (trasaPath) {
+      await importTrasaFile(trasaPath, {
+        accessDbPathOverride: selectedAccessPath || null
+      });
+    }
+  }
+
+  store.setSetting(FIRST_LAUNCH_SETUP_KEY, '1');
+  sendOperationStatus({
+    type: 'first-launch',
+    status: 'completed',
+    message: 'Konfiguracja pierwszego uruchomienia zakonczona.',
+    summary: store.getDashboardSummary()
+  });
+}
+
+app.whenReady().then(async () => {
   store = createDataStore(app);
-  createWindow();
+  const windowReady = createWindow();
   configureAutoUpdater();
+  await windowReady;
+
+  try {
+    await runFirstLaunchSetup();
+  } catch (error) {
+    log.error('First launch setup failed', error);
+    sendOperationStatus({
+      type: 'first-launch',
+      status: 'failed',
+      message: `Konfiguracja pierwszego uruchomienia nie powiodla sie: ${error.message}`,
+      error: error.message,
+      summary: store.getDashboardSummary()
+    });
+  }
+
   startAccessReimportMonitor();
 
   setTimeout(() => {
@@ -453,60 +624,7 @@ ipcMain.handle('trasa:import', async () => {
     return null;
   }
 
-  return enqueueExclusiveOperation(async () => {
-    sendOperationStatus({
-      type: 'trasa-import',
-      status: 'started',
-      message: 'Rozpoczeto import pakietu .trasa.'
-    });
-
-    const targetDbPath = path.join(app.getPath('userData'), 'data', 'mapshortner.sqlite');
-    const backupPath = path.join(app.getPath('temp'), `mapshortner-before-import-${Date.now()}.sqlite`);
-
-    if (store) {
-      store.exportSnapshot(backupPath);
-      store.close();
-    }
-
-    try {
-      const result = importTrasaArchive({
-        app,
-        trasaPath,
-        targetDbPath
-      });
-
-      store = createDataStore(app);
-
-      const googleMapsApiKey = loadGoogleMapsApiKey();
-      if (googleMapsApiKey) {
-        store.setSetting('googleMapsApiKey', googleMapsApiKey);
-      }
-
-      const summary = store.getDashboardSummary();
-      sendOperationStatus({
-        type: 'trasa-import',
-        status: 'completed',
-        message: `Wczytano pakiet .trasa z ${trasaPath}.`,
-        result,
-        summary
-      });
-
-      return {
-        ...result,
-        summary
-      };
-    } catch (error) {
-      if (fs.existsSync(backupPath)) {
-        fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
-        removeDatabaseSidecars(targetDbPath);
-        fs.copyFileSync(backupPath, targetDbPath);
-      }
-      store = createDataStore(app);
-      throw error;
-    } finally {
-      fs.rmSync(backupPath, { force: true });
-    }
-  });
+  return enqueueExclusiveOperation(() => importTrasaFile(trasaPath));
 });
 
 ipcMain.handle('access:pickFile', async () => {
