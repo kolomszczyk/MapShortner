@@ -19,6 +19,9 @@ let store;
 let autoUpdater = null;
 let exclusiveOperationQueue = Promise.resolve();
 let accessReimportInterval = null;
+let devReloadWatchers = [];
+let devReloadTimer = null;
+let devReloadInFlight = false;
 
 const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
 const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
@@ -26,6 +29,7 @@ const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
 const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
 const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
+const isDevMode = process.argv.includes('--dev');
 
 let updaterState = {
   phase: 'idle',
@@ -403,6 +407,111 @@ function removeDatabaseSidecars(dbPath) {
   for (const suffix of ['', '-wal', '-shm']) {
     fs.rmSync(`${dbPath}${suffix}`, { force: true });
   }
+}
+
+function closeDevReloadWatchers() {
+  for (const watcher of devReloadWatchers) {
+    try {
+      watcher.close();
+    } catch (error) {
+      log.warn('Failed to close dev watcher', error);
+    }
+  }
+  devReloadWatchers = [];
+}
+
+function isRendererReloadPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === '.html' || ext === '.css' || ext === '.js' || ext === '.json';
+}
+
+function shouldRestartAppForDevChange(filePath) {
+  const normalizedPath = path.normalize(filePath);
+  return (
+    normalizedPath === path.join(__dirname, 'main.js') ||
+    normalizedPath === path.join(__dirname, 'preload.js') ||
+    normalizedPath.startsWith(path.join(__dirname, 'main') + path.sep)
+  );
+}
+
+function triggerDevReload(filePath) {
+  if (!filePath || devReloadInFlight) {
+    return;
+  }
+
+  if (devReloadTimer) {
+    clearTimeout(devReloadTimer);
+  }
+
+  devReloadTimer = setTimeout(() => {
+    devReloadTimer = null;
+
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    devReloadInFlight = true;
+    const action = shouldRestartAppForDevChange(filePath) ? 'restart' : 'reload';
+    log.info(`Dev ${action} triggered by ${path.relative(__dirname, filePath)}`);
+
+    if (action === 'restart') {
+      closeDevReloadWatchers();
+      app.relaunch();
+      app.exit(0);
+      return;
+    }
+
+    mainWindow.webContents.reloadIgnoringCache();
+    setTimeout(() => {
+      devReloadInFlight = false;
+    }, 250);
+  }, 140);
+}
+
+function watchDevDirectory(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return;
+  }
+
+  try {
+    const watcher = fs.watch(dirPath, (_eventType, fileName) => {
+      if (!fileName) {
+        return;
+      }
+
+      const changedPath = path.join(dirPath, fileName.toString());
+      if (!isRendererReloadPath(changedPath) && !shouldRestartAppForDevChange(changedPath)) {
+        return;
+      }
+
+      triggerDevReload(changedPath);
+    });
+
+    devReloadWatchers.push(watcher);
+  } catch (error) {
+    log.warn(`Failed to watch ${dirPath} in dev mode`, error);
+  }
+}
+
+function startDevReloadWatcher() {
+  if (!isDevMode) {
+    return;
+  }
+
+  closeDevReloadWatchers();
+  watchDevDirectory(__dirname);
+  watchDevDirectory(path.join(__dirname, 'main'));
+
+  setUpdaterState({
+    phase: 'idle',
+    message: 'Tryb dev: auto-reload wlaczony, auto-update wylaczony.',
+    visible: false,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: null,
+    version: null,
+    source: 'dev'
+  });
 }
 
 function formatUpdaterError(err) {
@@ -823,10 +932,16 @@ async function runFirstLaunchSetup() {
 app.whenReady().then(async () => {
   store = createDataStore(app);
   const windowReady = createWindow();
-  configureAutoUpdater();
+  if (!isDevMode) {
+    configureAutoUpdater();
+  }
   await windowReady;
 
-  await runStartupUpdateFlow();
+  startDevReloadWatcher();
+
+  if (!isDevMode) {
+    await runStartupUpdateFlow();
+  }
 
   try {
     await runFirstLaunchSetup();
@@ -861,6 +976,11 @@ app.on('before-quit', () => {
     clearInterval(accessReimportInterval);
     accessReimportInterval = null;
   }
+  if (devReloadTimer) {
+    clearTimeout(devReloadTimer);
+    devReloadTimer = null;
+  }
+  closeDevReloadWatchers();
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
@@ -877,6 +997,11 @@ ipcMain.handle('app:getBootstrap', async () => ({
 ipcMain.handle('updater:getState', async () => getUpdaterState());
 
 ipcMain.handle('updater:checkNow', async () => {
+  if (!autoUpdater) {
+    sendUpdateStatus('Tryb dev: auto-update jest wylaczony.');
+    return false;
+  }
+
   if (updaterState.readyToInstall) {
     sendUpdateStatus('Aktualizacja jest juz pobrana i czeka na instalacje.');
     return true;
@@ -888,6 +1013,11 @@ ipcMain.handle('updater:checkNow', async () => {
 });
 
 ipcMain.handle('updater:installNow', () => {
+  if (!autoUpdater) {
+    sendUpdateStatus('Tryb dev: auto-update jest wylaczony.');
+    return false;
+  }
+
   clearStartupUpdateInstallTimer();
   sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
   setUpdaterState({

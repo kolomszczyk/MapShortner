@@ -17,6 +17,19 @@ npm install
 npm run start
 ```
 
+## 2a) Tryb developerski
+
+Do pracy nad interfejsem i kodem lokalnym uruchamiaj:
+
+```bash
+npm run dev
+```
+
+W trybie dev:
+- zmiany w `src/*.html`, `src/*.css`, `src/*.js` i `src/*.json` przeładowują okno automatycznie
+- zmiany w `src/main.js`, `src/preload.js` i plikach z `src/main/` restartują aplikację automatycznie
+- auto-update jest wyłączony, żeby nie mieszał w lokalnym developmentcie
+
 ## 3) Publikacja pierwszego release (ręcznie)
 
 Pierwszy release możesz zrobić lokalnie:

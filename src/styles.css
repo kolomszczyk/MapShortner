@@ -41,6 +41,10 @@ body {
     linear-gradient(180deg, #eef3ea 0%, #dde5d8 100%);
 }
 
+body.map-page {
+  overflow: hidden;
+}
+
 a,
 button,
 input,
@@ -121,6 +125,107 @@ textarea {
   max-width: 1560px;
   margin: 0 auto;
   padding: 28px 22px 42px;
+}
+
+.map-shell-sketch {
+  max-width: none;
+  min-height: 100vh;
+  padding: 0;
+}
+
+.map-workspace {
+  min-height: 100vh;
+}
+
+.map-board {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 95% 5%;
+  border-radius: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.map-content-group {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.618fr) minmax(0, 1fr);
+}
+
+.map-canvas-panel,
+.map-info-panel,
+.map-settings-rail {
+  min-height: 0;
+}
+
+.map-canvas-panel {
+  display: flex;
+  padding: 0;
+  border-right: 1px solid rgba(48, 67, 54, 0.16);
+  background: transparent;
+}
+
+.map-info-panel {
+  padding: 24px;
+  border-right: 1px solid rgba(48, 67, 54, 0.16);
+  background:
+    linear-gradient(180deg, rgba(245, 248, 242, 0.94) 0%, rgba(237, 243, 234, 0.92) 100%);
+}
+
+.map-info-panel h1 {
+  margin: 0;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: clamp(2rem, 3vw, 3rem);
+  letter-spacing: -0.03em;
+}
+
+.map-settings-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 10px;
+  border-left: 1px solid rgba(48, 67, 54, 0.22);
+  background:
+    linear-gradient(180deg, rgba(226, 234, 220, 0.96) 0%, rgba(201, 217, 196, 0.98) 100%);
+}
+
+.settings-gear-button {
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #335f42 0%, #23412e 100%);
+  box-shadow: 0 14px 24px rgba(35, 65, 46, 0.22);
+}
+
+.settings-gear-button svg {
+  width: 28px;
+  height: 28px;
+  fill: #f4f8f1;
+}
+
+.settings-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.service-map-sketch {
+  flex: 1 1 auto;
+  min-height: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
 }
 
 .shell-header {
@@ -494,10 +599,37 @@ textarea {
   gap: 22px;
 }
 
+.map-layout-shell {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(120px, 1fr);
+}
+
 .map-stage,
 .content-panel,
 .side-panel {
   min-height: 0;
+}
+
+.map-column {
+  min-height: 720px;
+}
+
+.map-column-map {
+  padding: 16px;
+}
+
+.map-column-map .service-map {
+  height: 100%;
+  min-height: 688px;
+}
+
+.map-column-info {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 245, 0.94) 0%, rgba(245, 239, 228, 0.94) 100%);
+}
+
+.map-column-settings {
+  background:
+    linear-gradient(180deg, rgba(110, 177, 95, 0.96) 0%, rgba(68, 132, 63, 0.96) 100%);
 }
 
 .map-sidebar {
@@ -634,6 +766,12 @@ textarea {
   overflow: hidden;
   border: 1px solid var(--line);
   background: #dae7df;
+}
+
+body.map-page .service-map {
+  min-height: 100%;
+  border-radius: 0;
+  border: 0;
 }
 
 .map-error {
@@ -842,9 +980,17 @@ textarea {
   .mini-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .map-board {
+    grid-template-columns: 95% 5%;
+  }
 }
 
 @media (max-width: 860px) {
+  body.map-page {
+    overflow: auto;
+  }
+
   .shell {
     padding: 18px 14px 28px;
   }
@@ -879,6 +1025,56 @@ textarea {
 
   .service-map,
   .map-error {
+    min-height: 420px;
+  }
+
+  .map-shell-sketch {
+    padding: 0;
+  }
+
+  .map-workspace {
+    min-height: auto;
+  }
+
+  .map-board {
+    grid-template-columns: 1fr;
+    min-height: 100vh;
+  }
+
+  .map-content-group {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(360px, auto) minmax(220px, auto);
+  }
+
+  .map-canvas-panel,
+  .map-info-panel {
+    border-right: 0;
+  }
+
+  .map-canvas-panel,
+  .map-info-panel,
+  .map-settings-rail {
+    border-bottom: 1px solid rgba(48, 67, 54, 0.16);
+  }
+
+  .map-settings-rail {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 18px;
+    border-bottom: 0;
+  }
+
+  .settings-rail-label {
+    writing-mode: initial;
+    transform: none;
+  }
+
+  .map-column {
+    min-height: 420px;
+  }
+
+  .map-column-map .service-map {
     min-height: 420px;
   }
 
