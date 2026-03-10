@@ -25,20 +25,18 @@
 
             <aside class="map-info-panel">
               <section class="map-info-view map-info-view-active" data-map-view="overview">
-                <div class="map-selection-header">
+                <div class="map-selection-header" data-map-selection-header hidden>
                   <div>
-                    <h1 data-map-selection-title>Informacje</h1>
+                    <h1 data-map-selection-title></h1>
                   </div>
                 </div>
 
-                <p class="copy" data-map-selection-copy>
-                  Po kliknieciu markera tutaj pokaza sie szczegoly osoby albo punktu lokalnego.
-                </p>
+                <p class="copy" data-map-selection-copy hidden></p>
 
                 <div class="kv-grid" data-map-selection-meta hidden></div>
                 <div class="stacked-cards map-selection-cards" data-map-selection-extra hidden></div>
 
-                <section class="subpanel" data-map-overview-default>
+                <section class="subpanel" data-map-overview-default hidden>
                   <div class="subpanel-header">
                     <div>
                       <span class="eyebrow">Status danych</span>
@@ -58,7 +56,7 @@
                   </div>
                 </section>
 
-                <section class="subpanel" data-map-overview-default>
+                <section class="subpanel" data-map-overview-default hidden>
                   <div class="subpanel-header">
                     <div>
                       <span class="eyebrow">Podpowiedz</span>

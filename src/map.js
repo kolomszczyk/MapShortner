@@ -22,6 +22,7 @@ const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
 const overviewImportedAtEl = document.querySelector('[data-map-overview-imported-at]');
 const overviewDefaultEls = document.querySelectorAll('[data-map-overview-default]');
+const selectionHeaderEl = document.querySelector('[data-map-selection-header]');
 const selectionTitleEl = document.querySelector('[data-map-selection-title]');
 const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
@@ -56,6 +57,7 @@ const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
 const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
+const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 
 let mapInstance;
 let peopleLayer;
@@ -222,7 +224,15 @@ async function loadPoints() {
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
-  clearActiveSelection({ resetPanel: true });
+  const nextPerson = resolveInitialPersonSelection(allPeople);
+
+  clearActiveSelection({ resetPanel: !nextPerson });
+
+  if (nextPerson) {
+    focusSelectionOnMap(nextPerson);
+    void selectPersonPoint(nextPerson, null);
+  }
+
   scheduleVisibleMarkerSync(0);
 }
 
@@ -512,6 +522,52 @@ function buildCustomPointKey(point) {
   return `custom:${point.id}`;
 }
 
+function resolveInitialPersonSelection(people) {
+  if (!Array.isArray(people) || people.length === 0) {
+    return null;
+  }
+
+  const lastSelectedPersonId = readLastSelectedPersonId();
+  if (lastSelectedPersonId) {
+    const matchingPerson = people.find((person) => person.sourceRowId === lastSelectedPersonId);
+    if (matchingPerson) {
+      return matchingPerson;
+    }
+  }
+
+  return people[0];
+}
+
+function readLastSelectedPersonId() {
+  try {
+    return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function saveLastSelectedPersonId(sourceRowId) {
+  if (!sourceRowId) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LAST_SELECTED_PERSON_STORAGE_KEY, sourceRowId);
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
+function focusSelectionOnMap(person) {
+  if (!mapInstance || !Number.isFinite(person?.lat) || !Number.isFinite(person?.lng)) {
+    return;
+  }
+
+  mapInstance.panTo([person.lat, person.lng], {
+    animate: false
+  });
+}
+
 function attachLazyPopup(marker, buildHtml, onSelect) {
   let hoverPopupTimer = null;
 
@@ -559,6 +615,7 @@ async function selectPersonPoint(person, marker) {
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
 
+  saveLastSelectedPersonId(person.sourceRowId);
   setActiveSelection({
     key,
     type: 'person',
@@ -643,10 +700,12 @@ function resetMarkerSelection(marker, type) {
 
 function renderEmptySelection() {
   overviewDefaultEls.forEach((element) => {
-    element.hidden = false;
+    element.hidden = true;
   });
-  selectionTitleEl.textContent = 'Informacje';
-  selectionCopyEl.textContent = 'Po kliknieciu markera tutaj pokaza sie szczegoly osoby albo punktu lokalnego.';
+  selectionHeaderEl.hidden = true;
+  selectionTitleEl.textContent = '';
+  selectionCopyEl.textContent = '';
+  selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = '';
@@ -654,8 +713,10 @@ function renderEmptySelection() {
 }
 
 function renderPersonSelectionState(person) {
+  selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
   selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Ladowanie szczegolow osoby...';
+  selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
@@ -669,8 +730,10 @@ function renderPersonSelectionState(person) {
 
 function renderPersonSelection(details) {
   const person = details.person;
+  selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
   selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Brak adresu';
+  selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
@@ -736,8 +799,10 @@ function renderPersonSelection(details) {
 }
 
 function renderCustomPointSelection(point) {
+  selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = point.label || 'Punkt lokalny';
   selectionCopyEl.textContent = point.addressText || 'Punkt lokalny zapisany recznie.';
+  selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Typ', value: 'Punkt lokalny' },
     { label: 'Adres', value: point.addressText || 'Brak' },
