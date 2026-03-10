@@ -1,4 +1,13 @@
-import { escapeHtml, formatDate, formatDateTime, formatNumber, initShell, summarizePath } from './app-shell.js';
+import {
+  escapeHtml,
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatNumber,
+  initShell,
+  renderKeyValueList,
+  summarizePath
+} from './app-shell.js';
 import { initDashboardPanel } from './dashboard-panel.js';
 
 initShell('map');
@@ -12,6 +21,11 @@ const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
 const overviewImportedAtEl = document.querySelector('[data-map-overview-imported-at]');
+const overviewDefaultEls = document.querySelectorAll('[data-map-overview-default]');
+const selectionTitleEl = document.querySelector('[data-map-selection-title]');
+const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
+const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
+const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
 
 const DEFAULT_PERSON_MARKER_STYLE = {
   radius: 7,
@@ -19,6 +33,13 @@ const DEFAULT_PERSON_MARKER_STYLE = {
   weight: 2,
   fillColor: '#4db06f',
   fillOpacity: 0.9
+};
+const ACTIVE_PERSON_MARKER_STYLE = {
+  radius: 9,
+  color: '#7f3512',
+  weight: 3,
+  fillColor: '#f1a167',
+  fillOpacity: 1
 };
 
 const POLAND_BOUNDS = [
@@ -34,6 +55,7 @@ const WHEEL_LINE_HEIGHT_PX = 18;
 const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
 const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
+const HOVER_POPUP_DELAY_MS = 400;
 
 let mapInstance;
 let peopleLayer;
@@ -46,6 +68,8 @@ let visibleCustomMarkers = new Map();
 let markerSyncGeneration = 0;
 let resizeTimer;
 let isSettingsOpen = false;
+let activeSelection = null;
+let selectionRequestToken = 0;
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
@@ -66,6 +90,7 @@ window.appApi.onOperationStatus(async (payload) => {
   }
 });
 
+renderEmptySelection();
 bootstrap();
 
 async function bootstrap() {
@@ -197,6 +222,7 @@ async function loadPoints() {
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
+  clearActiveSelection({ resetPanel: true });
   scheduleVisibleMarkerSync(0);
 }
 
@@ -421,7 +447,14 @@ function renderMarkerBatch(state) {
       ...DEFAULT_PERSON_MARKER_STYLE,
       renderer: personRenderer
     });
-    attachLazyPopup(marker, () => buildPersonPopupHtml(person));
+    attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
+      void selectPersonPoint(person, marker);
+    });
+
+    if (activeSelection?.key === key) {
+      applyMarkerSelection(marker, 'person');
+      activeSelection.marker = marker;
+    }
 
     peopleLayer.addLayer(marker);
     visiblePeopleMarkers.set(key, marker);
@@ -444,7 +477,14 @@ function renderMarkerBatch(state) {
     const marker = L.marker([point.lat, point.lng], {
       title: point.label
     });
-    attachLazyPopup(marker, () => buildCustomPointPopupHtml(point));
+    attachLazyPopup(marker, () => buildCustomPointPopupHtml(point), () => {
+      selectCustomPoint(point, marker);
+    });
+
+    if (activeSelection?.key === key) {
+      applyMarkerSelection(marker, 'custom');
+      activeSelection.marker = marker;
+    }
 
     customLayer.addLayer(marker);
     visibleCustomMarkers.set(key, marker);
@@ -472,13 +512,250 @@ function buildCustomPointKey(point) {
   return `custom:${point.id}`;
 }
 
-function attachLazyPopup(marker, buildHtml) {
-  marker.on('click', () => {
+function attachLazyPopup(marker, buildHtml, onSelect) {
+  let hoverPopupTimer = null;
+
+  const clearHoverPopupTimer = () => {
+    if (hoverPopupTimer) {
+      window.clearTimeout(hoverPopupTimer);
+      hoverPopupTimer = null;
+    }
+  };
+
+  const ensurePopup = () => {
     if (!marker.getPopup()) {
       marker.bindPopup(buildHtml());
     }
+  };
+
+  marker.on('click', () => {
+    clearHoverPopupTimer();
+    ensurePopup();
     marker.openPopup();
+    onSelect?.();
   });
+
+  marker.on('mouseover', () => {
+    clearHoverPopupTimer();
+    hoverPopupTimer = window.setTimeout(() => {
+      hoverPopupTimer = null;
+      ensurePopup();
+      marker.openPopup();
+    }, HOVER_POPUP_DELAY_MS);
+  });
+
+  marker.on('mouseout', () => {
+    clearHoverPopupTimer();
+    marker.closePopup();
+  });
+
+  marker.on('remove', () => {
+    clearHoverPopupTimer();
+  });
+}
+
+async function selectPersonPoint(person, marker) {
+  const key = buildPersonKey(person);
+  selectionRequestToken += 1;
+  const requestToken = selectionRequestToken;
+
+  setActiveSelection({
+    key,
+    type: 'person',
+    marker
+  });
+  renderPersonSelectionState(person);
+
+  const details = await window.appApi.getPersonDetails(person.sourceRowId);
+  if (!details || requestToken !== selectionRequestToken || activeSelection?.key !== key) {
+    return;
+  }
+
+  renderPersonSelection(details);
+}
+
+function selectCustomPoint(point, marker) {
+  selectionRequestToken += 1;
+  setActiveSelection({
+    key: buildCustomPointKey(point),
+    type: 'custom',
+    marker
+  });
+  renderCustomPointSelection(point);
+}
+
+function setActiveSelection(nextSelection) {
+  if (activeSelection?.marker) {
+    resetMarkerSelection(activeSelection.marker, activeSelection.type);
+  }
+
+  activeSelection = nextSelection;
+  applyMarkerSelection(nextSelection.marker, nextSelection.type);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+}
+
+function clearActiveSelection(options = {}) {
+  selectionRequestToken += 1;
+
+  if (activeSelection?.marker) {
+    resetMarkerSelection(activeSelection.marker, activeSelection.type);
+  }
+
+  activeSelection = null;
+
+  if (options.resetPanel !== false) {
+    renderEmptySelection();
+  }
+}
+
+function applyMarkerSelection(marker, type) {
+  if (!marker) {
+    return;
+  }
+
+  if (type === 'person' && typeof marker.setStyle === 'function') {
+    marker.setStyle(ACTIVE_PERSON_MARKER_STYLE);
+    marker.bringToFront?.();
+    return;
+  }
+
+  if (type === 'custom' && typeof marker.setZIndexOffset === 'function') {
+    marker.setZIndexOffset(1000);
+  }
+}
+
+function resetMarkerSelection(marker, type) {
+  if (!marker) {
+    return;
+  }
+
+  if (type === 'person' && typeof marker.setStyle === 'function') {
+    marker.setStyle(DEFAULT_PERSON_MARKER_STYLE);
+    return;
+  }
+
+  if (type === 'custom' && typeof marker.setZIndexOffset === 'function') {
+    marker.setZIndexOffset(0);
+  }
+}
+
+function renderEmptySelection() {
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = false;
+  });
+  selectionTitleEl.textContent = 'Informacje';
+  selectionCopyEl.textContent = 'Po kliknieciu markera tutaj pokaza sie szczegoly osoby albo punktu lokalnego.';
+  selectionMetaEl.innerHTML = '';
+  selectionMetaEl.hidden = true;
+  selectionExtraEl.innerHTML = '';
+  selectionExtraEl.hidden = true;
+}
+
+function renderPersonSelectionState(person) {
+  selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
+  selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Ladowanie szczegolow osoby...';
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Telefon', value: person.phone || 'Brak' },
+    { label: 'E-mail', value: person.email || 'Brak' },
+    { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
+    { label: 'Ostatnia wplata', value: formatDate(person.lastPaymentAt) }
+  ]);
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = '<p class="empty-state">Ladowanie pelnych informacji o osobie...</p>';
+  selectionExtraEl.hidden = false;
+}
+
+function renderPersonSelection(details) {
+  const person = details.person;
+  selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
+  selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Brak adresu';
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Telefon', value: person.phone || 'Brak' },
+    { label: 'E-mail', value: person.email || 'Brak' },
+    { label: 'Adres', value: person.addressText || person.routeAddress || 'Brak' },
+    { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
+    { label: 'Ostatnia wplata', value: formatDate(person.lastPaymentAt) },
+    { label: 'Planowana wizyta', value: formatDate(person.plannedVisitAt) },
+    { label: 'Suma wplat', value: formatMoney(person.totalPaid) },
+    { label: 'Urzadzenie', value: [person.deviceVendor, person.deviceModel].filter(Boolean).join(' ') || 'Brak' }
+  ]);
+  selectionMetaEl.hidden = false;
+
+  const cards = [];
+
+  if (person.notesSummary) {
+    cards.push(`
+      <article class="list-card">
+        <div class="list-card-heading">
+          <strong>Uwagi</strong>
+        </div>
+        <p>${escapeHtml(person.notesSummary)}</p>
+      </article>
+    `);
+  }
+
+  if (details.serviceCards.length > 0) {
+    cards.push(
+      ...details.serviceCards.slice(0, 3).map(
+        (card) => `
+          <article class="list-card">
+            <div class="list-card-heading">
+              <strong>${escapeHtml(card.cardType || 'Karta serwisowa')}</strong>
+              <span>${escapeHtml(formatDate(card.cardDate))}</span>
+            </div>
+            <p>${escapeHtml(card.technician || 'Brak serwisanta')}</p>
+            <p>${escapeHtml(card.eventType || 'Brak typu zdarzenia')}</p>
+          </article>
+        `
+      )
+    );
+  }
+
+  if (details.notes.length > 0) {
+    cards.push(
+      ...details.notes.slice(0, 2).map(
+        (note) => `
+          <article class="list-card">
+            <div class="list-card-heading">
+              <strong>Notatka lokalna</strong>
+              <span>${escapeHtml(formatDate(note.createdAt))}</span>
+            </div>
+            <p>${escapeHtml(note.message)}</p>
+          </article>
+        `
+      )
+    );
+  }
+
+  selectionExtraEl.innerHTML = cards.length
+    ? cards.join('')
+    : '<p class="empty-state">Brak dodatkowych informacji dla tej osoby.</p>';
+  selectionExtraEl.hidden = false;
+}
+
+function renderCustomPointSelection(point) {
+  selectionTitleEl.textContent = point.label || 'Punkt lokalny';
+  selectionCopyEl.textContent = point.addressText || 'Punkt lokalny zapisany recznie.';
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Typ', value: 'Punkt lokalny' },
+    { label: 'Adres', value: point.addressText || 'Brak' },
+    { label: 'Szerokosc', value: formatCoordinate(point.lat) },
+    { label: 'Dlugosc', value: formatCoordinate(point.lng) },
+    { label: 'Dodano', value: formatDateTime(point.createdAt) }
+  ]);
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = '<p class="empty-state">Ten punkt nie ma jeszcze dodatkowych notatek.</p>';
+  selectionExtraEl.hidden = false;
+}
+
+function formatCoordinate(value) {
+  if (!Number.isFinite(Number(value))) {
+    return 'Brak';
+  }
+
+  return Number(value).toFixed(5);
 }
 
 function buildPersonPopupHtml(person) {

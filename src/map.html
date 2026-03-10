@@ -25,35 +25,20 @@
 
             <aside class="map-info-panel">
               <section class="map-info-view map-info-view-active" data-map-view="overview">
-                <div class="map-info-intro">
-                  <span class="eyebrow">Mapa i trasy</span>
-                  <h1>Informacje</h1>
-                  <p class="copy">
-                    Widok mapy zostaje na tej samej stronie. Ikona ustawien po prawej chowa mape i
-                    podmienia cale pole robocze na panel operacyjny bez przechodzenia do dashboardu.
-                  </p>
+                <div class="map-selection-header">
+                  <div>
+                    <h1 data-map-selection-title>Informacje</h1>
+                  </div>
                 </div>
 
-                <div class="mini-stats map-mini-stats">
-                  <article>
-                    <span>Osoby</span>
-                    <strong data-map-overview-stat="totalPeople">0</strong>
-                  </article>
-                  <article>
-                    <span>Punkty gotowe</span>
-                    <strong data-map-overview-stat="geocodedPeople">0</strong>
-                  </article>
-                  <article>
-                    <span>Do geokodowania</span>
-                    <strong data-map-overview-stat="pendingGeocodes">0</strong>
-                  </article>
-                  <article>
-                    <span>Punkty lokalne</span>
-                    <strong data-map-overview-stat="totalCustomPoints">0</strong>
-                  </article>
-                </div>
+                <p class="copy" data-map-selection-copy>
+                  Po kliknieciu markera tutaj pokaza sie szczegoly osoby albo punktu lokalnego.
+                </p>
 
-                <section class="subpanel">
+                <div class="kv-grid" data-map-selection-meta hidden></div>
+                <div class="stacked-cards map-selection-cards" data-map-selection-extra hidden></div>
+
+                <section class="subpanel" data-map-overview-default>
                   <div class="subpanel-header">
                     <div>
                       <span class="eyebrow">Status danych</span>
@@ -73,7 +58,7 @@
                   </div>
                 </section>
 
-                <section class="subpanel">
+                <section class="subpanel" data-map-overview-default>
                   <div class="subpanel-header">
                     <div>
                       <span class="eyebrow">Podpowiedz</span>

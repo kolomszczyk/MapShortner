@@ -232,10 +232,13 @@ textarea {
 
 .map-info-panel {
   display: grid;
+  height: 100vh;
   align-content: start;
   gap: 18px;
   padding: 24px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-right: 1px solid rgba(48, 67, 54, 0.16);
   background:
     linear-gradient(180deg, rgba(245, 248, 242, 0.94) 0%, rgba(237, 243, 234, 0.92) 100%);
@@ -274,6 +277,22 @@ textarea {
 .map-info-intro {
   display: grid;
   gap: 10px;
+}
+
+.map-selection-header {
+  display: block;
+}
+
+.map-selection-cards {
+  margin-top: 4px;
+}
+
+.map-selection-cards .empty-state {
+  margin: 0;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
 }
 
 .map-mini-stats {
