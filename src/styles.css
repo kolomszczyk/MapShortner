@@ -253,6 +253,10 @@ textarea {
 
 .map-settings-upper {
   flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 22px;
 }
 
 .map-settings-lower {
@@ -261,6 +265,7 @@ textarea {
   justify-content: center;
 }
 
+.map-tool-button,
 .settings-gear-button {
   width: 54px;
   height: 54px;
@@ -272,6 +277,12 @@ textarea {
   box-shadow: 0 14px 24px rgba(35, 65, 46, 0.22);
 }
 
+.map-tool-button {
+  background: linear-gradient(135deg, rgba(58, 96, 68, 0.95) 0%, rgba(37, 64, 47, 0.98) 100%);
+  box-shadow: 0 10px 18px rgba(35, 65, 46, 0.18);
+}
+
+.map-tool-button i,
 .settings-gear-button .fa-gear {
   font-size: 28px;
   line-height: 1;
@@ -639,6 +650,40 @@ textarea {
 .nav-card span {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.dimension-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dimension-grid article {
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(48, 67, 54, 0.1);
+}
+
+.dimension-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.dimension-grid strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.9rem;
+  line-height: 1;
+}
+
+.json-export-area {
+  min-height: 220px;
+  font-family: 'SFMono-Regular', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  white-space: pre;
 }
 
 .full-width {

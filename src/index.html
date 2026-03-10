@@ -205,6 +205,40 @@
           </div>
         </section>
 
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Mapa JSON</span>
+              <h2>Obszar wszystkich punktow</h2>
+            </div>
+            <span class="info-chip" id="dimensions-size-chip">Brak punktow</span>
+          </div>
+
+          <p class="copy">
+            Ten box generuje rozpoznawalny JSON z kluczem `exportType`, liczba punktow oraz
+            bounding box danych mapy: `minLat`, `maxLat`, `minLng`, `maxLng`, `width` i `height`.
+          </p>
+
+          <div class="dimension-grid">
+            <article>
+              <span>Szerokosc obszaru (lng)</span>
+              <strong data-dimension-value="boundsWidth">Brak danych</strong>
+            </article>
+            <article>
+              <span>Wysokosc obszaru (lat)</span>
+              <strong data-dimension-value="boundsHeight">Brak danych</strong>
+            </article>
+          </div>
+
+          <p class="copy">
+            Eksport zapisze plik `.json`, bez wyswietlania jego tresci w tym widoku.
+          </p>
+
+          <div class="action-row">
+            <button type="button" id="export-map-bounds-btn">Eksportuj JSON</button>
+          </div>
+        </section>
+
         <section class="panel panel-stack full-width">
           <div class="panel-heading">
             <div>

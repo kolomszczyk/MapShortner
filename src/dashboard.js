@@ -19,6 +19,11 @@ const apiKeyInput = document.getElementById('google-api-key');
 const geocodeLimitInput = document.getElementById('geocode-limit');
 const operationLogEl = document.getElementById('operation-log');
 const importMetaEl = document.getElementById('import-meta');
+const dimensionsJsonEl = document.getElementById('dimensions-json');
+const copyDimensionsBtn = document.getElementById('copy-dimensions-btn');
+const dimensionsSizeChipEl = document.getElementById('dimensions-size-chip');
+const viewportWidthValueEl = document.querySelector('[data-dimension-value="viewportWidth"]');
+const viewportHeightValueEl = document.querySelector('[data-dimension-value="viewportHeight"]');
 let lastUpdaterState = null;
 
 window.appApi.onUpdaterState((state) => {
@@ -152,6 +157,22 @@ geocodeBtn.addEventListener('click', async () => {
   }
 });
 
+copyDimensionsBtn.addEventListener('click', async () => {
+  setButtonBusy(copyDimensionsBtn, true, 'Kopiowanie...');
+  try {
+    await copyTextToClipboard(dimensionsJsonEl.value);
+    appendLog('Skopiowano JSON z szerokoscia i wysokoscia widoku.');
+  } catch (error) {
+    appendLog(`Nie udalo sie skopiowac JSON-a z wymiarami: ${error.message}`);
+  } finally {
+    setButtonBusy(copyDimensionsBtn, false);
+  }
+});
+
+window.addEventListener('resize', () => {
+  renderDimensionsExport();
+});
+
 bootstrap();
 
 async function bootstrap() {
@@ -163,6 +184,7 @@ async function bootstrap() {
     apiKeyInput.placeholder = 'Klucz ladowany automatycznie z ~/secrets/google_maps_api';
   }
   renderSummary(bootstrapData.summary);
+  renderDimensionsExport();
   appendLog('Aplikacja gotowa do pracy.');
 }
 
@@ -236,5 +258,64 @@ function appendLog(message) {
   operationLogEl.prepend(item);
   while (operationLogEl.children.length > 16) {
     operationLogEl.removeChild(operationLogEl.lastElementChild);
+  }
+}
+
+function renderDimensionsExport() {
+  const payload = buildDimensionsExportPayload();
+  const viewportWidth = payload.viewport.width;
+  const viewportHeight = payload.viewport.height;
+
+  dimensionsSizeChipEl.textContent = `${viewportWidth} x ${viewportHeight} px`;
+  viewportWidthValueEl.textContent = `${viewportWidth} px`;
+  viewportHeightValueEl.textContent = `${viewportHeight} px`;
+
+  dimensionsJsonEl.value = `${JSON.stringify(payload, null, 2)}\n`;
+}
+
+function buildDimensionsExportPayload() {
+  const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const viewportHeight = Math.max(
+    document.documentElement.clientHeight || 0,
+    window.innerHeight || 0
+  );
+
+  return {
+    exportType: 'elrond-dashboard-dimensions',
+    source: 'dashboard',
+    capturedAt: new Date().toISOString(),
+    viewport: {
+      width: Math.round(viewportWidth),
+      height: Math.round(viewportHeight)
+    },
+    window: {
+      innerWidth: Math.round(window.innerWidth || 0),
+      innerHeight: Math.round(window.innerHeight || 0),
+      outerWidth: Math.round(window.outerWidth || 0),
+      outerHeight: Math.round(window.outerHeight || 0)
+    },
+    screen: {
+      width: Math.round(window.screen?.width || 0),
+      height: Math.round(window.screen?.height || 0)
+    },
+    devicePixelRatio: Number(window.devicePixelRatio || 1)
+  };
+}
+
+async function copyTextToClipboard(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fallback for Electron contexts where Clipboard API exists but is blocked.
+    }
+  }
+
+  dimensionsJsonEl.focus();
+  dimensionsJsonEl.select();
+
+  if (!document.execCommand || !document.execCommand('copy')) {
+    throw new Error('Schowek nie jest dostepny w tym trybie.');
   }
 }

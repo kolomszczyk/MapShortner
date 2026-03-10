@@ -3,3 +3,16 @@ release/
 dist/
 .DS_Store
 *.log
+
+# Local databases and Access sources
+*.accdb
+*.mdb
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Secrets and exported archives
+*.env
+*.trasa
+secrets/
