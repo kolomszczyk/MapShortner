@@ -17,6 +17,8 @@ const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
 const settingsButtonEl = document.querySelector('.settings-gear-button');
+const statsButtonEl = document.querySelector('[data-map-tool="stats"]');
+const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
@@ -74,6 +76,11 @@ let resizeTimer;
 let isSettingsOpen = false;
 let activeSelection = null;
 let selectionRequestToken = 0;
+let infoPanelMode = 'selection';
+let selectionPanelState = {
+  kind: 'empty'
+};
+let latestOverviewSummary = null;
 let personSelectionHistory = {
   entries: [],
   index: -1
@@ -82,6 +89,20 @@ let isPersonSelectionHistoryReady = false;
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
+});
+
+statsButtonEl?.addEventListener('click', () => {
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false);
+  }
+  setInfoPanelMode('stats');
+});
+
+selectionButtonEl?.addEventListener('click', () => {
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false);
+  }
+  setInfoPanelMode('selection');
 });
 
 window.addEventListener('popstate', (event) => {
@@ -107,6 +128,7 @@ window.appApi.onOperationStatus(async (payload) => {
   }
 });
 
+syncInfoToolButtons();
 renderEmptySelection();
 bootstrap();
 
@@ -146,6 +168,8 @@ function toggleSettingsPanel(forceState = !isSettingsOpen) {
 }
 
 function renderOverviewSummary(summary) {
+  latestOverviewSummary = summary || null;
+
   const statMap = {
     totalPeople: summary?.stats?.totalPeople,
     geocodedPeople: summary?.stats?.geocodedPeople,
@@ -169,6 +193,10 @@ function renderOverviewSummary(summary) {
     overviewImportedAtEl.textContent = summary?.importMeta?.imported_at
       ? formatDateTime(summary.importMeta.imported_at)
       : 'Jeszcze nie importowano';
+  }
+
+  if (infoPanelMode === 'stats') {
+    paintStatsSelection(summary);
   }
 }
 
@@ -473,7 +501,7 @@ function renderMarkerBatch(state) {
       renderer: personRenderer
     });
     attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
-      void selectPersonPoint(person, marker);
+      void selectPersonPoint(person, marker, { panelMode: 'selection' });
     });
 
     if (activeSelection?.key === key) {
@@ -503,7 +531,7 @@ function renderMarkerBatch(state) {
       title: point.label
     });
     attachLazyPopup(marker, () => buildCustomPointPopupHtml(point), () => {
-      selectCustomPoint(point, marker);
+      selectCustomPoint(point, marker, { panelMode: 'selection' });
     });
 
     if (activeSelection?.key === key) {
@@ -872,6 +900,9 @@ async function selectPersonPoint(person, marker, options = {}) {
     type: 'person',
     marker
   });
+  if (options.panelMode) {
+    setInfoPanelMode(options.panelMode);
+  }
   renderPersonSelectionState(person);
 
   const details = await window.appApi.getPersonDetails(person.sourceRowId);
@@ -882,13 +913,16 @@ async function selectPersonPoint(person, marker, options = {}) {
   renderPersonSelection(details);
 }
 
-function selectCustomPoint(point, marker) {
+function selectCustomPoint(point, marker, options = {}) {
   selectionRequestToken += 1;
   setActiveSelection({
     key: buildCustomPointKey(point),
     type: 'custom',
     marker
   });
+  if (options.panelMode) {
+    setInfoPanelMode(options.panelMode);
+  }
   renderCustomPointSelection(point);
 }
 
@@ -950,6 +984,18 @@ function resetMarkerSelection(marker, type) {
 }
 
 function renderEmptySelection() {
+  selectionPanelState = {
+    kind: 'empty'
+  };
+
+  if (infoPanelMode !== 'selection') {
+    return;
+  }
+
+  paintEmptySelection();
+}
+
+function paintEmptySelection() {
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
   });
@@ -964,6 +1010,19 @@ function renderEmptySelection() {
 }
 
 function renderPersonSelectionState(person) {
+  selectionPanelState = {
+    kind: 'person-loading',
+    person
+  };
+
+  if (infoPanelMode !== 'selection') {
+    return;
+  }
+
+  paintPersonSelectionState(person);
+}
+
+function paintPersonSelectionState(person) {
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
   selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Ladowanie szczegolow osoby...';
@@ -980,6 +1039,19 @@ function renderPersonSelectionState(person) {
 }
 
 function renderPersonSelection(details) {
+  selectionPanelState = {
+    kind: 'person',
+    details
+  };
+
+  if (infoPanelMode !== 'selection') {
+    return;
+  }
+
+  paintPersonSelection(details);
+}
+
+function paintPersonSelection(details) {
   const person = details.person;
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
@@ -1050,6 +1122,19 @@ function renderPersonSelection(details) {
 }
 
 function renderCustomPointSelection(point) {
+  selectionPanelState = {
+    kind: 'custom',
+    point
+  };
+
+  if (infoPanelMode !== 'selection') {
+    return;
+  }
+
+  paintCustomPointSelection(point);
+}
+
+function paintCustomPointSelection(point) {
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = point.label || 'Punkt lokalny';
   selectionCopyEl.textContent = point.addressText || 'Punkt lokalny zapisany recznie.';
@@ -1085,4 +1170,98 @@ function buildPersonPopupHtml(person) {
 
 function buildCustomPointPopupHtml(point) {
   return `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(point.addressText || 'Punkt lokalny')}`;
+}
+
+function setInfoPanelMode(mode) {
+  const nextMode = mode === 'stats' ? 'stats' : 'selection';
+  if (infoPanelMode === nextMode) {
+    return;
+  }
+
+  infoPanelMode = nextMode;
+  syncInfoToolButtons();
+
+  if (infoPanelMode === 'stats') {
+    paintStatsSelection(latestOverviewSummary);
+    return;
+  }
+
+  paintSelectionPanelState();
+}
+
+function syncInfoToolButtons() {
+  const isStatsMode = infoPanelMode === 'stats';
+
+  statsButtonEl?.classList.toggle('is-active', isStatsMode);
+  statsButtonEl?.setAttribute('aria-pressed', String(isStatsMode));
+
+  selectionButtonEl?.classList.toggle('is-active', !isStatsMode);
+  selectionButtonEl?.setAttribute('aria-pressed', String(!isStatsMode));
+}
+
+function paintSelectionPanelState() {
+  switch (selectionPanelState.kind) {
+    case 'person-loading':
+      paintPersonSelectionState(selectionPanelState.person);
+      return;
+    case 'person':
+      paintPersonSelection(selectionPanelState.details);
+      return;
+    case 'custom':
+      paintCustomPointSelection(selectionPanelState.point);
+      return;
+    default:
+      paintEmptySelection();
+  }
+}
+
+function paintStatsSelection(summary) {
+  const totalPeople = Number(summary?.stats?.totalPeople || 0);
+  const geocodedPeople = Number(summary?.stats?.geocodedPeople || 0);
+  const pendingGeocodes = Number(summary?.stats?.pendingGeocodes || 0);
+  const totalRows = Number(summary?.stats?.totalRows || 0);
+  const totalTables = Number(summary?.stats?.totalTables || 0);
+  const totalServiceCards = Number(summary?.stats?.totalServiceCards || 0);
+  const totalNotes = Number(summary?.stats?.totalNotes || 0);
+  const totalCustomPoints = Number(summary?.stats?.totalCustomPoints || 0);
+  const coveragePercent = totalPeople > 0 ? Math.round((geocodedPeople / totalPeople) * 100) : 0;
+
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Statystyki';
+  selectionCopyEl.textContent = 'Podsumowanie aktualnego importu, geokodowania i danych lokalnych.';
+  selectionCopyEl.hidden = false;
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Osoby', value: formatNumber(totalPeople) },
+    { label: 'Z geokodem', value: formatNumber(geocodedPeople) },
+    { label: 'Oczekuje na geokod', value: formatNumber(pendingGeocodes) },
+    { label: 'Karty serwisowe', value: formatNumber(totalServiceCards) },
+    { label: 'Notatki lokalne', value: formatNumber(totalNotes) },
+    { label: 'Punkty lokalne', value: formatNumber(totalCustomPoints) },
+    { label: 'Tabele', value: formatNumber(totalTables) },
+    { label: 'Wiersze', value: formatNumber(totalRows) }
+  ]);
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = `
+    <div class="map-stats-grid">
+      <article class="list-card">
+        <div class="list-card-heading">
+          <strong>Pokrycie mapy</strong>
+          <span>${escapeHtml(formatNumber(coveragePercent))}%</span>
+        </div>
+        <p>${escapeHtml(formatNumber(geocodedPeople))} z ${escapeHtml(formatNumber(totalPeople))} osob ma wspolrzedne.</p>
+      </article>
+      <article class="list-card">
+        <div class="list-card-heading">
+          <strong>Ostatni import</strong>
+          <span>${escapeHtml(formatDateTime(summary?.importMeta?.imported_at))}</span>
+        </div>
+        <p>${escapeHtml(summary?.settings?.accessDbPath || summary?.importMeta?.source_path || 'Nie wybrano pliku Access.')}</p>
+      </article>
+    </div>
+  `;
+  selectionExtraEl.hidden = false;
 }
