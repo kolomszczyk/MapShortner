@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const fsp = fs.promises;
 const path = require('node:path');
 const { net } = require('electron');
 
@@ -9,10 +10,12 @@ const TRANSPARENT_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9n6ukAAAAASUVORK5CYII=',
   'base64'
 );
+const MEMORY_CACHE_LIMIT = 256;
 
 function createMapTileService({ app, log, protocol }) {
   const cacheRoot = path.join(app.getPath('userData'), 'map-tiles', TILE_CACHE_VERSION);
   const inFlightDownloads = new Map();
+  const memoryCache = new Map();
   let protocolRegistered = false;
 
   async function registerProtocol() {
@@ -45,7 +48,7 @@ function createMapTileService({ app, log, protocol }) {
 
   async function readOrFetchTile(tile) {
     const cachePath = buildCachePath(tile);
-    const cached = readCachedTile(cachePath);
+    const cached = await readCachedTile(cachePath);
     if (cached) {
       return cached;
     }
@@ -63,15 +66,27 @@ function createMapTileService({ app, log, protocol }) {
     return inFlightDownloads.get(pendingKey);
   }
 
-  function readCachedTile(cachePath) {
-    if (!fs.existsSync(cachePath)) {
-      return null;
+  async function readCachedTile(cachePath) {
+    const memoryHit = memoryCache.get(cachePath);
+    if (memoryHit) {
+      touchMemoryCache(cachePath, memoryHit);
+      return memoryHit;
     }
 
-    return {
-      buffer: fs.readFileSync(cachePath),
-      contentType: 'image/png'
-    };
+    try {
+      const buffer = await fsp.readFile(cachePath);
+      const cached = {
+        buffer,
+        contentType: 'image/png'
+      };
+      touchMemoryCache(cachePath, cached);
+      return cached;
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async function downloadAndCacheTile(tile, cachePath) {
@@ -87,13 +102,15 @@ function createMapTileService({ app, log, protocol }) {
     }
 
     const buffer = Buffer.from(await response.arrayBuffer());
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, buffer);
+    await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+    await fsp.writeFile(cachePath, buffer);
 
-    return {
+    const downloaded = {
       buffer,
       contentType: response.headers.get('content-type') || 'image/png'
     };
+    touchMemoryCache(cachePath, downloaded);
+    return downloaded;
   }
 
   function buildRemoteTileUrl(tile) {
@@ -132,6 +149,22 @@ function createMapTileService({ app, log, protocol }) {
         'cache-control': cacheControl
       }
     });
+  }
+
+  function touchMemoryCache(key, entry) {
+    if (memoryCache.has(key)) {
+      memoryCache.delete(key);
+    }
+    memoryCache.set(key, entry);
+
+    if (memoryCache.size <= MEMORY_CACHE_LIMIT) {
+      return;
+    }
+
+    const oldestKey = memoryCache.keys().next().value;
+    if (oldestKey) {
+      memoryCache.delete(oldestKey);
+    }
   }
 
   return {

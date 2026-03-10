@@ -978,6 +978,7 @@ function getPersonDetails(db, sourceRowId) {
 function listMapPoints(db, input = {}) {
   const query = (input.query || '').trim().toLowerCase();
   const includeUnresolved = Boolean(input.includeUnresolved);
+  const bounds = normalizeBounds(input.bounds);
   const whereFragments = [];
   const params = [];
 
@@ -988,6 +989,12 @@ function listMapPoints(db, input = {}) {
   if (query) {
     whereFragments.push('search_text LIKE ?');
     params.push(`%${query}%`);
+  }
+
+  if (bounds) {
+    whereFragments.push('lat BETWEEN ? AND ?');
+    whereFragments.push('lng BETWEEN ? AND ?');
+    params.push(bounds.south, bounds.north, bounds.west, bounds.east);
   }
 
   const whereClause = whereFragments.length > 0 ? `WHERE ${whereFragments.join(' AND ')}` : '';
@@ -1017,7 +1024,7 @@ function listMapPoints(db, input = {}) {
 
   return {
     people: rows.map(normalizePeopleRow),
-    customPoints: listCustomPoints(db)
+    customPoints: listCustomPoints(db, bounds)
   };
 }
 
@@ -1085,12 +1092,45 @@ function addCustomPoint(db, payload) {
   return listCustomPoints(db);
 }
 
-function listCustomPoints(db) {
+function listCustomPoints(db, bounds = null) {
+  const whereFragments = [];
+  const params = [];
+
+  if (bounds) {
+    whereFragments.push('lat BETWEEN ? AND ?');
+    whereFragments.push('lng BETWEEN ? AND ?');
+    params.push(bounds.south, bounds.north, bounds.west, bounds.east);
+  }
+
+  const whereClause = whereFragments.length > 0 ? `WHERE ${whereFragments.join(' AND ')}` : '';
   return db.prepare(`
     SELECT id, label, address_text AS addressText, lat, lng, created_at AS createdAt
     FROM custom_points
+    ${whereClause}
     ORDER BY created_at DESC
-  `).all();
+  `).all(...params);
+}
+
+function normalizeBounds(bounds) {
+  if (!bounds || typeof bounds !== 'object') {
+    return null;
+  }
+
+  const south = Number(bounds.south);
+  const north = Number(bounds.north);
+  const west = Number(bounds.west);
+  const east = Number(bounds.east);
+
+  if (![south, north, west, east].every(Number.isFinite)) {
+    return null;
+  }
+
+  return {
+    south: Math.min(south, north),
+    north: Math.max(south, north),
+    west: Math.min(west, east),
+    east: Math.max(west, east)
+  };
 }
 
 function buildRoute(db, input = {}) {
