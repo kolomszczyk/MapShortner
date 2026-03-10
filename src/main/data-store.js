@@ -872,10 +872,30 @@ function getTableRows(db, input = {}) {
 }
 
 function listPeople(db, input = {}) {
-  const query = (input.query || '').trim().toLowerCase();
+  const query = (input.query || '').trim();
   const limit = Math.min(500, Math.max(25, Number(input.limit || 100)));
+  const searchPatterns = buildPeopleSearchPatterns(query);
+  const searchExpression = `
+    LOWER(
+      COALESCE(search_text, '') || ' ' ||
+      COALESCE(raw_json, '') || ' ' ||
+      COALESCE(full_name, '') || ' ' ||
+      COALESCE(company_name, '') || ' ' ||
+      COALESCE(city, '') || ' ' ||
+      COALESCE(address_text, '') || ' ' ||
+      COALESCE(route_address, '') || ' ' ||
+      COALESCE(phone, '') || ' ' ||
+      COALESCE(email, '') || ' ' ||
+      COALESCE(installed_at, '') || ' ' ||
+      COALESCE(last_visit_at, '') || ' ' ||
+      COALESCE(last_payment_at, '') || ' ' ||
+      COALESCE(planned_visit_at, '') || ' ' ||
+      COALESCE(declined_visit_at, '') || ' ' ||
+      COALESCE(notes_summary, '')
+    )
+  `;
 
-  const sql = query
+  const sql = searchPatterns.length
     ? `
       SELECT
         source_row_id AS sourceRowId,
@@ -894,7 +914,7 @@ function listPeople(db, input = {}) {
         planned_visit_at AS plannedVisitAt,
         total_paid AS totalPaid
       FROM people_cache
-      WHERE search_text LIKE ?
+      WHERE ${searchPatterns.map(() => `${searchExpression} LIKE ?`).join(' OR ')}
       ORDER BY full_name COLLATE NOCASE ASC
       LIMIT ?
     `
@@ -920,8 +940,8 @@ function listPeople(db, input = {}) {
       LIMIT ?
     `;
 
-  const rows = query
-    ? db.prepare(sql).all(`%${query}%`, limit)
+  const rows = searchPatterns.length
+    ? db.prepare(sql).all(...searchPatterns, limit)
     : db.prepare(sql).all(limit);
 
   return rows.map(normalizePeopleRow);
@@ -1274,7 +1294,7 @@ function mapPersonRow(row) {
   const lat = toNumber(row.lat || row.Lat || row.latitude || row.Latitude);
   const lng = toNumber(row.lng || row.Lng || row.longitude || row.Longitude);
 
-  return {
+  const person = {
     sourceRowId: getSourceRowId(row),
     fullName: fullName || pickValue(row, 'Firma') || 'Bez nazwy',
     companyName: pickValue(row, 'Firma'),
@@ -1309,12 +1329,12 @@ function mapPersonRow(row) {
     currentAmount: toNumber(pickValue(row, 'Kwota')),
     totalPaid: toNumber(pickValue(row, 'Suma wpłat')),
     notesSummary: stripHtml(pickValue(row, 'Uwagi')),
-    searchText: buildSearchTextFromValues({
-      ...row,
-      fullName,
-      routeAddress
-    }),
     importedAt
+  };
+
+  return {
+    ...person,
+    searchText: buildPersonSearchText(person, row)
   };
 }
 
@@ -1421,6 +1441,83 @@ function buildSearchTextFromValues(value) {
   }
 
   return String(value).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function buildPeopleSearchPatterns(query) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const patterns = new Set([normalizedQuery]);
+  const normalizedDate = normalizeLooseDateQuery(normalizedQuery);
+
+  if (normalizedDate) {
+    for (const variant of buildSearchableDateVariants(normalizedDate)) {
+      patterns.add(variant);
+    }
+  }
+
+  return Array.from(patterns, (pattern) => `%${pattern}%`);
+}
+
+function normalizeLooseDateQuery(value) {
+  const match = String(value || '')
+    .trim()
+    .match(/^(\d{1,4})[.\-/](\d{1,2})[.\-/](\d{1,4})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  let year = null;
+  let month = null;
+  let day = null;
+
+  if (match[1].length === 4) {
+    year = match[1];
+    month = match[2];
+    day = match[3];
+  } else if (match[3].length === 4) {
+    day = match[1];
+    month = match[2];
+    year = match[3];
+  } else {
+    return null;
+  }
+
+  const normalized = normalizeDate(`${year}-${month}-${day}`);
+  return normalized ? normalized.slice(0, 10) : null;
+}
+
+function buildPersonSearchText(person, row) {
+  return buildSearchTextFromValues([
+    row,
+    person,
+    buildSearchableDateVariants(person.installedAt),
+    buildSearchableDateVariants(person.lastVisitAt),
+    buildSearchableDateVariants(person.lastPaymentAt),
+    buildSearchableDateVariants(person.plannedVisitAt),
+    buildSearchableDateVariants(person.declinedVisitAt)
+  ]);
+}
+
+function buildSearchableDateVariants(value) {
+  const normalized = normalizeDate(value);
+  if (!normalized) {
+    return [];
+  }
+
+  const dateOnly = normalized.slice(0, 10);
+  const [year, month, day] = dateOnly.split('-');
+
+  return [
+    normalized,
+    dateOnly,
+    `${day}.${month}.${year}`,
+    `${day}-${month}-${year}`,
+    `${day}/${month}/${year}`
+  ];
 }
 
 function safeJsonParse(value, fallback) {

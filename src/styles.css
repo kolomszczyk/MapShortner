@@ -371,6 +371,7 @@ textarea {
 .map-tool-button {
   background: linear-gradient(135deg, rgba(58, 96, 68, 0.95) 0%, rgba(37, 64, 47, 0.98) 100%);
   box-shadow: 0 10px 18px rgba(35, 65, 46, 0.18);
+  text-decoration: none;
 }
 
 .map-tool-button:hover:not(:disabled),
@@ -421,6 +422,10 @@ textarea {
   line-height: 1;
   color: #f4f8f1;
   opacity: 1;
+}
+
+.map-tool-button-search i {
+  transform: scaleX(-1);
 }
 
 .map-stats-grid {
@@ -924,6 +929,23 @@ textarea {
 .checkbox-field span {
   color: var(--muted);
   font-size: 0.93rem;
+}
+
+.search-input-wrap {
+  position: relative;
+}
+
+.search-input-icon {
+  position: absolute;
+  top: 50%;
+  left: 15px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.search-input-wrap input {
+  padding-left: 42px;
 }
 
 .checkbox-field {

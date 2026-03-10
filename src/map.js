@@ -19,6 +19,7 @@ const mapInfoPanelEl = document.querySelector('.map-info-panel');
 const settingsButtonEl = document.querySelector('.settings-gear-button');
 const statsButtonEl = document.querySelector('[data-map-tool="stats"]');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
+const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
 const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
@@ -64,6 +65,8 @@ const HOVER_POPUP_DELAY_MS = 400;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
+const MAP_PERSON_SEARCH_LIMIT = 100;
+const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
 
 let mapInstance;
 let peopleLayer;
@@ -89,6 +92,14 @@ let personSelectionHistory = {
 };
 let isPersonSelectionHistoryReady = false;
 let mapDateFilter = normalizeMapDateFilter({});
+let personSearchTimer = null;
+let personSearchRequestToken = 0;
+let personSearchState = {
+  query: '',
+  results: [],
+  isLoading: false,
+  hasLoaded: false
+};
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
@@ -108,6 +119,17 @@ selectionButtonEl?.addEventListener('click', () => {
   setInfoPanelMode('selection');
 });
 
+searchButtonEl?.addEventListener('click', () => {
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false);
+  }
+  if (infoPanelMode === 'search') {
+    focusMapSearchInput();
+    return;
+  }
+  setInfoPanelMode('search');
+});
+
 historyButtonEl?.addEventListener('click', () => {
   if (isSettingsOpen) {
     toggleSettingsPanel(false);
@@ -123,6 +145,28 @@ filterButtonEl?.addEventListener('click', () => {
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
+  const searchResultButton = event.target.closest('[data-map-search-source-row-id]');
+  if (searchResultButton && infoPanelMode === 'search') {
+    const sourceRowId = searchResultButton.getAttribute('data-map-search-source-row-id');
+    const searchResult = personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId);
+    if (!searchResult) {
+      return;
+    }
+
+    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || searchResult;
+    focusSelectionOnMap(mapPerson);
+    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+      panelMode: 'selection'
+    });
+    return;
+  }
+
+  const clearSearchButton = event.target.closest('[data-map-person-search-clear]');
+  if (clearSearchButton && infoPanelMode === 'search') {
+    updatePersonSearchQuery('', { immediate: true });
+    return;
+  }
+
   const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
   if (resetFilterButton && infoPanelMode === 'filter') {
     void applyMapDateFilter({});
@@ -160,7 +204,24 @@ selectionExtraEl?.addEventListener('click', (event) => {
   }
 });
 
+selectionExtraEl?.addEventListener('input', (event) => {
+  const searchField = event.target.closest('[data-map-person-search-input]');
+  if (!searchField || infoPanelMode !== 'search') {
+    return;
+  }
+
+  updatePersonSearchQuery(searchField.value);
+});
+
 selectionExtraEl?.addEventListener('submit', (event) => {
+  const searchForm = event.target.closest('[data-map-person-search-form]');
+  if (searchForm && infoPanelMode === 'search') {
+    event.preventDefault();
+    const formData = new FormData(searchForm);
+    updatePersonSearchQuery(formData.get('query') || '', { immediate: true });
+    return;
+  }
+
   const filterForm = event.target.closest('[data-map-date-filter-form]');
   if (!filterForm || infoPanelMode !== 'filter') {
     return;
@@ -351,6 +412,10 @@ async function loadPoints() {
 
   if (infoPanelMode === 'filter') {
     paintFilterPanel();
+  }
+
+  if (infoPanelMode === 'search' && personSearchState.hasLoaded) {
+    void loadPersonSearchResults(personSearchState.query, { showLoadingState: false });
   }
 
   scheduleVisibleMarkerSync(0);
@@ -1374,7 +1439,9 @@ function buildCustomPointPopupHtml(point) {
 }
 
 function setInfoPanelMode(mode) {
-  const nextMode = ['stats', 'selection', 'history', 'filter'].includes(mode) ? mode : 'selection';
+  const nextMode = ['stats', 'selection', 'search', 'history', 'filter'].includes(mode)
+    ? mode
+    : 'selection';
   if (infoPanelMode === nextMode) {
     return;
   }
@@ -1397,6 +1464,18 @@ function setInfoPanelMode(mode) {
     return;
   }
 
+  if (infoPanelMode === 'search') {
+    paintSearchPanel();
+    if (!personSearchState.hasLoaded) {
+      void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
+    } else {
+      requestAnimationFrame(() => {
+        focusMapSearchInput();
+      });
+    }
+    return;
+  }
+
   paintSelectionPanelState();
 }
 
@@ -1404,6 +1483,7 @@ function syncInfoToolButtons() {
   const shouldHighlightInfoMode = !isSettingsOpen;
   const isStatsMode = shouldHighlightInfoMode && infoPanelMode === 'stats';
   const isSelectionMode = shouldHighlightInfoMode && infoPanelMode === 'selection';
+  const isSearchMode = shouldHighlightInfoMode && infoPanelMode === 'search';
   const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
   const isFilterMode =
     shouldHighlightInfoMode && (infoPanelMode === 'filter' || hasActiveMapDateFilter());
@@ -1413,6 +1493,9 @@ function syncInfoToolButtons() {
 
   selectionButtonEl?.classList.toggle('is-active', isSelectionMode);
   selectionButtonEl?.setAttribute('aria-pressed', String(isSelectionMode));
+
+  searchButtonEl?.classList.toggle('is-active', isSearchMode);
+  searchButtonEl?.setAttribute('aria-pressed', String(isSearchMode));
 
   historyButtonEl?.classList.toggle('is-active', isHistoryMode);
   historyButtonEl?.setAttribute('aria-pressed', String(isHistoryMode));
@@ -1487,6 +1570,109 @@ function paintStatsSelection(summary) {
     </div>
   `;
   selectionExtraEl.hidden = false;
+}
+
+function paintSearchPanel() {
+  syncOverviewSpacing(false);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  const query = personSearchState.query.trim();
+  const resultCountLabel = personSearchState.isLoading
+    ? 'Ladowanie...'
+    : personSearchState.hasLoaded
+      ? `${formatNumber(personSearchState.results.length)} wynikow`
+      : 'Brak wynikow';
+  const helperText = query
+    ? `Wyszukiwanie po wszystkich polach i datach dla: ${query}`
+    : 'Wpisz imie, nazwisko, adres, telefon albo date, np. 2025-03-10 lub 10.03.2025.';
+
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Wyszukiwanie osob';
+  selectionCopyEl.textContent = 'Znajdz osobe bez opuszczania mapy i pokaz jej szczegoly w tym panelu.';
+  selectionCopyEl.hidden = false;
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Zakres', value: 'Wszystkie pola rekordu' },
+    { label: 'Zapytanie', value: query || 'Brak' },
+    { label: 'Wyniki', value: resultCountLabel }
+  ]);
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = `
+    <form class="time-filter-panel" data-map-person-search-form>
+      <label class="field">
+        <span>Szukaj po wszystkich polach, takze po datach</span>
+        <div class="search-input-wrap">
+          <span class="search-input-icon" aria-hidden="true">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </span>
+          <input
+            type="search"
+            name="query"
+            value="${escapeHtml(personSearchState.query)}"
+            placeholder="Np. Nabialek, Przyrow, 600, 2025-03-10, 10.03.2025"
+            data-map-person-search-input
+          />
+        </div>
+      </label>
+      <div class="time-filter-summary">
+        <strong>${escapeHtml(resultCountLabel)}</strong>
+        <span>${escapeHtml(helperText)}</span>
+      </div>
+      <div class="action-row">
+        <button type="submit" class="button-strong">Szukaj</button>
+        <button type="button" class="button-muted" data-map-person-search-clear${query ? '' : ' disabled'}>
+          Wyczysc
+        </button>
+      </div>
+      <div class="vertical-list compact-list">
+        ${renderPersonSearchResults()}
+      </div>
+    </form>
+  `;
+  selectionExtraEl.hidden = false;
+
+  requestAnimationFrame(() => {
+    focusMapSearchInput();
+  });
+}
+
+function renderPersonSearchResults() {
+  if (personSearchState.isLoading && !personSearchState.hasLoaded) {
+    return '<p class="empty-state">Ladowanie wynikow wyszukiwania...</p>';
+  }
+
+  if (personSearchState.results.length === 0) {
+    return personSearchState.query.trim()
+      ? '<p class="empty-state">Brak wynikow dla podanego zapytania.</p>'
+      : '<p class="empty-state">Wpisz zapytanie, aby wyszukac osobe po wszystkich polach i datach.</p>';
+  }
+
+  return personSearchState.results
+    .map((person) => {
+      const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
+      const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
+        ? isVisibleOnMap
+          ? 'Widoczna na mapie'
+          : 'Poza biezacym filtrem mapy'
+        : 'Brak wspolrzednych';
+
+      return `
+        <button
+          type="button"
+          class="person-row"
+          data-map-search-source-row-id="${escapeHtml(person.sourceRowId)}"
+        >
+          <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
+          <span class="person-row-copy">${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
+          <span class="person-row-copy person-row-meta">
+            Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
+          </span>
+          <span class="person-row-copy person-row-meta">${escapeHtml(locationLabel)}</span>
+        </button>
+      `;
+    })
+    .join('');
 }
 
 function paintFilterPanel() {
@@ -1573,6 +1759,80 @@ function summarizeMapDateRangeLabel() {
   }
 
   return 'Bez ograniczen';
+}
+
+function updatePersonSearchQuery(nextQuery, options = {}) {
+  personSearchState = {
+    ...personSearchState,
+    query: String(nextQuery || '')
+  };
+
+  const clearButton = selectionExtraEl?.querySelector('[data-map-person-search-clear]');
+  if (clearButton) {
+    clearButton.disabled = !personSearchState.query.trim();
+  }
+
+  if (personSearchTimer) {
+    window.clearTimeout(personSearchTimer);
+    personSearchTimer = null;
+  }
+
+  if (options.immediate) {
+    void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
+    return;
+  }
+
+  personSearchTimer = window.setTimeout(() => {
+    personSearchTimer = null;
+    void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
+  }, MAP_PERSON_SEARCH_DEBOUNCE_MS);
+}
+
+async function loadPersonSearchResults(query, options = {}) {
+  personSearchRequestToken += 1;
+  const requestToken = personSearchRequestToken;
+  const normalizedQuery = String(query || '');
+  const showLoadingState = options.showLoadingState !== false;
+
+  personSearchState = {
+    ...personSearchState,
+    query: normalizedQuery,
+    isLoading: showLoadingState
+  };
+
+  if (infoPanelMode === 'search') {
+    paintSearchPanel();
+  }
+
+  const results = await window.appApi.listPeople({
+    query: normalizedQuery,
+    limit: MAP_PERSON_SEARCH_LIMIT
+  });
+
+  if (requestToken !== personSearchRequestToken) {
+    return;
+  }
+
+  personSearchState = {
+    query: normalizedQuery,
+    results: Array.isArray(results) ? results : [],
+    isLoading: false,
+    hasLoaded: true
+  };
+
+  if (infoPanelMode === 'search') {
+    paintSearchPanel();
+  }
+}
+
+function focusMapSearchInput() {
+  const searchInput = selectionExtraEl?.querySelector('[data-map-person-search-input]');
+  if (!searchInput) {
+    return;
+  }
+
+  searchInput.focus();
+  searchInput.setSelectionRange?.(searchInput.value.length, searchInput.value.length);
 }
 
 function paintHistorySelection() {
