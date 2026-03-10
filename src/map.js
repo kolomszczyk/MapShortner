@@ -58,6 +58,8 @@ const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
+const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
+const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
 
 let mapInstance;
 let peopleLayer;
@@ -72,9 +74,22 @@ let resizeTimer;
 let isSettingsOpen = false;
 let activeSelection = null;
 let selectionRequestToken = 0;
+let personSelectionHistory = {
+  entries: [],
+  index: -1
+};
+let isPersonSelectionHistoryReady = false;
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
+});
+
+window.addEventListener('popstate', (event) => {
+  handlePersonSelectionPopState(event);
+});
+
+window.addEventListener('mouseup', (event) => {
+  handleMouseHistoryNavigation(event);
 });
 
 window.addEventListener('keydown', (event) => {
@@ -224,13 +239,13 @@ async function loadPoints() {
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
-  const nextPerson = resolveInitialPersonSelection(allPeople);
+  const nextPerson = resolveCurrentPersonSelection(allPeople);
 
   clearActiveSelection({ resetPanel: !nextPerson });
 
   if (nextPerson) {
     focusSelectionOnMap(nextPerson);
-    void selectPersonPoint(nextPerson, null);
+    void selectPersonPoint(nextPerson, null, { historyMode: 'restore' });
   }
 
   scheduleVisibleMarkerSync(0);
@@ -522,11 +537,76 @@ function buildCustomPointKey(point) {
   return `custom:${point.id}`;
 }
 
-function resolveInitialPersonSelection(people) {
+function resolveCurrentPersonSelection(people) {
   if (!Array.isArray(people) || people.length === 0) {
+    personSelectionHistory = {
+      entries: [],
+      index: -1
+    };
+    persistPersonSelectionHistory();
+    replaceCurrentPersonHistoryState(null);
     return null;
   }
 
+  if (!isPersonSelectionHistoryReady) {
+    initializePersonSelectionHistory(people);
+  }
+
+  const currentPersonId = personSelectionHistory.entries[personSelectionHistory.index];
+  const currentPerson = currentPersonId
+    ? people.find((person) => person.sourceRowId === currentPersonId)
+    : null;
+
+  if (currentPerson) {
+    return currentPerson;
+  }
+
+  const fallbackPerson = resolveInitialSelectionFallback(people);
+  if (!fallbackPerson) {
+    return null;
+  }
+
+  personSelectionHistory = {
+    entries: [fallbackPerson.sourceRowId],
+    index: 0
+  };
+  persistPersonSelectionHistory();
+  replaceCurrentPersonHistoryState(fallbackPerson.sourceRowId);
+  return fallbackPerson;
+}
+
+function initializePersonSelectionHistory(people) {
+  const availablePersonIds = new Set(people.map((person) => person.sourceRowId));
+  const storedHistory = readPersonSelectionHistory();
+  const nextEntries = Array.isArray(storedHistory?.entries)
+    ? storedHistory.entries.filter((sourceRowId) => availablePersonIds.has(sourceRowId))
+    : [];
+  const nextIndex = clampHistoryIndex(storedHistory?.index, nextEntries.length);
+
+  if (nextEntries.length > 0) {
+    personSelectionHistory = {
+      entries: nextEntries.slice(0, nextIndex + 1),
+      index: nextIndex
+    };
+  } else {
+    const fallbackPerson = resolveInitialSelectionFallback(people);
+    personSelectionHistory = fallbackPerson
+      ? {
+          entries: [fallbackPerson.sourceRowId],
+          index: 0
+        }
+      : {
+          entries: [],
+          index: -1
+        };
+  }
+
+  persistPersonSelectionHistory();
+  rebuildBrowserHistoryFromPersonSelectionHistory();
+  isPersonSelectionHistoryReady = true;
+}
+
+function resolveInitialSelectionFallback(people) {
   const lastSelectedPersonId = readLastSelectedPersonId();
   if (lastSelectedPersonId) {
     const matchingPerson = people.find((person) => person.sourceRowId === lastSelectedPersonId);
@@ -536,6 +616,174 @@ function resolveInitialPersonSelection(people) {
   }
 
   return people[0];
+}
+
+function readPersonSelectionHistory() {
+  try {
+    const raw = window.localStorage.getItem(PERSON_SELECTION_HISTORY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.entries)) {
+      return null;
+    }
+
+    return {
+      entries: parsed.entries.map((value) => String(value)),
+      index: Number(parsed.index)
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function persistPersonSelectionHistory() {
+  try {
+    window.localStorage.setItem(
+      PERSON_SELECTION_HISTORY_STORAGE_KEY,
+      JSON.stringify(personSelectionHistory)
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
+function clampHistoryIndex(value, size) {
+  if (size <= 0) {
+    return -1;
+  }
+
+  const normalizedValue = Number.isInteger(Number(value)) ? Number(value) : size - 1;
+  return Math.min(Math.max(normalizedValue, 0), size - 1);
+}
+
+function rebuildBrowserHistoryFromPersonSelectionHistory() {
+  const currentEntries = personSelectionHistory.entries;
+
+  if (currentEntries.length === 0 || personSelectionHistory.index < 0) {
+    replaceCurrentPersonHistoryState(null);
+    return;
+  }
+
+  history.replaceState(buildPersonHistoryState(currentEntries[0], 0), document.title);
+
+  for (let index = 1; index <= personSelectionHistory.index; index += 1) {
+    history.pushState(buildPersonHistoryState(currentEntries[index], index), document.title);
+  }
+}
+
+function buildPersonHistoryState(sourceRowId, index) {
+  return {
+    kind: PERSON_SELECTION_HISTORY_STATE_KIND,
+    sourceRowId: sourceRowId || null,
+    historyIndex: index
+  };
+}
+
+function replaceCurrentPersonHistoryState(sourceRowId) {
+  const nextIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1;
+  history.replaceState(buildPersonHistoryState(sourceRowId, nextIndex), document.title);
+}
+
+function pushPersonSelectionToHistory(sourceRowId) {
+  if (!sourceRowId) {
+    return;
+  }
+
+  const currentSourceRowId = personSelectionHistory.entries[personSelectionHistory.index];
+  if (currentSourceRowId === sourceRowId) {
+    replaceCurrentPersonHistoryState(sourceRowId);
+    return;
+  }
+
+  const nextEntries = personSelectionHistory.entries.slice(0, personSelectionHistory.index + 1);
+  nextEntries.push(sourceRowId);
+  personSelectionHistory = {
+    entries: nextEntries,
+    index: nextEntries.length - 1
+  };
+  persistPersonSelectionHistory();
+  history.pushState(buildPersonHistoryState(sourceRowId, personSelectionHistory.index), document.title);
+}
+
+function syncPersonSelectionHistoryIndex(historyIndex, sourceRowId) {
+  if (!sourceRowId) {
+    personSelectionHistory = {
+      entries: [],
+      index: -1
+    };
+    persistPersonSelectionHistory();
+    return;
+  }
+
+  const nextEntries = [...personSelectionHistory.entries];
+  if (historyIndex >= nextEntries.length) {
+    nextEntries.length = historyIndex + 1;
+  }
+  nextEntries[historyIndex] = sourceRowId;
+  personSelectionHistory = {
+    entries: nextEntries,
+    index: historyIndex
+  };
+  persistPersonSelectionHistory();
+}
+
+function handlePersonSelectionPopState(event) {
+  const state = event.state;
+  if (state?.kind !== PERSON_SELECTION_HISTORY_STATE_KIND) {
+    return;
+  }
+
+  const historyIndex = clampHistoryIndex(state.historyIndex, personSelectionHistory.entries.length || 1);
+  const sourceRowId = state.sourceRowId ? String(state.sourceRowId) : null;
+
+  syncPersonSelectionHistoryIndex(historyIndex, sourceRowId);
+
+  if (!sourceRowId) {
+    clearActiveSelection({ resetPanel: true });
+    return;
+  }
+
+  const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
+  if (!person) {
+    const fallbackPerson = resolveCurrentPersonSelection(allPeople);
+    if (!fallbackPerson) {
+      clearActiveSelection({ resetPanel: true });
+      return;
+    }
+
+    focusSelectionOnMap(fallbackPerson);
+    void selectPersonPoint(fallbackPerson, visiblePeopleMarkers.get(buildPersonKey(fallbackPerson)) || null, {
+      historyMode: 'restore'
+    });
+    return;
+  }
+
+  focusSelectionOnMap(person);
+  void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
+    historyMode: 'restore'
+  });
+}
+
+function handleMouseHistoryNavigation(event) {
+  if (event.button === 3) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (personSelectionHistory.index > 0) {
+      history.back();
+    }
+    return;
+  }
+
+  if (event.button === 4) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (personSelectionHistory.index >= 0 && personSelectionHistory.index < personSelectionHistory.entries.length - 1) {
+      history.forward();
+    }
+  }
 }
 
 function readLastSelectedPersonId() {
@@ -610,12 +858,15 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
   });
 }
 
-async function selectPersonPoint(person, marker) {
+async function selectPersonPoint(person, marker, options = {}) {
   const key = buildPersonKey(person);
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
 
   saveLastSelectedPersonId(person.sourceRowId);
+  if (options.historyMode !== 'restore') {
+    pushPersonSelectionToHistory(person.sourceRowId);
+  }
   setActiveSelection({
     key,
     type: 'person',
