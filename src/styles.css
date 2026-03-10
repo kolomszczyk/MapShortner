@@ -270,6 +270,10 @@ textarea {
   gap: 18px;
 }
 
+.map-info-view.map-info-view-history {
+  gap: 10px;
+}
+
 .map-info-view[data-map-view="settings"].map-info-view-active {
   min-height: 0;
 }
@@ -285,6 +289,10 @@ textarea {
 
 .map-selection-cards {
   margin-top: 4px;
+}
+
+.map-selection-cards.map-selection-cards-history {
+  margin-top: 0;
 }
 
 .map-selection-cards .empty-state {
@@ -372,8 +380,8 @@ textarea {
 
 .map-tool-button:not(.is-active):hover:not(:disabled),
 .settings-gear-button:not(.is-active):hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(58, 96, 68, 0.95) 0%, rgba(37, 64, 47, 0.98) 100%);
-  box-shadow: 0 14px 24px rgba(35, 65, 46, 0.22);
+  background: linear-gradient(135deg, #4b8e5f 0%, #2f6841 100%);
+  box-shadow: 0 14px 24px rgba(47, 104, 65, 0.22);
 }
 
 .map-tool-button.is-active:hover:not(:disabled),
@@ -418,6 +426,24 @@ textarea {
 .map-stats-grid {
   display: grid;
   gap: 12px;
+}
+
+.map-history-row {
+  gap: 8px;
+}
+
+.person-row.map-history-row:hover:not(:disabled) {
+  background: rgba(237, 243, 234, 0.98);
+  border-color: rgba(75, 142, 95, 0.42);
+}
+
+.map-history-row span {
+  color: var(--muted);
+}
+
+.map-history-row.is-current {
+  border-color: rgba(75, 142, 95, 0.42);
+  background: rgba(237, 243, 234, 0.98);
 }
 
 .service-map-sketch {
