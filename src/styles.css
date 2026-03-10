@@ -1013,6 +1013,15 @@ body.map-page .service-map {
   font: inherit;
 }
 
+.leaflet-container:focus {
+  outline: none;
+}
+
+.leaflet-container:focus-visible {
+  outline: 2px solid rgba(35, 65, 46, 0.45);
+  outline-offset: 1px;
+}
+
 .leaflet-container.offline-map {
   background:
     radial-gradient(circle at 18% 16%, rgba(255, 255, 255, 0.45), transparent 18%),

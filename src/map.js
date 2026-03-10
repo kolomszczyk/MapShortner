@@ -19,13 +19,18 @@ const POLAND_BOUNDS = [
 ];
 
 const MARKER_BATCH_SIZE = 250;
+const VISIBLE_BOUNDS_PADDING = 0.08;
 const TILE_URL_TEMPLATE = 'maptiles://tiles/{z}/{x}/{y}.png';
 
 let mapInstance;
 let peopleLayer;
 let customLayer;
 let personRenderer;
-let markerRenderGeneration = 0;
+let allPeople = [];
+let allCustomPoints = [];
+let visiblePeopleMarkers = new Map();
+let visibleCustomMarkers = new Map();
+let markerSyncGeneration = 0;
 let resizeTimer;
 
 settingsButtonEl?.addEventListener('click', () => {
@@ -89,6 +94,9 @@ function buildMap() {
   focusPoland();
   peopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
+  mapInstance.on('moveend zoomend', () => {
+    scheduleVisibleMarkerSync();
+  });
 
   requestAnimationFrame(() => {
     mapInstance.invalidateSize();
@@ -116,7 +124,9 @@ async function loadPoints() {
     includeUnresolved: false
   });
 
-  renderMarkers(payload.people || [], payload.customPoints || []);
+  allPeople = payload.people || [];
+  allCustomPoints = payload.customPoints || [];
+  scheduleVisibleMarkerSync(0);
 }
 
 function focusPoland() {
@@ -125,15 +135,52 @@ function focusPoland() {
   });
 }
 
-function renderMarkers(people, customPoints) {
-  peopleLayer.clearLayers();
-  customLayer.clearLayers();
-  markerRenderGeneration += 1;
+function scheduleVisibleMarkerSync(delayMs = 0) {
+  if (delayMs <= 0) {
+    syncVisibleMarkers();
+    return;
+  }
 
+  setTimeout(() => {
+    syncVisibleMarkers();
+  }, delayMs);
+}
+
+function syncVisibleMarkers() {
+  if (!mapInstance) {
+    return;
+  }
+
+  const bounds = mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING);
+  const nextPeople = allPeople.filter((person) => isPointVisible(bounds, person));
+  const nextCustomPoints = allCustomPoints.filter((point) => isPointVisible(bounds, point));
+  const nextVisiblePeopleKeys = new Set(nextPeople.map((person) => buildPersonKey(person)));
+  const nextVisibleCustomKeys = new Set(nextCustomPoints.map((point) => buildCustomPointKey(point)));
+
+  for (const [key, marker] of visiblePeopleMarkers.entries()) {
+    if (!nextVisiblePeopleKeys.has(key)) {
+      peopleLayer.removeLayer(marker);
+      visiblePeopleMarkers.delete(key);
+    }
+  }
+
+  for (const [key, marker] of visibleCustomMarkers.entries()) {
+    if (!nextVisibleCustomKeys.has(key)) {
+      customLayer.removeLayer(marker);
+      visibleCustomMarkers.delete(key);
+    }
+  }
+
+  const peopleToAdd = nextPeople.filter((person) => !visiblePeopleMarkers.has(buildPersonKey(person)));
+  const customPointsToAdd = nextCustomPoints.filter(
+    (point) => !visibleCustomMarkers.has(buildCustomPointKey(point))
+  );
+
+  markerSyncGeneration += 1;
   scheduleMarkerRender({
-    generation: markerRenderGeneration,
-    people,
-    customPoints,
+    generation: markerSyncGeneration,
+    people: peopleToAdd,
+    customPoints: customPointsToAdd,
     peopleIndex: 0,
     customPointIndex: 0
   });
@@ -146,7 +193,7 @@ function scheduleMarkerRender(state) {
 }
 
 function renderMarkerBatch(state) {
-  if (state.generation !== markerRenderGeneration) {
+  if (state.generation !== markerSyncGeneration) {
     return;
   }
 
@@ -160,6 +207,11 @@ function renderMarkerBatch(state) {
       continue;
     }
 
+    const key = buildPersonKey(person);
+    if (visiblePeopleMarkers.has(key)) {
+      continue;
+    }
+
     const marker = L.circleMarker([person.lat, person.lng], {
       ...DEFAULT_PERSON_MARKER_STYLE,
       renderer: personRenderer
@@ -167,6 +219,7 @@ function renderMarkerBatch(state) {
     attachLazyPopup(marker, () => buildPersonPopupHtml(person));
 
     peopleLayer.addLayer(marker);
+    visiblePeopleMarkers.set(key, marker);
     processed += 1;
   }
 
@@ -178,18 +231,40 @@ function renderMarkerBatch(state) {
       continue;
     }
 
+    const key = buildCustomPointKey(point);
+    if (visibleCustomMarkers.has(key)) {
+      continue;
+    }
+
     const marker = L.marker([point.lat, point.lng], {
       title: point.label
     });
     attachLazyPopup(marker, () => buildCustomPointPopupHtml(point));
 
     customLayer.addLayer(marker);
+    visibleCustomMarkers.set(key, marker);
     processed += 1;
   }
 
   if (state.peopleIndex < state.people.length || state.customPointIndex < state.customPoints.length) {
     scheduleMarkerRender(state);
   }
+}
+
+function isPointVisible(bounds, point) {
+  if (!Number.isFinite(point?.lat) || !Number.isFinite(point?.lng)) {
+    return false;
+  }
+
+  return bounds.contains([point.lat, point.lng]);
+}
+
+function buildPersonKey(person) {
+  return `person:${person.sourceRowId}`;
+}
+
+function buildCustomPointKey(point) {
+  return `custom:${point.id}`;
 }
 
 function attachLazyPopup(marker, buildHtml) {
