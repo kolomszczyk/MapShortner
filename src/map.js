@@ -18,7 +18,6 @@ const POLAND_BOUNDS = [
   [54.9, 24.2]
 ];
 
-const POINTS_LOAD_DEBOUNCE_MS = 120;
 const MARKER_BATCH_SIZE = 250;
 const TILE_URL_TEMPLATE = 'maptiles://tiles/{z}/{x}/{y}.png';
 
@@ -27,8 +26,6 @@ let peopleLayer;
 let customLayer;
 let personRenderer;
 let markerRenderGeneration = 0;
-let pointsRequestGeneration = 0;
-let pointsLoadTimer = null;
 let resizeTimer;
 
 settingsButtonEl?.addEventListener('click', () => {
@@ -55,7 +52,9 @@ async function bootstrap() {
   applySummary(bootstrapData.summary);
   buildMap();
   requestAnimationFrame(() => {
-    scheduleLoadPoints(0);
+    loadPoints().catch((error) => {
+      console.error('Map points load failed', error);
+    });
   });
 }
 
@@ -90,9 +89,6 @@ function buildMap() {
   focusPoland();
   peopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
-  mapInstance.on('moveend', () => {
-    scheduleLoadPoints();
-  });
 
   requestAnimationFrame(() => {
     mapInstance.invalidateSize();
@@ -115,46 +111,12 @@ async function loadPoints() {
     return;
   }
 
-  const requestGeneration = ++pointsRequestGeneration;
-  const bounds = getMapBoundsPayload();
-
   const payload = await window.appApi.getMapPoints({
-    bounds,
     query: '',
     includeUnresolved: false
   });
 
-  if (requestGeneration !== pointsRequestGeneration) {
-    return;
-  }
-
   renderMarkers(payload.people || [], payload.customPoints || []);
-}
-
-function scheduleLoadPoints(delayMs = POINTS_LOAD_DEBOUNCE_MS) {
-  if (pointsLoadTimer) {
-    clearTimeout(pointsLoadTimer);
-    pointsLoadTimer = null;
-  }
-
-  pointsLoadTimer = setTimeout(async () => {
-    pointsLoadTimer = null;
-    try {
-      await loadPoints();
-    } catch (error) {
-      console.error('Map points refresh failed', error);
-    }
-  }, delayMs);
-}
-
-function getMapBoundsPayload() {
-  const bounds = mapInstance.getBounds();
-  return {
-    south: bounds.getSouth(),
-    north: bounds.getNorth(),
-    west: bounds.getWest(),
-    east: bounds.getEast()
-  };
 }
 
 function focusPoland() {
