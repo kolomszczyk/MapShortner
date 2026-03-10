@@ -3,6 +3,7 @@ import { applySummary, escapeHtml, formatDate, initShell } from './app-shell.js'
 initShell('map');
 
 const mapEl = document.getElementById('service-map');
+const settingsButtonEl = document.querySelector('.settings-gear-button');
 
 const DEFAULT_PERSON_MARKER_STYLE = {
   radius: 7,
@@ -17,10 +18,16 @@ const POLAND_BOUNDS = [
   [54.9, 24.2]
 ];
 
+const TILE_URL_TEMPLATE = 'maptiles://tiles/{z}/{x}/{y}.png';
+
 let mapInstance;
 let peopleLayer;
 let customLayer;
 let resizeTimer;
+
+settingsButtonEl?.addEventListener('click', () => {
+  window.location.href = './index.html';
+});
 
 window.appApi.onOperationStatus(async (payload) => {
   if (payload?.summary) {
@@ -55,13 +62,17 @@ function buildMap() {
   }
 
   mapInstance = L.map(mapEl, {
+    attributionControl: false,
     zoomControl: true,
-    minZoom: 5,
+    minZoom: 2,
     maxZoom: 18
   });
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+  mapInstance.getContainer().classList.add('offline-map');
+  L.tileLayer(TILE_URL_TEMPLATE, {
+    minZoom: 2,
+    maxZoom: 18,
+    crossOrigin: false
   }).addTo(mapInstance);
 
   focusPoland();

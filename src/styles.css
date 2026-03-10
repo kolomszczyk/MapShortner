@@ -1,3 +1,51 @@
+@font-face {
+  font-family: 'Inter';
+  src: url('./vendor/fonts/inter-latin-ext-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('./vendor/fonts/inter-latin-ext-500-normal.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('./vendor/fonts/inter-latin-ext-600-normal.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('./vendor/fonts/inter-latin-ext-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  src: url('./vendor/fonts/fraunces-latin-ext-600-normal.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  src: url('./vendor/fonts/fraunces-latin-ext-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #e8ede3;
   --bg-strong: #d8e0d1;
@@ -189,12 +237,28 @@ textarea {
 .map-settings-rail {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   align-items: center;
   padding: 22px 10px;
+  gap: 12px;
   border-left: 1px solid rgba(48, 67, 54, 0.22);
   background:
     linear-gradient(180deg, rgba(226, 234, 220, 0.96) 0%, rgba(201, 217, 196, 0.98) 100%);
+}
+
+.map-settings-upper,
+.map-settings-lower {
+  width: 100%;
+  display: flex;
+}
+
+.map-settings-upper {
+  flex: 1 1 auto;
+}
+
+.map-settings-lower {
+  flex: 1 1 auto;
+  align-items: flex-end;
+  justify-content: center;
 }
 
 .settings-gear-button {
@@ -208,10 +272,10 @@ textarea {
   box-shadow: 0 14px 24px rgba(35, 65, 46, 0.22);
 }
 
-.settings-gear-button svg {
-  width: 28px;
-  height: 28px;
-  fill: #f4f8f1;
+.settings-gear-button .fa-gear {
+  font-size: 28px;
+  line-height: 1;
+  color: #f4f8f1;
 }
 
 .service-map-sketch {
@@ -759,7 +823,10 @@ textarea {
   border-radius: calc(var(--radius-xl) - 6px);
   overflow: hidden;
   border: 1px solid var(--line);
-  background: #dae7df;
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 255, 255, 0.5), transparent 18%),
+    radial-gradient(circle at 80% 12%, rgba(255, 255, 255, 0.28), transparent 24%),
+    linear-gradient(180deg, #c9dbcf 0%, #aec6b5 100%);
 }
 
 body.map-page .service-map {
@@ -944,6 +1011,13 @@ body.map-page .service-map {
 
 .leaflet-container {
   font: inherit;
+}
+
+.leaflet-container.offline-map {
+  background:
+    radial-gradient(circle at 18% 16%, rgba(255, 255, 255, 0.45), transparent 18%),
+    radial-gradient(circle at 78% 12%, rgba(255, 255, 255, 0.24), transparent 24%),
+    linear-gradient(180deg, #c9dbcf 0%, #aec6b5 100%);
 }
 
 .leaflet-popup-content-wrapper {

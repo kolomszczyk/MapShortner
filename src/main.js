@@ -1,8 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, protocol } = require('electron');
 const log = require('electron-log');
 const { createDataStore } = require('./main/data-store');
+const { createMapTileService } = require('./main/map-tile-service');
 const {
   getAccessFileFingerprint,
   geocodeOrigin,
@@ -30,6 +31,20 @@ const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
 const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
 const isDevMode = process.argv.includes('--dev');
+let mapTileService = null;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'maptiles',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true
+    }
+  }
+]);
 
 let updaterState = {
   phase: 'idle',
@@ -937,6 +952,8 @@ async function runFirstLaunchSetup() {
 
 app.whenReady().then(async () => {
   store = createDataStore(app);
+  mapTileService = createMapTileService({ app, log, protocol });
+  await mapTileService.registerProtocol();
   const windowReady = createWindow();
   if (!isDevMode) {
     configureAutoUpdater();
