@@ -21,6 +21,11 @@ const POLAND_BOUNDS = [
 const MARKER_BATCH_SIZE = 250;
 const VISIBLE_BOUNDS_PADDING = 0.08;
 const TILE_URL_TEMPLATE = 'maptiles://tiles/{z}/{x}/{y}.png';
+const MIN_WHEEL_ZOOM_SNAP = 0.05;
+const WHEEL_LINE_HEIGHT_PX = 18;
+const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
+const WHEEL_ZOOM_MULTIPLIER = 5;
+const BUTTON_ZOOM_STEP = 1;
 
 let mapInstance;
 let peopleLayer;
@@ -77,12 +82,16 @@ function buildMap() {
     attributionControl: false,
     preferCanvas: true,
     zoomControl: true,
+    scrollWheelZoom: false,
+    zoomSnap: MIN_WHEEL_ZOOM_SNAP,
+    zoomDelta: BUTTON_ZOOM_STEP,
     minZoom: 2,
     maxZoom: 18
   });
   personRenderer = L.canvas({ padding: 0.5 });
 
   mapInstance.getContainer().classList.add('offline-map');
+  installAcceleratedWheelZoom(mapInstance);
   L.tileLayer(TILE_URL_TEMPLATE, {
     keepBuffer: 3,
     minZoom: 2,
@@ -133,6 +142,140 @@ function focusPoland() {
   mapInstance.fitBounds(POLAND_BOUNDS, {
     padding: [24, 24]
   });
+}
+
+function installAcceleratedWheelZoom(map) {
+  const container = map.getContainer();
+  let lastWheelAt = 0;
+
+  container.addEventListener(
+    'wheel',
+    (event) => {
+      if (!map._loaded) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const delta = buildWheelZoomDelta(event, lastWheelAt, container);
+      lastWheelAt = performance.now();
+
+      if (!delta) {
+        return;
+      }
+
+      const zoomPoint = map.mouseEventToContainerPoint(event);
+      const nextZoom = clampMapZoom(map, map.getZoom() + delta);
+
+      if (Math.abs(nextZoom - map.getZoom()) < 0.001) {
+        return;
+      }
+
+      map.setZoomAround(zoomPoint, nextZoom, false);
+    },
+    { passive: false }
+  );
+}
+
+function buildWheelZoomDelta(event, previousWheelAt, container) {
+  const pixelDeltaY = normalizeWheelDeltaToPixels(
+    event.deltaY,
+    event.deltaMode,
+    container.clientHeight || mapEl.clientHeight || 0
+  );
+  const pixelDeltaX = normalizeWheelDeltaToPixels(
+    event.deltaX,
+    event.deltaMode,
+    container.clientWidth || mapEl.clientWidth || 0
+  );
+  const dominantDelta = pixelDeltaY || pixelDeltaX;
+
+  if (!dominantDelta) {
+    return 0;
+  }
+
+  const now = performance.now();
+  const elapsed = previousWheelAt ? now - previousWheelAt : Number.POSITIVE_INFINITY;
+  const isTouchpad = isLikelyTouchpadWheel(event, pixelDeltaX, pixelDeltaY);
+  const magnitude = Math.abs(dominantDelta);
+  const baseStep = isTouchpad
+    ? clampNumber(magnitude / 220, 0.04, 0.24)
+    : clampNumber(Math.max(magnitude / 120, 1) * 0.24, 0.24, 0.52);
+  const acceleration = isTouchpad
+    ? getTouchpadWheelAcceleration(elapsed)
+    : getMouseWheelAcceleration(elapsed);
+
+  return -Math.sign(dominantDelta) * baseStep * acceleration * WHEEL_ZOOM_MULTIPLIER;
+}
+
+function normalizeWheelDeltaToPixels(delta, deltaMode, viewportSize) {
+  if (!delta) {
+    return 0;
+  }
+
+  if (deltaMode === 1) {
+    return delta * WHEEL_LINE_HEIGHT_PX;
+  }
+
+  if (deltaMode === 2) {
+    return delta * Math.max(viewportSize, 1) * WHEEL_PAGE_HEIGHT_FACTOR;
+  }
+
+  return delta;
+}
+
+function isLikelyTouchpadWheel(event, pixelDeltaX, pixelDeltaY) {
+  if (event.ctrlKey) {
+    return true;
+  }
+
+  if (event.deltaMode !== 0) {
+    return false;
+  }
+
+  const dominantMagnitude = Math.max(Math.abs(pixelDeltaX), Math.abs(pixelDeltaY));
+  return (
+    Math.abs(pixelDeltaX) > 0 ||
+    !Number.isInteger(event.deltaY) ||
+    !Number.isInteger(event.deltaX) ||
+    dominantMagnitude < 48
+  );
+}
+
+function getMouseWheelAcceleration(elapsed) {
+  if (elapsed < 50) {
+    return 2.75;
+  }
+
+  if (elapsed < 100) {
+    return 2.1;
+  }
+
+  if (elapsed < 170) {
+    return 1.55;
+  }
+
+  return 1;
+}
+
+function getTouchpadWheelAcceleration(elapsed) {
+  if (elapsed < 18) {
+    return 1.65;
+  }
+
+  if (elapsed < 40) {
+    return 1.3;
+  }
+
+  return 1;
+}
+
+function clampMapZoom(map, zoom) {
+  return clampNumber(zoom, map.getMinZoom(), map.getMaxZoom());
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function scheduleVisibleMarkerSync(delayMs = 0) {
