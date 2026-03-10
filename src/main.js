@@ -551,6 +551,7 @@ function createWindow() {
     height: 980,
     minWidth: 1120,
     minHeight: 760,
+    title: ' ',
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#ebefe6',
@@ -563,8 +564,13 @@ function createWindow() {
   });
 
   mainWindow.removeMenu();
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+    mainWindow.setTitle(' ');
+  });
   mainWindow.loadFile(path.join(__dirname, 'map.html'));
   mainWindow.once('ready-to-show', () => {
+    mainWindow.setTitle(' ');
     mainWindow.show();
     mainWindow.maximize();
     resolveReady();
@@ -904,7 +910,7 @@ async function runFirstLaunchSetup() {
     title: 'Pierwsze uruchomienie',
     message: 'Czy masz pakiet .trasa do wczytania?',
     detail:
-      'To opcjonalne. Jesli masz wczesniej wyeksportowany pakiet Elrond - wyszukiwanie trasy, mozesz go teraz zaimportowac.',
+      'To opcjonalne. Jesli masz wczesniej wyeksportowany pakiet Elrond, mozesz go teraz zaimportowac.',
     buttons: ['Wczytaj .trasa', 'Pomin'],
     defaultId: 0,
     cancelId: 1,

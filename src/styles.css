@@ -33,7 +33,7 @@ body {
 }
 
 body {
-  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
   color: var(--text);
   background:
     radial-gradient(circle at top left, rgba(178, 87, 44, 0.12), transparent 30%),

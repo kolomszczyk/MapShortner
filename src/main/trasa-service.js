@@ -36,7 +36,7 @@ function exportTrasaArchive({ app, store, targetPath, appVersion }) {
       Buffer.from(
         [
           'Pakiet .trasa zawiera pelny snapshot SQLite, raporty JSON oraz sekrety.',
-          'Jest zapisywany jako wlasny kontener aplikacji Elrond - wyszukiwanie trasy, a nie jako surowy plik ZIP.',
+          'Jest zapisywany jako wlasny kontener aplikacji Elrond, a nie jako surowy plik ZIP.',
           'Traktuj ten plik jak dane wrazliwe i przechowuj go bezpiecznie.',
           ''
         ].join('\n'),
