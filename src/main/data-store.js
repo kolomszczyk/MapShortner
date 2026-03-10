@@ -1016,7 +1016,7 @@ function listMapPoints(db, input = {}) {
   `).all(...params);
 
   return {
-    people: rows.map(normalizePeopleRow),
+    people: filterPeopleByDateRange(rows.map(normalizePeopleRow), input),
     customPoints: listCustomPoints(db)
   };
 }

@@ -20,6 +20,7 @@ const settingsButtonEl = document.querySelector('.settings-gear-button');
 const statsButtonEl = document.querySelector('[data-map-tool="stats"]');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
+const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
@@ -87,6 +88,7 @@ let personSelectionHistory = {
   index: -1
 };
 let isPersonSelectionHistoryReady = false;
+let mapDateFilter = normalizeMapDateFilter({});
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
@@ -113,7 +115,20 @@ historyButtonEl?.addEventListener('click', () => {
   setInfoPanelMode('history');
 });
 
+filterButtonEl?.addEventListener('click', () => {
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false);
+  }
+  setInfoPanelMode('filter');
+});
+
 selectionExtraEl?.addEventListener('click', (event) => {
+  const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
+  if (resetFilterButton && infoPanelMode === 'filter') {
+    void applyMapDateFilter({});
+    return;
+  }
+
   const historyRowButton = event.target.closest('[data-history-source-row-id]');
   if (historyRowButton && infoPanelMode === 'history') {
     const sourceRowId = historyRowButton.getAttribute('data-history-source-row-id');
@@ -143,6 +158,20 @@ selectionExtraEl?.addEventListener('click', (event) => {
   if (personSelectionHistory.index < personSelectionHistory.entries.length - 1) {
     history.forward();
   }
+});
+
+selectionExtraEl?.addEventListener('submit', (event) => {
+  const filterForm = event.target.closest('[data-map-date-filter-form]');
+  if (!filterForm || infoPanelMode !== 'filter') {
+    return;
+  }
+
+  event.preventDefault();
+  const formData = new FormData(filterForm);
+  void applyMapDateFilter({
+    dateFrom: formData.get('dateFrom'),
+    dateTo: formData.get('dateTo')
+  });
 });
 
 window.addEventListener('popstate', (event) => {
@@ -201,6 +230,7 @@ function toggleSettingsPanel(forceState = !isSettingsOpen) {
   mapInfoPanelEl?.classList.toggle('is-settings-open', isSettingsOpen);
   settingsButtonEl?.classList.toggle('is-active', isSettingsOpen);
   settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsOpen));
+  syncInfoToolButtons();
 
   requestAnimationFrame(() => {
     mapInstance?.invalidateSize();
@@ -300,14 +330,13 @@ async function loadPoints() {
     return;
   }
 
-  const payload = await window.appApi.getMapPoints({
-    query: '',
-    includeUnresolved: false
-  });
+  const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
-  const nextPerson = resolveCurrentPersonSelection(allPeople);
+  const nextPerson = hasActiveMapDateFilter()
+    ? resolveVisiblePersonSelection(allPeople)
+    : resolveCurrentPersonSelection(allPeople);
 
   clearActiveSelection({ resetPanel: !nextPerson });
 
@@ -320,7 +349,95 @@ async function loadPoints() {
     paintHistorySelection();
   }
 
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
+
   scheduleVisibleMarkerSync(0);
+}
+
+function buildMapPointsRequest() {
+  const payload = {
+    query: '',
+    includeUnresolved: false
+  };
+
+  if (!hasActiveMapDateFilter()) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    dateField: 'lastVisitAt',
+    dateFrom: mapDateFilter.dateFrom || undefined,
+    dateTo: mapDateFilter.dateTo || undefined
+  };
+}
+
+function hasActiveMapDateFilter() {
+  return Boolean(mapDateFilter.dateFrom || mapDateFilter.dateTo);
+}
+
+async function applyMapDateFilter(nextFilter) {
+  const normalizedFilter = normalizeMapDateFilter(nextFilter);
+  const didChange =
+    normalizedFilter.dateFrom !== mapDateFilter.dateFrom || normalizedFilter.dateTo !== mapDateFilter.dateTo;
+
+  mapDateFilter = normalizedFilter;
+  syncInfoToolButtons();
+
+  if (!didChange) {
+    if (infoPanelMode === 'filter') {
+      paintFilterPanel();
+    }
+    return;
+  }
+
+  await loadPoints();
+}
+
+function normalizeMapDateFilter(input = {}) {
+  let dateFrom = normalizeDateInputValue(input?.dateFrom);
+  let dateTo = normalizeDateInputValue(input?.dateTo);
+
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    [dateFrom, dateTo] = [dateTo, dateFrom];
+  }
+
+  return {
+    dateFrom,
+    dateTo
+  };
+}
+
+function normalizeDateInputValue(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    const exactDateMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}$/);
+    if (exactDateMatch) {
+      return exactDateMatch[0];
+    }
+
+    const isoDateMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}/);
+    if (isoDateMatch) {
+      return isoDateMatch[0];
+    }
+  }
+
+  if (!value) {
+    return '';
+  }
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return '';
+  }
+
+  return parsedDate.toISOString().slice(0, 10);
 }
 
 function focusPoland() {
@@ -607,6 +724,38 @@ function buildPersonKey(person) {
 
 function buildCustomPointKey(point) {
   return `custom:${point.id}`;
+}
+
+function resolveVisiblePersonSelection(people) {
+  if (!Array.isArray(people) || people.length === 0) {
+    return null;
+  }
+
+  const currentPersonId = personSelectionHistory.entries[personSelectionHistory.index];
+  if (currentPersonId) {
+    const matchingPerson = people.find((person) => person.sourceRowId === currentPersonId);
+    if (matchingPerson) {
+      return matchingPerson;
+    }
+  }
+
+  const activePersonId = activeSelection?.type === 'person' ? activeSelection.key.replace(/^person:/, '') : null;
+  if (activePersonId) {
+    const activePerson = people.find((person) => person.sourceRowId === activePersonId);
+    if (activePerson) {
+      return activePerson;
+    }
+  }
+
+  const lastSelectedPersonId = readLastSelectedPersonId();
+  if (lastSelectedPersonId) {
+    const lastSelectedPerson = people.find((person) => person.sourceRowId === lastSelectedPersonId);
+    if (lastSelectedPerson) {
+      return lastSelectedPerson;
+    }
+  }
+
+  return people[0];
 }
 
 function resolveCurrentPersonSelection(people) {
@@ -1225,7 +1374,7 @@ function buildCustomPointPopupHtml(point) {
 }
 
 function setInfoPanelMode(mode) {
-  const nextMode = ['stats', 'selection', 'history'].includes(mode) ? mode : 'selection';
+  const nextMode = ['stats', 'selection', 'history', 'filter'].includes(mode) ? mode : 'selection';
   if (infoPanelMode === nextMode) {
     return;
   }
@@ -1243,13 +1392,21 @@ function setInfoPanelMode(mode) {
     return;
   }
 
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+    return;
+  }
+
   paintSelectionPanelState();
 }
 
 function syncInfoToolButtons() {
-  const isStatsMode = infoPanelMode === 'stats';
-  const isSelectionMode = infoPanelMode === 'selection';
-  const isHistoryMode = infoPanelMode === 'history';
+  const shouldHighlightInfoMode = !isSettingsOpen;
+  const isStatsMode = shouldHighlightInfoMode && infoPanelMode === 'stats';
+  const isSelectionMode = shouldHighlightInfoMode && infoPanelMode === 'selection';
+  const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
+  const isFilterMode =
+    shouldHighlightInfoMode && (infoPanelMode === 'filter' || hasActiveMapDateFilter());
 
   statsButtonEl?.classList.toggle('is-active', isStatsMode);
   statsButtonEl?.setAttribute('aria-pressed', String(isStatsMode));
@@ -1259,6 +1416,9 @@ function syncInfoToolButtons() {
 
   historyButtonEl?.classList.toggle('is-active', isHistoryMode);
   historyButtonEl?.setAttribute('aria-pressed', String(isHistoryMode));
+
+  filterButtonEl?.classList.toggle('is-active', isFilterMode);
+  filterButtonEl?.setAttribute('aria-pressed', String(isFilterMode));
 }
 
 function paintSelectionPanelState() {
@@ -1327,6 +1487,92 @@ function paintStatsSelection(summary) {
     </div>
   `;
   selectionExtraEl.hidden = false;
+}
+
+function paintFilterPanel() {
+  syncOverviewSpacing(false);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  const filterSummary = buildMapDateFilterSummary();
+
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Filtr dat';
+  selectionCopyEl.textContent =
+    'Pokazuje osoby na mapie wedlug zakresu dat ostatniej wizyty. Punkty lokalne pozostaja bez zmian.';
+  selectionCopyEl.hidden = false;
+  selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'Pole daty', value: 'Ostatnia wizyta' },
+    { label: 'Zakres', value: filterSummary.rangeLabel },
+    { label: 'Widoczne osoby', value: formatNumber(allPeople.length) }
+  ]);
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = `
+    <form class="time-filter-panel" data-map-date-filter-form>
+      <div class="two-cols">
+        <label class="field">
+          <span>Data poczatkowa</span>
+          <input type="date" name="dateFrom" value="${escapeHtml(mapDateFilter.dateFrom)}" />
+        </label>
+        <label class="field">
+          <span>Data koncowa</span>
+          <input type="date" name="dateTo" value="${escapeHtml(mapDateFilter.dateTo)}" />
+        </label>
+      </div>
+      <div class="time-filter-summary">
+        <strong>${escapeHtml(filterSummary.title)}</strong>
+        <span>${escapeHtml(filterSummary.description)}</span>
+      </div>
+      <div class="action-row">
+        <button type="submit" class="button-strong">Zastosuj filtr</button>
+        <button type="button" data-map-date-filter-reset${hasActiveMapDateFilter() ? '' : ' disabled'}>
+          Wyczysc
+        </button>
+      </div>
+    </form>
+  `;
+  selectionExtraEl.hidden = false;
+}
+
+function buildMapDateFilterSummary() {
+  const hasFilter = hasActiveMapDateFilter();
+  const rangeLabel = summarizeMapDateRangeLabel();
+  const visiblePeopleLabel =
+    allPeople.length === 1 ? '1 osoba pasuje do zakresu.' : `${formatNumber(allPeople.length)} osob pasuje do zakresu.`;
+
+  if (!hasFilter) {
+    return {
+      rangeLabel,
+      title: 'Brak aktywnego filtra',
+      description: 'Wybierz date poczatkowa i koncowa, aby zawezic mape po dacie ostatniej wizyty.'
+    };
+  }
+
+  return {
+    rangeLabel,
+    title: 'Aktywny zakres dat',
+    description: `${rangeLabel}. ${visiblePeopleLabel}`
+  };
+}
+
+function summarizeMapDateRangeLabel() {
+  const fromLabel = mapDateFilter.dateFrom ? formatDate(mapDateFilter.dateFrom) : null;
+  const toLabel = mapDateFilter.dateTo ? formatDate(mapDateFilter.dateTo) : null;
+
+  if (fromLabel && toLabel) {
+    return `${fromLabel} - ${toLabel}`;
+  }
+
+  if (fromLabel) {
+    return `Od ${fromLabel}`;
+  }
+
+  if (toLabel) {
+    return `Do ${toLabel}`;
+  }
+
+  return 'Bez ograniczen';
 }
 
 function paintHistorySelection() {
