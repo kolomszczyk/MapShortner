@@ -24,7 +24,316 @@
             </div>
 
             <aside class="map-info-panel">
-              <h1>Informacje</h1>
+              <section class="map-info-view map-info-view-active" data-map-view="overview">
+                <div class="map-info-intro">
+                  <span class="eyebrow">Mapa i trasy</span>
+                  <h1>Informacje</h1>
+                  <p class="copy">
+                    Widok mapy zostaje na tej samej stronie. Ikona ustawien po prawej chowa mape i
+                    podmienia cale pole robocze na panel operacyjny bez przechodzenia do dashboardu.
+                  </p>
+                </div>
+
+                <div class="mini-stats map-mini-stats">
+                  <article>
+                    <span>Osoby</span>
+                    <strong data-map-overview-stat="totalPeople">0</strong>
+                  </article>
+                  <article>
+                    <span>Punkty gotowe</span>
+                    <strong data-map-overview-stat="geocodedPeople">0</strong>
+                  </article>
+                  <article>
+                    <span>Do geokodowania</span>
+                    <strong data-map-overview-stat="pendingGeocodes">0</strong>
+                  </article>
+                  <article>
+                    <span>Punkty lokalne</span>
+                    <strong data-map-overview-stat="totalCustomPoints">0</strong>
+                  </article>
+                </div>
+
+                <section class="subpanel">
+                  <div class="subpanel-header">
+                    <div>
+                      <span class="eyebrow">Status danych</span>
+                      <h3>Import i zrodlo</h3>
+                    </div>
+                  </div>
+
+                  <div class="kv-grid">
+                    <div class="kv-row">
+                      <span class="kv-label">Plik Access</span>
+                      <span class="kv-value" data-map-overview-access-path>Nie wybrano pliku</span>
+                    </div>
+                    <div class="kv-row">
+                      <span class="kv-label">Ostatni import</span>
+                      <span class="kv-value" data-map-overview-imported-at>Jeszcze nie importowano</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="subpanel">
+                  <div class="subpanel-header">
+                    <div>
+                      <span class="eyebrow">Podpowiedz</span>
+                      <h3>Praca bez zmiany strony</h3>
+                    </div>
+                  </div>
+                  <p class="copy">
+                    Kliknij zebatke na prawym pasku, aby otworzyc ustawienia importu i geokodowania
+                    na calej przestrzeni roboczej. Kliknij zebatke ponownie, aby wrocic do mapy.
+                  </p>
+                </section>
+              </section>
+
+              <section class="map-info-view" data-map-view="settings" hidden>
+                <div class="map-dashboard-shell">
+                  <header class="shell-header">
+                    <div class="brand-block">
+                      <span class="brand-kicker">Elrond</span>
+                      <h1>Centrum serwisu, mapy i danych</h1>
+                      <p>
+                        Access pozostaje tylko zrodlem. Aplikacja importuje dane do lokalnego SQLite, geokoduje
+                        adresy i buduje widoki robocze pod trase, osoby i podglad tabel.
+                      </p>
+                    </div>
+
+                    <nav class="top-nav">
+                      <a href="./map.html" data-page-link="map">Mapa i trasy</a>
+                      <a href="./people.html" data-page-link="people">Osoby</a>
+                      <a href="./data.html" data-page-link="data">Dane</a>
+                    </nav>
+
+                    <div class="status-ribbon">
+                      <span class="status-pill" data-updater-status>Oczekiwanie na status aktualizacji...</span>
+                      <span class="status-pill status-pill-soft" data-operation-status>Brak aktywnej operacji.</span>
+                    </div>
+                  </header>
+
+                  <main class="dashboard-layout">
+                    <section class="hero-panel panel-gradient">
+                      <div class="hero-copy">
+                        <span class="eyebrow">Tryb operacyjny</span>
+                        <h2>Najpierw wybierz `.accdb`, potem import i geokodowanie.</h2>
+                        <p>
+                          Haslo do Accessa mozna wpisac bezposrednio w aplikacji albo trzymac w pliku sekretu.
+                          Wszystkie robocze notatki, punkty i widoki zapisywane sa w lokalnym SQLite.
+                          Oryginalna baza nie jest modyfikowana.
+                        </p>
+                      </div>
+
+                      <div class="hero-stats">
+                        <article class="stat-card">
+                          <span>Tabele</span>
+                          <strong data-stat="totalTables">0</strong>
+                        </article>
+                        <article class="stat-card">
+                          <span>Wiersze</span>
+                          <strong data-stat="totalRows">0</strong>
+                        </article>
+                        <article class="stat-card">
+                          <span>Osoby</span>
+                          <strong data-stat="totalPeople">0</strong>
+                        </article>
+                        <article class="stat-card">
+                          <span>Punkty gotowe</span>
+                          <strong data-stat="geocodedPeople">0</strong>
+                        </article>
+                      </div>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Zrodlo danych</span>
+                          <h2>Access i import do SQLite</h2>
+                        </div>
+                        <div class="chip-line">
+                          <span class="info-chip" id="password-status">Sprawdzanie hasla...</span>
+                          <span class="info-chip" data-access-path id="access-path">Nie wybrano pliku</span>
+                        </div>
+                      </div>
+
+                      <p class="copy" id="import-status">
+                        SQLite jest gotowe, ale baza Access nie zostala jeszcze zaimportowana.
+                      </p>
+
+                      <label class="field">
+                        <span>Haslo do bazy Access</span>
+                        <input
+                          id="access-password"
+                          type="password"
+                          autocomplete="current-password"
+                          placeholder="Wpisz haslo do pliku .accdb"
+                        />
+                      </label>
+
+                      <div class="action-row">
+                        <button type="button" id="choose-file-btn">Wybierz plik .accdb</button>
+                        <button type="button" id="save-access-password-btn">Zapisz haslo</button>
+                        <button type="button" id="import-btn" class="button-strong">Importuj do SQLite</button>
+                      </div>
+
+                      <ul class="meta-list" id="import-meta"></ul>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Geokodowanie</span>
+                          <h2>Google Maps API</h2>
+                        </div>
+                      </div>
+
+                      <label class="field">
+                        <span>Klucz API</span>
+                        <input id="google-api-key" type="password" placeholder="Wklej klucz Google Maps API" />
+                      </label>
+
+                      <label class="field">
+                        <span>Liczba rekordow na przebieg</span>
+                        <input id="geocode-limit" type="number" min="1" max="300" value="50" />
+                      </label>
+
+                      <div class="action-row">
+                        <button type="button" id="save-api-key-btn">Zapisz klucz</button>
+                        <button type="button" id="geocode-btn" class="button-strong">
+                          Geokoduj brakujace adresy
+                        </button>
+                      </div>
+
+                      <div class="mini-stats">
+                        <article>
+                          <span>Oczekuje</span>
+                          <strong data-stat="pendingGeocodes">0</strong>
+                        </article>
+                        <article>
+                          <span>Notatki</span>
+                          <strong data-stat="totalNotes">0</strong>
+                        </article>
+                        <article>
+                          <span>Punkty lokalne</span>
+                          <strong data-stat="totalCustomPoints">0</strong>
+                        </article>
+                      </div>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Publikacja</span>
+                          <h2>Aktualizacje aplikacji</h2>
+                        </div>
+                      </div>
+
+                      <div class="action-row">
+                        <button id="check-btn" type="button">Sprawdz aktualizacje</button>
+                        <button id="install-btn" type="button" disabled>Zainstaluj i uruchom ponownie</button>
+                      </div>
+
+                      <p class="copy">
+                        Auto-update zostal zachowany. Ostatni import zapisuje sie lokalnie i jest niezalezny od
+                        procesu wydania aplikacji.
+                      </p>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Pakiet .trasa</span>
+                          <h2>Eksport i import calosci</h2>
+                        </div>
+                      </div>
+
+                      <p class="copy">
+                        Pakiet `.trasa` jest wlasnym kontenerem aplikacji Elrond. W srodku nadal zawiera
+                        `database.zip`, `reports.zip`, `secrets.zip` i manifest, ale plik nie zapisuje sie
+                        jako zwykly ZIP rozpoznawany przez system.
+                      </p>
+
+                      <div class="action-row">
+                        <button type="button" id="export-trasa-btn">Eksportuj .trasa</button>
+                        <button type="button" id="import-trasa-btn" class="button-strong">Wczytaj .trasa</button>
+                      </div>
+
+                      <p class="copy copy-warning">
+                        Ten plik zawiera dane wrazliwe, w tym klucz Google Maps i haslo do Accessa.
+                      </p>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Nawigacja</span>
+                          <h2>Widoki robocze</h2>
+                        </div>
+                      </div>
+
+                      <div class="nav-cards">
+                        <a class="nav-card" href="./map.html">
+                          <strong>Mapa i trasy</strong>
+                          <span>Wizualizacja punktow, lokalne kropki i ranking trasy po wizycie oraz odleglosci.</span>
+                        </a>
+                        <a class="nav-card" href="./people.html">
+                          <strong>Osoby</strong>
+                          <span>Oddzielna strona wyszukiwania, szczegoly klienta, karty serwisowe i lokalne notatki.</span>
+                        </a>
+                        <a class="nav-card" href="./data.html">
+                          <strong>Podglad danych</strong>
+                          <span>Wszystkie zaimportowane tabele Accessa w trybie tylko do odczytu.</span>
+                        </a>
+                      </div>
+                    </section>
+
+                    <section class="panel panel-stack">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Mapa JSON</span>
+                          <h2>Obszar wszystkich punktow</h2>
+                        </div>
+                        <span class="info-chip" id="dimensions-size-chip">Brak punktow</span>
+                      </div>
+
+                      <p class="copy">
+                        Ten box generuje JSON z bounding box danych mapy: `minLat`, `maxLat`, `minLng`,
+                        `maxLng`, `width`, `height` oraz liczba wszystkich punktow.
+                      </p>
+
+                      <div class="dimension-grid">
+                        <article>
+                          <span>Szerokosc obszaru (lng)</span>
+                          <strong data-dimension-value="boundsWidth">Brak danych</strong>
+                        </article>
+                        <article>
+                          <span>Wysokosc obszaru (lat)</span>
+                          <strong data-dimension-value="boundsHeight">Brak danych</strong>
+                        </article>
+                      </div>
+
+                      <p class="copy">
+                        Eksport zapisze gotowy plik `.json` bez wyswietlania calej tresci w tym widoku.
+                      </p>
+
+                      <div class="action-row">
+                        <button type="button" id="export-map-bounds-btn">Eksportuj JSON</button>
+                      </div>
+                    </section>
+
+                    <section class="panel panel-stack full-width">
+                      <div class="panel-heading">
+                        <div>
+                          <span class="eyebrow">Log operacji</span>
+                          <h2>Ostatnie zdarzenia</h2>
+                        </div>
+                        <span class="info-chip" data-imported-at>Jeszcze nie importowano</span>
+                      </div>
+
+                      <ol class="log-list" id="operation-log"></ol>
+                    </section>
+                  </main>
+                </div>
+              </section>
             </aside>
           </div>
 

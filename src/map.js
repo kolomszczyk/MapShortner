@@ -1,9 +1,17 @@
-import { applySummary, escapeHtml, formatDate, initShell } from './app-shell.js';
+import { escapeHtml, formatDate, formatDateTime, formatNumber, initShell, summarizePath } from './app-shell.js';
+import { initDashboardPanel } from './dashboard-panel.js';
 
 initShell('map');
 
 const mapEl = document.getElementById('service-map');
+const mapBoardEl = document.querySelector('.map-board');
+const mapContentGroupEl = document.querySelector('.map-content-group');
+const mapInfoPanelEl = document.querySelector('.map-info-panel');
 const settingsButtonEl = document.querySelector('.settings-gear-button');
+const overviewViewEl = document.querySelector('[data-map-view="overview"]');
+const settingsViewEl = document.querySelector('[data-map-view="settings"]');
+const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
+const overviewImportedAtEl = document.querySelector('[data-map-overview-imported-at]');
 
 const DEFAULT_PERSON_MARKER_STYLE = {
   radius: 7,
@@ -37,16 +45,19 @@ let visiblePeopleMarkers = new Map();
 let visibleCustomMarkers = new Map();
 let markerSyncGeneration = 0;
 let resizeTimer;
+let isSettingsOpen = false;
 
 settingsButtonEl?.addEventListener('click', () => {
-  window.location.href = './index.html';
+  toggleSettingsPanel();
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && isSettingsOpen) {
+    toggleSettingsPanel(false);
+  }
 });
 
 window.appApi.onOperationStatus(async (payload) => {
-  if (payload?.summary) {
-    applySummary(payload.summary);
-  }
-
   if (
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
@@ -59,13 +70,64 @@ bootstrap();
 
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
-  applySummary(bootstrapData.summary);
+  renderOverviewSummary(bootstrapData.summary);
+  initDashboardPanel({
+    root: settingsViewEl,
+    bootstrapData,
+    onSummaryUpdated: renderOverviewSummary,
+    readyMessage: 'Panel dashboardu na mapie gotowy.'
+  });
   buildMap();
   requestAnimationFrame(() => {
     loadPoints().catch((error) => {
       console.error('Map points load failed', error);
     });
   });
+}
+
+function toggleSettingsPanel(forceState = !isSettingsOpen) {
+  isSettingsOpen = Boolean(forceState);
+
+  overviewViewEl.hidden = isSettingsOpen;
+  settingsViewEl.hidden = !isSettingsOpen;
+  overviewViewEl.classList.toggle('map-info-view-active', !isSettingsOpen);
+  settingsViewEl.classList.toggle('map-info-view-active', isSettingsOpen);
+  mapBoardEl?.classList.toggle('is-settings-open', isSettingsOpen);
+  mapContentGroupEl?.classList.toggle('is-settings-open', isSettingsOpen);
+  mapInfoPanelEl?.classList.toggle('is-settings-open', isSettingsOpen);
+  settingsButtonEl?.classList.toggle('is-active', isSettingsOpen);
+  settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsOpen));
+
+  requestAnimationFrame(() => {
+    mapInstance?.invalidateSize();
+  });
+}
+
+function renderOverviewSummary(summary) {
+  const statMap = {
+    totalPeople: summary?.stats?.totalPeople,
+    geocodedPeople: summary?.stats?.geocodedPeople,
+    pendingGeocodes: summary?.stats?.pendingGeocodes,
+    totalCustomPoints: summary?.stats?.totalCustomPoints
+  };
+
+  Object.entries(statMap).forEach(([key, value]) => {
+    document.querySelectorAll(`[data-map-overview-stat="${key}"]`).forEach((target) => {
+      target.textContent = formatNumber(value || 0);
+    });
+  });
+
+  if (overviewAccessPathEl) {
+    overviewAccessPathEl.textContent = summarizePath(
+      summary?.settings?.accessDbPath || summary?.importMeta?.source_path
+    );
+  }
+
+  if (overviewImportedAtEl) {
+    overviewImportedAtEl.textContent = summary?.importMeta?.imported_at
+      ? formatDateTime(summary.importMeta.imported_at)
+      : 'Jeszcze nie importowano';
+  }
 }
 
 function buildMap() {

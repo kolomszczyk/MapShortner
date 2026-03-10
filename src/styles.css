@@ -194,6 +194,7 @@ textarea {
   min-width: 1320px;
   display: grid;
   grid-template-columns: 95% 5%;
+  align-items: stretch;
   border-radius: 0;
   overflow: hidden;
   border: 0;
@@ -205,6 +206,15 @@ textarea {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.618fr) minmax(0, 1fr);
+}
+
+.map-content-group.is-settings-open {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
+}
+
+.map-content-group.is-settings-open .map-canvas-panel {
+  display: none;
 }
 
 .map-canvas-panel,
@@ -221,10 +231,23 @@ textarea {
 }
 
 .map-info-panel {
+  display: grid;
+  align-content: start;
+  gap: 18px;
   padding: 24px;
+  overflow-y: auto;
   border-right: 1px solid rgba(48, 67, 54, 0.16);
   background:
     linear-gradient(180deg, rgba(245, 248, 242, 0.94) 0%, rgba(237, 243, 234, 0.92) 100%);
+}
+
+.map-info-panel.is-settings-open {
+  height: 100vh;
+  min-height: 0;
+  border-right: 0;
+  padding: 28px 22px 42px;
+  background:
+    linear-gradient(180deg, rgba(248, 244, 236, 0.96) 0%, rgba(241, 247, 239, 0.94) 100%);
 }
 
 .map-info-panel h1 {
@@ -234,15 +257,52 @@ textarea {
   letter-spacing: -0.03em;
 }
 
+.map-info-view {
+  display: none;
+}
+
+.map-info-view.map-info-view-active {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.map-info-view[data-map-view="settings"].map-info-view-active {
+  min-height: 0;
+}
+
+.map-info-intro {
+  display: grid;
+  gap: 10px;
+}
+
+.map-mini-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.map-dashboard-shell {
+  display: grid;
+  gap: 28px;
+}
+
 .map-settings-rail {
   display: flex;
   flex-direction: column;
   align-items: center;
+  align-self: start;
+  position: sticky;
+  top: 0;
+  height: 100vh;
   padding: 22px 10px;
   gap: 12px;
   border-left: 1px solid rgba(48, 67, 54, 0.22);
   background:
     linear-gradient(180deg, rgba(226, 234, 220, 0.96) 0%, rgba(201, 217, 196, 0.98) 100%);
+  z-index: 8;
+}
+
+.map-board.is-settings-open .map-settings-rail {
+  box-shadow: -12px 0 28px rgba(25, 35, 28, 0.08);
 }
 
 .map-settings-upper,
@@ -260,13 +320,17 @@ textarea {
 }
 
 .map-settings-lower {
-  flex: 1 1 auto;
-  align-items: flex-end;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: 18px;
+  padding-bottom: 8px;
+  align-items: center;
   justify-content: center;
 }
 
 .map-tool-button,
 .settings-gear-button {
+  position: relative;
   width: 54px;
   height: 54px;
   padding: 0;
@@ -280,6 +344,19 @@ textarea {
 .map-tool-button {
   background: linear-gradient(135deg, rgba(58, 96, 68, 0.95) 0%, rgba(37, 64, 47, 0.98) 100%);
   box-shadow: 0 10px 18px rgba(35, 65, 46, 0.18);
+}
+
+.settings-gear-button.is-active {
+  background: linear-gradient(135deg, #b2572c 0%, #7f3512 100%);
+  box-shadow: 0 16px 28px rgba(127, 53, 18, 0.24);
+}
+
+.settings-gear-button.is-active::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 22px;
+  border: 1px solid rgba(178, 87, 44, 0.34);
 }
 
 .map-tool-button i,
