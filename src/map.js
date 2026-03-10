@@ -12,6 +12,11 @@ const DEFAULT_PERSON_MARKER_STYLE = {
   fillOpacity: 0.9
 };
 
+const POLAND_BOUNDS = [
+  [49.0, 14.1],
+  [54.9, 24.2]
+];
+
 let mapInstance;
 let peopleLayer;
 let customLayer;
@@ -59,7 +64,7 @@ function buildMap() {
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(mapInstance);
 
-  mapInstance.setView([52.1, 19.4], 6);
+  focusPoland();
   peopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
 
@@ -92,11 +97,15 @@ async function loadPoints() {
   renderMarkers(payload.people || [], payload.customPoints || []);
 }
 
+function focusPoland() {
+  mapInstance.fitBounds(POLAND_BOUNDS, {
+    padding: [24, 24]
+  });
+}
+
 function renderMarkers(people, customPoints) {
   peopleLayer.clearLayers();
   customLayer.clearLayers();
-
-  const bounds = [];
 
   for (const person of people) {
     if (!Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
@@ -114,7 +123,6 @@ function renderMarkers(people, customPoints) {
     );
 
     peopleLayer.addLayer(marker);
-    bounds.push([person.lat, person.lng]);
   }
 
   for (const point of customPoints) {
@@ -131,14 +139,5 @@ function renderMarkers(people, customPoints) {
     );
 
     customLayer.addLayer(marker);
-    bounds.push([point.lat, point.lng]);
-  }
-
-  if (bounds.length > 0) {
-    mapInstance.fitBounds(bounds, {
-      padding: [36, 36]
-    });
-  } else {
-    mapInstance.setView([52.1, 19.4], 6);
   }
 }

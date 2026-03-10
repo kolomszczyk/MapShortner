@@ -33,6 +33,7 @@ body {
 }
 
 body {
+  min-width: 1180px;
   font-family: 'Inter', 'Segoe UI', sans-serif;
   color: var(--text);
   background:
@@ -42,7 +43,9 @@ body {
 }
 
 body.map-page {
-  overflow: hidden;
+  min-width: 1320px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 a,
@@ -135,10 +138,12 @@ textarea {
 
 .map-workspace {
   min-height: 100vh;
+  min-width: 1320px;
 }
 
 .map-board {
   min-height: 100vh;
+  min-width: 1320px;
   display: grid;
   grid-template-columns: 95% 5%;
   border-radius: 0;
@@ -948,126 +953,4 @@ body.map-page .service-map {
 .leaflet-popup-content {
   margin: 12px 14px;
   line-height: 1.45;
-}
-
-@media (max-width: 1240px) {
-  .dashboard-layout,
-  .split-layout,
-  .map-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .time-filter-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .nav-cards {
-    grid-template-columns: 1fr;
-  }
-
-  .hero-stats,
-  .mini-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .map-board {
-    grid-template-columns: 95% 5%;
-  }
-}
-
-@media (max-width: 860px) {
-  body.map-page {
-    overflow: auto;
-  }
-
-  .shell {
-    padding: 18px 14px 28px;
-  }
-
-  .shell-header {
-    grid-template-columns: 1fr;
-  }
-
-  .top-nav,
-  .status-ribbon {
-    justify-content: flex-start;
-  }
-
-  .two-cols,
-  .three-cols,
-  .time-filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .hero-stats,
-  .mini-stats {
-    grid-template-columns: 1fr;
-  }
-
-  .action-row,
-  .panel-heading,
-  .subpanel-header,
-  .pager-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .service-map,
-  .map-error {
-    min-height: 420px;
-  }
-
-  .map-shell-sketch {
-    padding: 0;
-  }
-
-  .map-workspace {
-    min-height: auto;
-  }
-
-  .map-board {
-    grid-template-columns: 1fr;
-    min-height: 100vh;
-  }
-
-  .map-content-group {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(360px, auto) minmax(220px, auto);
-  }
-
-  .map-canvas-panel,
-  .map-info-panel {
-    border-right: 0;
-  }
-
-  .map-canvas-panel,
-  .map-info-panel,
-  .map-settings-rail {
-    border-bottom: 1px solid rgba(48, 67, 54, 0.16);
-  }
-
-  .map-settings-rail {
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    padding: 16px 18px;
-    border-bottom: 0;
-  }
-
-  .map-column {
-    min-height: 420px;
-  }
-
-  .map-column-map .service-map {
-    min-height: 420px;
-  }
-
-  .kv-row {
-    flex-direction: column;
-  }
-
-  .kv-value {
-    max-width: 100%;
-    text-align: left;
-  }
 }
