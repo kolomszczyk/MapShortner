@@ -1286,6 +1286,7 @@ async function hydratePersonSelectionHistory() {
   }
 
   if (persistedHistory) {
+    personSelectionHistory = persistedHistory;
     writePersonSelectionHistoryCache(persistedHistory);
     return;
   }
@@ -1635,6 +1636,14 @@ function setActiveSelection(nextSelection) {
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
   });
+
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
+
+  if (infoPanelMode === 'search') {
+    paintSearchPanel();
+  }
 }
 
 function clearActiveSelection(options = {}) {
@@ -1645,6 +1654,14 @@ function clearActiveSelection(options = {}) {
   }
 
   activeSelection = null;
+
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
+
+  if (infoPanelMode === 'search') {
+    paintSearchPanel();
+  }
 
   if (options.resetPanel !== false) {
     renderEmptySelection();
@@ -2092,9 +2109,12 @@ function renderPersonSearchResults() {
       : '<p class="empty-state">Wpisz zapytanie, aby wyszukac osobe po wszystkich polach i datach.</p>';
   }
 
+  const currentSelectedPersonId = getCurrentSelectedPersonSourceRowId();
+
   return personSearchState.results
     .map((person) => {
       const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
+      const isCurrent = person.sourceRowId === currentSelectedPersonId;
       const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
         ? isVisibleOnMap
           ? 'Widoczna na mapie'
@@ -2104,15 +2124,15 @@ function renderPersonSearchResults() {
       return `
         <button
           type="button"
-          class="person-row"
+          class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
           data-map-search-source-row-id="${escapeHtml(person.sourceRowId)}"
         >
-          <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
-          <span class="person-row-copy">${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
-          <span class="person-row-copy person-row-meta">
-            Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
-          </span>
-          <span class="person-row-copy person-row-meta">${escapeHtml(locationLabel)}</span>
+          <div class="list-card-heading">
+            <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+          </div>
+          <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
+          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+          <span>${escapeHtml(locationLabel)}</span>
         </button>
       `;
     })
@@ -2196,21 +2216,38 @@ function renderMapDateFilterResults() {
       : '<p class="empty-state">Brak osob dostepnych na mapie dla biezacych danych.</p>';
   }
 
+  const currentSelectedPersonId = getCurrentSelectedPersonSourceRowId();
+
   return allPeople
-    .map((person) => `
-      <button
-        type="button"
-        class="person-row"
-        data-map-filter-source-row-id="${escapeHtml(person.sourceRowId)}"
-      >
-        <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
-        <span class="person-row-copy">${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
-        <span class="person-row-copy person-row-meta">
-          Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
-        </span>
-      </button>
-    `)
+    .map((person) => {
+      const isCurrent = person.sourceRowId === currentSelectedPersonId;
+      return `
+        <button
+          type="button"
+          class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
+          data-map-filter-source-row-id="${escapeHtml(person.sourceRowId)}"
+        >
+          <div class="list-card-heading">
+            <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+          </div>
+          <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
+          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+        </button>
+      `;
+    })
     .join('');
+}
+
+function getCurrentSelectedPersonSourceRowId() {
+  if (activeSelection?.type === 'person' && activeSelection.key) {
+    return activeSelection.key.replace(/^person:/, '');
+  }
+
+  if (personSelectionHistory.index >= 0) {
+    return personSelectionHistory.entries[personSelectionHistory.index] || null;
+  }
+
+  return null;
 }
 
 function updatePersonSearchQuery(nextQuery, options = {}) {
