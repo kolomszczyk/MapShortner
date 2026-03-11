@@ -1412,10 +1412,14 @@ function normalizePeopleRow(row) {
     lng: row.lng == null ? null : Number(row.lng),
     geocodeStatus: row.geocodeStatus || row.geocode_status || null,
     coordinateSource: row.coordinateSource || row.coordinate_source || null,
+    installedAt: row.installedAt || row.installed_at || null,
     lastVisitAt: row.lastVisitAt || row.last_visit_at || null,
     lastPaymentAt: row.lastPaymentAt || row.last_payment_at || null,
     plannedVisitAt: row.plannedVisitAt || row.planned_visit_at || null,
-    totalPaid: row.totalPaid == null ? null : Number(row.totalPaid)
+    deviceVendor: row.deviceVendor || row.device_vendor || null,
+    deviceModel: row.deviceModel || row.device_model || null,
+    totalPaid: row.totalPaid == null ? null : Number(row.totalPaid),
+    notesSummary: row.notesSummary || row.notes_summary || null
   };
 }
 

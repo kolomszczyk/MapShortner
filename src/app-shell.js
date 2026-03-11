@@ -333,6 +333,42 @@ export function renderKeyValueList(items) {
     .join('');
 }
 
+export function pickRecordValue(record, candidateKeys) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  const entries = Object.entries(record);
+  const exactMatches = new Map(
+    entries.map(([key, value]) => [normalizeLookupKey(key), value])
+  );
+
+  for (const candidateKey of candidateKeys) {
+    const matchedValue = exactMatches.get(normalizeLookupKey(candidateKey));
+    if (!isLookupValueEmpty(matchedValue)) {
+      return matchedValue;
+    }
+  }
+
+  for (const candidateKey of candidateKeys) {
+    const normalizedCandidate = normalizeLookupKey(candidateKey);
+    const match = entries.find(([key, value]) => {
+      if (isLookupValueEmpty(value)) {
+        return false;
+      }
+
+      const normalizedKey = normalizeLookupKey(key);
+      return normalizedKey.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedKey);
+    });
+
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
 export function renderRecordFields(record, options = {}) {
   const entries = Object.entries(record || {});
   const includeEmpty = options.includeEmpty !== false;
@@ -383,6 +419,18 @@ export function formatRecordValue(value, label = '') {
   }
 
   return normalizedValue.replace(/\s+/g, ' ');
+}
+
+function normalizeLookupKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function isLookupValueEmpty(value) {
+  return value == null || (typeof value === 'string' && value.trim() === '');
 }
 
 function isRecordValueEmpty(value) {

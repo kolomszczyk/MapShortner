@@ -2,9 +2,9 @@ import {
   escapeHtml,
   formatDate,
   formatDateTime,
-  formatMoney,
   formatNumber,
   initShell,
+  pickRecordValue,
   renderRecordFields,
   renderKeyValueList,
   summarizePath
@@ -2328,21 +2328,24 @@ function paintPersonSelection(details) {
     { label: 'Adres', value: person.addressText || person.routeAddress || 'Brak' },
     { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
     { label: 'Ostatnia wplata', value: formatDate(person.lastPaymentAt) },
-    { label: 'Planowana wizyta', value: formatDate(person.plannedVisitAt) },
-    { label: 'Suma wplat', value: formatMoney(person.totalPaid) },
-    { label: 'Urzadzenie', value: [person.deviceVendor, person.deviceModel].filter(Boolean).join(' ') || 'Brak' }
+    ...buildPersonPrimaryDetailItems(person)
   ]);
   selectionMetaEl.hidden = false;
 
   const cards = [];
 
+  const secondaryItems = buildPersonSecondaryDetailItems(person);
+  if (secondaryItems.length > 0) {
+    cards.push(`<div class="kv-grid detail-secondary-grid">${renderKeyValueList(secondaryItems)}</div>`);
+  }
+
   if (person.notesSummary) {
     cards.push(`
-      <article class="list-card">
+      <article class="list-card detail-note-card">
         <div class="list-card-heading">
           <strong>Uwagi</strong>
         </div>
-        <p>${escapeHtml(person.notesSummary)}</p>
+        <p class="detail-note-text">${escapeHtml(person.notesSummary)}</p>
       </article>
     `);
   }
@@ -2405,6 +2408,61 @@ function paintPersonSelection(details) {
     ? cards.join('')
     : '<p class="empty-state">Brak dodatkowych informacji dla tej osoby.</p>';
   selectionExtraEl.hidden = false;
+}
+
+function buildPersonPrimaryDetailItems(person) {
+  const raw = person.raw || {};
+  const producer = person.deviceVendor || pickRecordValue(raw, ['Producent']);
+  const installerCompany = pickRecordValue(raw, [
+    'Firma montująca',
+    'Firma montujaca',
+    'Firma montazowa'
+  ]);
+  const geyserNumber = pickRecordValue(raw, ['Nr gejzer', 'Nr gejzera', 'Numer gejzer']);
+  const items = [
+    { label: 'Producent', value: producer || 'Brak' }
+  ];
+
+  if (
+    installerCompany &&
+    normalizeComparableText(installerCompany) !== normalizeComparableText(producer)
+  ) {
+    items.push({ label: 'Firma montujaca', value: installerCompany });
+  }
+
+  items.push(
+    { label: 'Nr gejzer', value: geyserNumber || 'Brak' },
+    { label: 'Data montazu', value: formatPersonInstallDate(person, raw) }
+  );
+
+  return items;
+}
+
+function buildPersonSecondaryDetailItems(person) {
+  const raw = person.raw || {};
+  const inspection = pickRecordValue(raw, ['Prze tn', 'Przegląd', 'Przeglad']);
+  const softwareVersion = pickRecordValue(raw, ['Soft wersja', 'Wersja softwaru', 'Wersja software']);
+
+  return [
+    { label: 'Przeglad', value: inspection || 'Brak' },
+    { label: 'Wersja softwaru', value: softwareVersion || 'Brak' }
+  ];
+}
+
+function formatPersonInstallDate(person, raw) {
+  if (person.installedAt) {
+    return formatDate(person.installedAt);
+  }
+
+  return pickRecordValue(raw, ['Data montażu', 'Data montazu', 'Data montaźu']) || 'Brak';
+}
+
+function normalizeComparableText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 function renderCustomPointSelection(point) {

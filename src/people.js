@@ -2,9 +2,9 @@ import {
   applySummary,
   escapeHtml,
   formatDate,
-  formatMoney,
   formatNumber,
   initShell,
+  pickRecordValue,
   renderRecordFields,
   renderKeyValueList
 } from './app-shell.js';
@@ -28,6 +28,7 @@ const notesForm = document.getElementById('person-note-form');
 const noteInput = document.getElementById('person-note-input');
 const detailTitleEl = document.getElementById('person-detail-title');
 const detailMetaEl = document.getElementById('person-detail-meta');
+const detailHighlightEl = document.getElementById('person-detail-highlight');
 const rawFieldsEl = document.getElementById('person-raw-fields');
 const rawFieldsToggleButtonEl = document.getElementById('person-raw-fields-toggle');
 const serviceCardsEl = document.getElementById('person-service-cards');
@@ -350,9 +351,9 @@ function renderPersonDetails(details) {
     { label: 'E-mail', value: details.person.email },
     { label: 'Ostatnia wizyta', value: formatDate(details.person.lastVisitAt) },
     { label: 'Ostatnia wplata', value: formatDate(details.person.lastPaymentAt) },
-    { label: 'Planowana wizyta', value: formatDate(details.person.plannedVisitAt) },
-    { label: 'Suma wplat', value: formatMoney(details.person.raw['Suma wpłat']) }
+    ...buildPersonPrimaryDetailItems(details.person)
   ]);
+  renderPersonHighlights(details.person);
   rawFieldsEl.innerHTML = renderRecordFields(details.person.raw);
   syncRawFieldsVisibility();
 
@@ -410,6 +411,8 @@ async function restoreInitialPersonSelection() {
 function renderEmptyPersonDetails() {
   detailTitleEl.textContent = 'Wybierz osobe z listy';
   detailMetaEl.innerHTML = '';
+  detailHighlightEl.innerHTML = '';
+  detailHighlightEl.hidden = true;
   rawFieldsEl.innerHTML = '<p class="empty-state">Pelne dane pojawia sie po wybraniu osoby.</p>';
   syncRawFieldsVisibility();
   serviceCardsEl.innerHTML = '<p class="empty-state">Brak kart serwisowych dla wybranej osoby.</p>';
@@ -424,11 +427,100 @@ function syncRawFieldsVisibility() {
   const isExpanded = areRawFieldsExpanded;
 
   detailMetaEl.hidden = !isExpanded;
+  detailHighlightEl.hidden = !isExpanded || !detailHighlightEl.innerHTML.trim();
   rawFieldsEl.hidden = !isExpanded;
   notesSectionEl.hidden = !isExpanded;
   serviceCardsSectionEl.hidden = !isExpanded;
   rawFieldsToggleButtonEl.textContent = areRawFieldsExpanded ? 'Ukryj' : 'Pokaz';
   rawFieldsToggleButtonEl.setAttribute('aria-expanded', String(areRawFieldsExpanded));
+}
+
+function buildPersonPrimaryDetailItems(person) {
+  const raw = person.raw || {};
+  const producer = person.deviceVendor || pickRecordValue(raw, ['Producent']);
+  const installerCompany = pickRecordValue(raw, [
+    'Firma montująca',
+    'Firma montujaca',
+    'Firma montazowa'
+  ]);
+  const geyserNumber = pickRecordValue(raw, ['Nr gejzer', 'Nr gejzera', 'Numer gejzer']);
+  const items = [
+    { label: 'Producent', value: producer || 'Brak' }
+  ];
+
+  if (
+    installerCompany &&
+    normalizeComparableText(installerCompany) !== normalizeComparableText(producer)
+  ) {
+    items.push({ label: 'Firma montujaca', value: installerCompany });
+  }
+
+  items.push(
+    { label: 'Nr gejzer', value: geyserNumber || 'Brak' },
+    { label: 'Data montazu', value: formatPersonInstallDate(person, raw) }
+  );
+
+  return items;
+}
+
+function renderPersonHighlights(person) {
+  if (!detailHighlightEl) {
+    return;
+  }
+
+  const cards = [];
+
+  const secondaryItems = buildPersonSecondaryDetailItems(person);
+  if (secondaryItems.length > 0) {
+    cards.push(`<div class="kv-grid detail-secondary-grid">${renderKeyValueList(secondaryItems)}</div>`);
+  }
+
+  if (person.notesSummary) {
+    cards.push(`
+      <article class="list-card detail-note-card">
+        <div class="list-card-heading">
+          <strong>Uwagi</strong>
+        </div>
+        <p class="detail-note-text">${escapeHtml(person.notesSummary)}</p>
+      </article>
+    `);
+  }
+
+  if (cards.length === 0) {
+    detailHighlightEl.innerHTML = '';
+    detailHighlightEl.hidden = true;
+    return;
+  }
+
+  detailHighlightEl.innerHTML = cards.join('');
+  detailHighlightEl.hidden = !areRawFieldsExpanded;
+}
+
+function buildPersonSecondaryDetailItems(person) {
+  const raw = person.raw || {};
+  const inspection = pickRecordValue(raw, ['Prze tn', 'Przegląd', 'Przeglad']);
+  const softwareVersion = pickRecordValue(raw, ['Soft wersja', 'Wersja softwaru', 'Wersja software']);
+
+  return [
+    { label: 'Przeglad', value: inspection || 'Brak' },
+    { label: 'Wersja softwaru', value: softwareVersion || 'Brak' }
+  ];
+}
+
+function formatPersonInstallDate(person, raw) {
+  if (person.installedAt) {
+    return formatDate(person.installedAt);
+  }
+
+  return pickRecordValue(raw, ['Data montażu', 'Data montazu', 'Data montaźu']) || 'Brak';
+}
+
+function normalizeComparableText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 function readStoredRawFieldsExpanded() {

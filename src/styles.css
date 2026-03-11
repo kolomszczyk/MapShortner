@@ -1389,6 +1389,10 @@ body.map-page .service-map {
   line-height: 1.5;
 }
 
+.detail-note-text {
+  white-space: pre-wrap;
+}
+
 .route-card {
   border-left: 4px solid var(--accent);
 }
