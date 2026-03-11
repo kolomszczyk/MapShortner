@@ -67,6 +67,11 @@ const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
 const MAP_PERSON_SEARCH_LIMIT = 100;
 const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
+const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
+const DEFAULT_INFO_PANEL_MODE = 'selection';
+const SETTINGS_PANEL_STORAGE_STATE = 'settings';
+const INFO_PANEL_MODES = ['stats', 'selection', 'search', 'history', 'filter'];
+const restoredMapPanelState = readStoredMapPanelState();
 
 let mapInstance;
 let peopleLayer;
@@ -78,10 +83,10 @@ let visiblePeopleMarkers = new Map();
 let visibleCustomMarkers = new Map();
 let markerSyncGeneration = 0;
 let resizeTimer;
-let isSettingsOpen = false;
+let isSettingsOpen = restoredMapPanelState.activePanel === SETTINGS_PANEL_STORAGE_STATE;
 let activeSelection = null;
 let selectionRequestToken = 0;
-let infoPanelMode = 'selection';
+let infoPanelMode = restoredMapPanelState.infoPanelMode;
 let selectionPanelState = {
   kind: 'empty'
 };
@@ -258,8 +263,8 @@ window.appApi.onOperationStatus(async (payload) => {
   }
 });
 
-syncInfoToolButtons();
-renderEmptySelection();
+syncSettingsPanelVisibility();
+renderCurrentInfoPanel();
 bootstrap();
 
 async function bootstrap() {
@@ -281,7 +286,15 @@ async function bootstrap() {
 
 function toggleSettingsPanel(forceState = !isSettingsOpen) {
   isSettingsOpen = Boolean(forceState);
+  syncSettingsPanelVisibility();
+  persistMapPanelState();
 
+  requestAnimationFrame(() => {
+    mapInstance?.invalidateSize();
+  });
+}
+
+function syncSettingsPanelVisibility() {
   overviewViewEl.hidden = isSettingsOpen;
   settingsViewEl.hidden = !isSettingsOpen;
   overviewViewEl.classList.toggle('map-info-view-active', !isSettingsOpen);
@@ -292,10 +305,6 @@ function toggleSettingsPanel(forceState = !isSettingsOpen) {
   settingsButtonEl?.classList.toggle('is-active', isSettingsOpen);
   settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsOpen));
   syncInfoToolButtons();
-
-  requestAnimationFrame(() => {
-    mapInstance?.invalidateSize();
-  });
 }
 
 function renderOverviewSummary(summary) {
@@ -1076,6 +1085,59 @@ function handleMouseHistoryNavigation(event) {
   }
 }
 
+function readStoredMapPanelState() {
+  const defaultState = {
+    activePanel: DEFAULT_INFO_PANEL_MODE,
+    infoPanelMode: DEFAULT_INFO_PANEL_MODE
+  };
+
+  try {
+    const raw = window.localStorage.getItem(LAST_OPENED_MAP_PANEL_STORAGE_KEY);
+    if (!raw) {
+      return defaultState;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      const activePanel = parsed === SETTINGS_PANEL_STORAGE_STATE
+        ? SETTINGS_PANEL_STORAGE_STATE
+        : normalizeInfoPanelMode(parsed);
+      return {
+        activePanel,
+        infoPanelMode: activePanel === SETTINGS_PANEL_STORAGE_STATE
+          ? DEFAULT_INFO_PANEL_MODE
+          : activePanel
+      };
+    }
+
+    const infoPanelMode = normalizeInfoPanelMode(parsed?.infoPanelMode);
+    const activePanel = parsed?.activePanel === SETTINGS_PANEL_STORAGE_STATE
+      ? SETTINGS_PANEL_STORAGE_STATE
+      : normalizeInfoPanelMode(parsed?.activePanel || infoPanelMode);
+
+    return {
+      activePanel,
+      infoPanelMode
+    };
+  } catch (_error) {
+    return defaultState;
+  }
+}
+
+function persistMapPanelState() {
+  try {
+    window.localStorage.setItem(
+      LAST_OPENED_MAP_PANEL_STORAGE_KEY,
+      JSON.stringify({
+        activePanel: isSettingsOpen ? SETTINGS_PANEL_STORAGE_STATE : infoPanelMode,
+        infoPanelMode: normalizeInfoPanelMode(infoPanelMode)
+      })
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
 function readLastSelectedPersonId() {
   try {
     return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
@@ -1439,16 +1501,18 @@ function buildCustomPointPopupHtml(point) {
 }
 
 function setInfoPanelMode(mode) {
-  const nextMode = ['stats', 'selection', 'search', 'history', 'filter'].includes(mode)
-    ? mode
-    : 'selection';
+  const nextMode = normalizeInfoPanelMode(mode);
   if (infoPanelMode === nextMode) {
     return;
   }
 
   infoPanelMode = nextMode;
   syncInfoToolButtons();
+  persistMapPanelState();
+  renderCurrentInfoPanel();
+}
 
+function renderCurrentInfoPanel() {
   if (infoPanelMode === 'stats') {
     paintStatsSelection(latestOverviewSummary);
     return;
@@ -1468,7 +1532,7 @@ function setInfoPanelMode(mode) {
     paintSearchPanel();
     if (!personSearchState.hasLoaded) {
       void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
-    } else {
+    } else if (!isSettingsOpen) {
       requestAnimationFrame(() => {
         focusMapSearchInput();
       });
@@ -1477,6 +1541,10 @@ function setInfoPanelMode(mode) {
   }
 
   paintSelectionPanelState();
+}
+
+function normalizeInfoPanelMode(value) {
+  return INFO_PANEL_MODES.includes(value) ? value : DEFAULT_INFO_PANEL_MODE;
 }
 
 function syncInfoToolButtons() {
@@ -1590,8 +1658,7 @@ function paintSearchPanel() {
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Wyszukiwanie osob';
-  selectionCopyEl.textContent = 'Znajdz osobe bez opuszczania mapy i pokaz jej szczegoly w tym panelu.';
-  selectionCopyEl.hidden = false;
+  selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Zakres', value: 'Wszystkie pola rekordu' },
     { label: 'Zapytanie', value: query || 'Brak' },
@@ -1632,9 +1699,11 @@ function paintSearchPanel() {
   `;
   selectionExtraEl.hidden = false;
 
-  requestAnimationFrame(() => {
-    focusMapSearchInput();
-  });
+  if (!isSettingsOpen) {
+    requestAnimationFrame(() => {
+      focusMapSearchInput();
+    });
+  }
 }
 
 function renderPersonSearchResults() {
@@ -1685,15 +1754,9 @@ function paintFilterPanel() {
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Filtr dat';
-  selectionCopyEl.textContent =
-    'Pokazuje osoby na mapie wedlug zakresu dat ostatniej wizyty. Punkty lokalne pozostaja bez zmian.';
-  selectionCopyEl.hidden = false;
-  selectionMetaEl.innerHTML = renderKeyValueList([
-    { label: 'Pole daty', value: 'Ostatnia wizyta' },
-    { label: 'Zakres', value: filterSummary.rangeLabel },
-    { label: 'Widoczne osoby', value: formatNumber(allPeople.length) }
-  ]);
-  selectionMetaEl.hidden = false;
+  selectionCopyEl.hidden = true;
+  selectionMetaEl.innerHTML = '';
+  selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
       <div class="two-cols">
