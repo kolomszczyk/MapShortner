@@ -223,15 +223,20 @@ textarea {
 }
 
 .select-wrap.is-invalid select {
-  border-color: var(--line);
-  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(154, 47, 36, 0.55);
+  background: rgba(255, 236, 233, 0.96);
   box-shadow: none;
+}
+
+.select-wrap.is-invalid::after {
+  border-right-color: rgba(154, 47, 36, 0.78);
+  border-bottom-color: rgba(154, 47, 36, 0.78);
 }
 
 .select-wrap.is-invalid select:hover,
 .select-wrap.is-invalid select:focus {
-  border-color: var(--line);
-  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(154, 47, 36, 0.62);
+  background: rgba(255, 236, 233, 0.96);
   box-shadow: none;
 }
 

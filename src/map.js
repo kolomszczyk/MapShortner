@@ -73,6 +73,8 @@ const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
 const INFO_PANEL_MODES = ['stats', 'selection', 'search', 'history', 'filter'];
 const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
+const EARLIEST_COMPARABLE_DATE = '0001-01-01';
+const LATEST_COMPARABLE_DATE = '9999-12-31';
 const restoredMapPanelState = readStoredMapPanelState();
 const restoredMapDateFilterState = readStoredMapDateFilterState();
 
@@ -80,8 +82,6 @@ let mapInstance;
 let peopleLayer;
 let customLayer;
 let personRenderer;
-let sourcePeople = [];
-let sourceCustomPoints = [];
 let allPeople = [];
 let allCustomPoints = [];
 let visiblePeopleMarkers = new Map();
@@ -201,6 +201,8 @@ selectionExtraEl?.addEventListener('click', (event) => {
   const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
   if (resetFilterButton && infoPanelMode === 'filter') {
     mapDateFilterDraft = buildMapDateFilterDraft({});
+    mapDateFilterHasInvalidRange = false;
+    persistMapDateFilterState();
     void applyMapDateFilter({});
     return;
   }
@@ -264,6 +266,7 @@ selectionExtraEl?.addEventListener('change', (event) => {
     toYear: formData.get('toYear')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
+  persistMapDateFilterState();
   paintFilterPanel();
   scheduleMapDateFilterApply();
 });
@@ -291,6 +294,7 @@ selectionExtraEl?.addEventListener('submit', (event) => {
     toYear: formData.get('toYear')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
+  persistMapDateFilterState();
   void applyMapDateFilter({
     ...mapDateFilterDraft
   });
@@ -462,20 +466,11 @@ async function loadPoints() {
     return;
   }
 
-  const payload = await window.appApi.getMapPoints({
-    query: '',
-    includeUnresolved: false
-  });
-  sourcePeople = payload.people || [];
-  sourceCustomPoints = payload.customPoints || [];
-  applyCurrentMapPoints();
-}
-
-function applyCurrentMapPoints() {
+  const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
   const shouldAutoSelectPerson = infoPanelMode !== 'filter';
 
-  allPeople = filterPeopleByCurrentMapDateRange(sourcePeople);
-  allCustomPoints = sourceCustomPoints;
+  allPeople = payload.people || [];
+  allCustomPoints = payload.customPoints || [];
   const nextPerson = shouldAutoSelectPerson
     ? hasActiveMapDateFilter()
       ? resolveVisiblePersonSelection(allPeople)
@@ -504,6 +499,24 @@ function applyCurrentMapPoints() {
   scheduleVisibleMarkerSync(0);
 }
 
+function buildMapPointsRequest() {
+  const payload = {
+    query: '',
+    includeUnresolved: false
+  };
+
+  if (!hasActiveMapDateFilter()) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    dateField: 'lastVisitAt',
+    dateFrom: mapDateFilter.dateFrom || undefined,
+    dateTo: mapDateFilter.dateTo || undefined
+  };
+}
+
 function scheduleMapDateFilterApply() {
   if (mapDateFilterApplyTimer) {
     window.clearTimeout(mapDateFilterApplyTimer);
@@ -520,6 +533,11 @@ function scheduleMapDateFilterApply() {
 
 function hasActiveMapDateFilter() {
   return Boolean(mapDateFilter.dateFrom || mapDateFilter.dateTo);
+}
+
+function hasMapDateFilterDraftValue(input = mapDateFilterDraft) {
+  const draft = normalizeMapDateFilterDraft(input);
+  return Boolean(draft.fromMonth || draft.fromYear || draft.toMonth || draft.toYear);
 }
 
 async function applyMapDateFilter(nextFilter) {
@@ -548,7 +566,7 @@ async function applyMapDateFilter(nextFilter) {
     return;
   }
 
-  applyCurrentMapPoints();
+  await loadPoints();
 }
 
 function normalizeMapDateFilter(input = {}) {
@@ -559,16 +577,18 @@ function normalizeMapDateFilter(input = {}) {
   const normalizedToMonth = normalizeMonthNumberInputValue(input?.toMonth);
   const normalizedToYear = normalizeYearInputValue(input?.toYear);
 
-  if (normalizedFromMonth && normalizedFromYear) {
-    dateFrom = `${normalizedFromYear}-${normalizedFromMonth}-01`;
+  if (normalizedFromYear) {
+    dateFrom = `${normalizedFromYear}-${normalizedFromMonth || '01'}-01`;
   } else if (normalizeMonthInputValue(input?.monthFrom)) {
     dateFrom = `${normalizeMonthInputValue(input?.monthFrom)}-01`;
   } else {
     dateFrom = normalizeDateInputValue(input?.dateFrom);
   }
 
-  if (normalizedToMonth && normalizedToYear) {
-    dateTo = getMonthEndDate(`${normalizedToYear}-${normalizedToMonth}`);
+  if (normalizedToYear) {
+    dateTo = normalizedToMonth
+      ? getMonthEndDate(`${normalizedToYear}-${normalizedToMonth}`)
+      : `${normalizedToYear}-12-31`;
   } else if (normalizeMonthInputValue(input?.monthTo)) {
     dateTo = getMonthEndDate(normalizeMonthInputValue(input?.monthTo));
   } else {
@@ -611,36 +631,6 @@ function normalizeDateInputValue(value) {
   return parsedDate.toISOString().slice(0, 10);
 }
 
-function filterPeopleByCurrentMapDateRange(people) {
-  if (!Array.isArray(people)) {
-    return [];
-  }
-
-  if (!hasActiveMapDateFilter()) {
-    return people;
-  }
-
-  const from = mapDateFilter.dateFrom || '';
-  const to = mapDateFilter.dateTo || '';
-
-  return people.filter((person) => {
-    const value = normalizeDateInputValue(person?.lastVisitAt);
-    if (!value) {
-      return false;
-    }
-
-    if (from && value < from) {
-      return false;
-    }
-
-    if (to && value > to) {
-      return false;
-    }
-
-    return true;
-  });
-}
-
 function normalizeMapDateFilterDraft(input = {}) {
   return {
     fromMonth: normalizeMonthNumberInputValue(input?.fromMonth),
@@ -652,13 +642,34 @@ function normalizeMapDateFilterDraft(input = {}) {
 
 function hasInvalidMapDateRangeDraft(input = mapDateFilterDraft) {
   const draft = normalizeMapDateFilterDraft(input);
-  if (!draft.fromYear || !draft.fromMonth || !draft.toYear || !draft.toMonth) {
+  const fromDate = buildDraftStartComparableDate(draft);
+  const toDate = buildDraftEndComparableDate(draft);
+  if (!fromDate || !toDate) {
     return false;
   }
 
-  const fromDate = `${draft.fromYear}-${draft.fromMonth}-01`;
-  const toDate = getMonthEndDate(`${draft.toYear}-${draft.toMonth}`);
   return Boolean(fromDate && toDate && fromDate > toDate);
+}
+
+function buildDraftStartComparableDate(draft) {
+  if (!draft?.fromYear) {
+    return EARLIEST_COMPARABLE_DATE;
+  }
+
+  const month = draft.fromMonth || '01';
+  return `${draft.fromYear}-${month}-01`;
+}
+
+function buildDraftEndComparableDate(draft) {
+  if (!draft?.toYear) {
+    return LATEST_COMPARABLE_DATE;
+  }
+
+  if (draft.toMonth) {
+    return getMonthEndDate(`${draft.toYear}-${draft.toMonth}`);
+  }
+
+  return `${draft.toYear}-12-31`;
 }
 
 function normalizeMonthInputValue(value) {
@@ -2069,6 +2080,7 @@ function paintFilterPanel() {
   const isFromMonthActive = hasMonthOptions && Boolean(fromYear);
   const isToMonthActive = hasMonthOptions && Boolean(toYear);
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
+  const hasDraftValue = hasMapDateFilterDraftValue();
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Filtr dat';
@@ -2111,7 +2123,7 @@ function paintFilterPanel() {
       </div>
       <div class="action-row filter-action-row">
         <span class="filter-action-count">${escapeHtml(filteredPeopleLabel)}</span>
-        <button type="button" data-map-date-filter-reset${hasActiveMapDateFilter() ? '' : ' disabled'}>
+        <button type="button" data-map-date-filter-reset${hasDraftValue ? '' : ' disabled'}>
           Wyczysc
         </button>
       </div>
