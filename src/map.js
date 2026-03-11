@@ -76,9 +76,10 @@ const HOVERED_PERSON_RESTORE_DELAY_MS = 160;
 const HOVERED_PERSON_PREVIEW_PAN_DURATION_MS = 560;
 const HOVERED_PERSON_RESTORE_PAN_DURATION_MS = 420;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
+const LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY = 'people:lastSelectedPersonDetails';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const MAX_PERSON_SELECTION_HISTORY_ENTRIES = 100;
-const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
+const MAP_NAVIGATION_HISTORY_STATE_KIND = 'map-navigation';
 const MAP_PERSON_SEARCH_BATCH_SIZE = 50;
 const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
 const MAP_PERSON_SEARCH_SCROLL_THRESHOLD_PX = 120;
@@ -89,6 +90,7 @@ const MAP_DATE_FILTER_SCROLL_THRESHOLD_PX = 120;
 const MAP_DATE_FILTER_ROW_GAP_PX = 10;
 const MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX = 96;
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
+const MAP_VIEWPORT_STORAGE_KEY = 'map:viewportState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
@@ -97,6 +99,7 @@ const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec'
 const EARLIEST_COMPARABLE_DATE = '0001-01-01';
 const LATEST_COMPARABLE_DATE = '9999-12-31';
 const restoredMapPanelState = readStoredMapPanelState();
+const restoredMapViewportState = readStoredMapViewportState();
 const restoredMapDateFilterState = readStoredMapDateFilterState();
 
 let mapInstance;
@@ -125,6 +128,11 @@ let personSelectionHistory = {
   index: -1
 };
 let isPersonSelectionHistoryReady = false;
+let navigationHistoryState = {
+  currentId: 0,
+  maxId: 0
+};
+let shouldRestoreMapViewportOnNextLoad = Boolean(restoredMapViewportState);
 let mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(restoredMapDateFilterState);
 let mapDateFilter = mapDateFilterHasInvalidRange
   ? normalizeMapDateFilter({})
@@ -161,46 +169,29 @@ let hoveredPersonMapAnimationFrame = 0;
 let historyPeopleLoadingSourceRowIds = new Set();
 
 settingsButtonEl?.addEventListener('click', () => {
-  toggleSettingsPanel();
+  toggleSettingsPanel(undefined, { historyEntry: 'push' });
 });
 
 statsButtonEl?.addEventListener('click', () => {
-  if (isSettingsOpen) {
-    toggleSettingsPanel(false);
-  }
-  setInfoPanelMode('stats');
+  openInfoPanelMode('stats');
 });
 
 selectionButtonEl?.addEventListener('click', () => {
-  if (isSettingsOpen) {
-    toggleSettingsPanel(false);
-  }
-  setInfoPanelMode('selection');
+  openInfoPanelMode('selection');
 });
 
 searchButtonEl?.addEventListener('click', () => {
-  if (isSettingsOpen) {
-    toggleSettingsPanel(false);
-  }
-  if (infoPanelMode === 'search') {
+  if (!openInfoPanelMode('search')) {
     focusMapSearchInput();
-    return;
   }
-  setInfoPanelMode('search');
 });
 
 historyButtonEl?.addEventListener('click', () => {
-  if (isSettingsOpen) {
-    toggleSettingsPanel(false);
-  }
-  setInfoPanelMode('history');
+  openInfoPanelMode('history');
 });
 
 filterButtonEl?.addEventListener('click', () => {
-  if (isSettingsOpen) {
-    toggleSettingsPanel(false);
-  }
-  setInfoPanelMode('filter');
+  openInfoPanelMode('filter');
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
@@ -270,13 +261,13 @@ selectionExtraEl?.addEventListener('click', (event) => {
   }
 
   if (historyNavButton.getAttribute('data-history-nav') === 'back') {
-    if (personSelectionHistory.index > 0) {
+    if (navigationHistoryState.currentId > 0) {
       history.back();
     }
     return;
   }
 
-  if (personSelectionHistory.index < personSelectionHistory.entries.length - 1) {
+  if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
     history.forward();
   }
 });
@@ -409,8 +400,12 @@ window.addEventListener('mouseup', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (handleKeyboardHistoryNavigation(event)) {
+    return;
+  }
+
   if (event.key === 'Escape' && isSettingsOpen) {
-    toggleSettingsPanel(false);
+    toggleSettingsPanel(false, { historyEntry: 'push' });
   }
 });
 
@@ -451,14 +446,22 @@ async function bootstrap() {
   });
 }
 
-function toggleSettingsPanel(forceState = !isSettingsOpen) {
-  isSettingsOpen = Boolean(forceState);
+function toggleSettingsPanel(forceState = !isSettingsOpen, options = {}) {
+  const nextState = Boolean(forceState);
+  if (isSettingsOpen === nextState) {
+    return false;
+  }
+
+  isSettingsOpen = nextState;
   syncSettingsPanelVisibility();
   persistMapPanelState();
+  syncNavigationHistoryState(options.historyEntry);
 
   requestAnimationFrame(() => {
     mapInstance?.invalidateSize();
   });
+
+  return true;
 }
 
 function syncSettingsPanelVisibility() {
@@ -539,11 +542,12 @@ function buildMap() {
     crossOrigin: false
   }).addTo(mapInstance);
 
-  focusPoland();
+  applyInitialMapViewport();
   peopleLayer = L.layerGroup().addTo(mapInstance);
   supplementalPeopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
   mapInstance.on('moveend zoomend', () => {
+    persistMapViewportState();
     scheduleVisibleMarkerSync();
   });
 
@@ -568,6 +572,7 @@ async function loadPoints() {
     return;
   }
 
+  const preserveViewport = shouldRestoreMapViewportOnNextLoad;
   clearHoveredPersonSourceRowId();
   const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
   const shouldAutoSelectPerson = infoPanelMode !== 'filter';
@@ -586,7 +591,9 @@ async function loadPoints() {
   clearActiveSelection({ resetPanel: shouldAutoSelectPerson ? !nextPerson : false });
 
   if (nextPerson) {
-    focusSelectionOnMap(nextPerson);
+    if (!preserveViewport) {
+      focusSelectionOnMap(nextPerson);
+    }
     void selectPersonPoint(nextPerson, null, { historyMode: 'restore' });
   }
 
@@ -607,6 +614,7 @@ async function loadPoints() {
     });
   }
 
+  shouldRestoreMapViewportOnNextLoad = false;
   syncSupplementalPeopleMarkers();
   scheduleVisibleMarkerSync(0);
 }
@@ -926,6 +934,19 @@ function focusPoland() {
   mapInstance.fitBounds(POLAND_BOUNDS, {
     padding: [24, 24]
   });
+}
+
+function applyInitialMapViewport() {
+  if (!restoredMapViewportState) {
+    focusPoland();
+    return;
+  }
+
+  mapInstance.setView(
+    [restoredMapViewportState.center.lat, restoredMapViewportState.center.lng],
+    clampMapZoom(mapInstance, restoredMapViewportState.zoom),
+    { animate: false }
+  );
 }
 
 function installAcceleratedWheelZoom(map) {
@@ -1257,7 +1278,10 @@ function resolveCurrentPersonSelection(people) {
       index: -1
     };
     persistPersonSelectionHistory();
-    replaceCurrentPersonHistoryState(null);
+    replaceCurrentNavigationState({
+      sourceRowId: null,
+      historyIndex: -1
+    });
     return null;
   }
 
@@ -1284,7 +1308,10 @@ function resolveCurrentPersonSelection(people) {
     index: 0
   };
   persistPersonSelectionHistory();
-  replaceCurrentPersonHistoryState(fallbackPerson.sourceRowId);
+  replaceCurrentNavigationState({
+    sourceRowId: fallbackPerson.sourceRowId,
+    historyIndex: 0
+  });
   return fallbackPerson;
 }
 
@@ -1433,39 +1460,128 @@ function rebuildBrowserHistoryFromPersonSelectionHistory() {
   const currentEntries = personSelectionHistory.entries;
 
   if (currentEntries.length === 0 || personSelectionHistory.index < 0) {
-    replaceCurrentPersonHistoryState(null);
+    navigationHistoryState = {
+      currentId: 0,
+      maxId: 0
+    };
+    replaceCurrentNavigationState({
+      sourceRowId: null,
+      historyIndex: -1
+    });
     return;
   }
 
-  history.replaceState(buildPersonHistoryState(currentEntries[0], 0), document.title);
+  navigationHistoryState = {
+    currentId: 0,
+    maxId: 0
+  };
+  history.replaceState(
+    buildNavigationHistoryState({
+      sourceRowId: currentEntries[0],
+      historyIndex: 0,
+      isSettingsPanelOpen: personSelectionHistory.index === 0 ? isSettingsOpen : false,
+      infoMode: personSelectionHistory.index === 0 ? infoPanelMode : 'selection',
+      navigationId: 0
+    }),
+    document.title
+  );
 
   for (let index = 1; index <= personSelectionHistory.index; index += 1) {
-    history.pushState(buildPersonHistoryState(currentEntries[index], index), document.title);
+    navigationHistoryState.currentId = index;
+    navigationHistoryState.maxId = index;
+    history.pushState(
+      buildNavigationHistoryState({
+        sourceRowId: currentEntries[index],
+        historyIndex: index,
+        isSettingsPanelOpen: index === personSelectionHistory.index ? isSettingsOpen : false,
+        infoMode: index === personSelectionHistory.index ? infoPanelMode : 'selection',
+        navigationId: index
+      }),
+      document.title
+    );
   }
+
+  navigationHistoryState.currentId = personSelectionHistory.index;
+  navigationHistoryState.maxId = personSelectionHistory.index;
 }
 
-function buildPersonHistoryState(sourceRowId, index) {
+function buildNavigationHistoryState({
+  sourceRowId = getCurrentSelectedPersonSourceRowId(),
+  historyIndex = personSelectionHistory.index,
+  isSettingsPanelOpen = isSettingsOpen,
+  infoMode = infoPanelMode,
+  navigationId = navigationHistoryState.currentId
+} = {}) {
   return {
-    kind: PERSON_SELECTION_HISTORY_STATE_KIND,
+    kind: MAP_NAVIGATION_HISTORY_STATE_KIND,
     sourceRowId: sourceRowId || null,
-    historyIndex: index
+    historyIndex: Number.isInteger(historyIndex) ? historyIndex : -1,
+    infoPanelMode: normalizeInfoPanelMode(infoMode),
+    isSettingsOpen: Boolean(isSettingsPanelOpen),
+    navigationId: Number.isInteger(navigationId) && navigationId >= 0 ? navigationId : 0
   };
 }
 
-function replaceCurrentPersonHistoryState(sourceRowId) {
-  const nextIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1;
-  history.replaceState(buildPersonHistoryState(sourceRowId, nextIndex), document.title);
+function replaceCurrentNavigationState({
+  sourceRowId = getCurrentSelectedPersonSourceRowId(),
+  historyIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1,
+  isSettingsPanelOpen = isSettingsOpen,
+  infoMode = infoPanelMode
+} = {}) {
+  const nextState = buildNavigationHistoryState({
+    sourceRowId,
+    historyIndex,
+    isSettingsPanelOpen,
+    infoMode,
+    navigationId: navigationHistoryState.currentId
+  });
+
+  history.replaceState(nextState, document.title);
+  navigationHistoryState.maxId = Math.max(
+    navigationHistoryState.maxId,
+    navigationHistoryState.currentId
+  );
 }
 
-function pushPersonSelectionToHistory(sourceRowId) {
-  if (!sourceRowId) {
+function pushCurrentNavigationState({
+  sourceRowId = getCurrentSelectedPersonSourceRowId(),
+  historyIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1,
+  isSettingsPanelOpen = isSettingsOpen,
+  infoMode = infoPanelMode
+} = {}) {
+  const nextNavigationId = navigationHistoryState.currentId + 1;
+  const nextState = buildNavigationHistoryState({
+    sourceRowId,
+    historyIndex,
+    isSettingsPanelOpen,
+    infoMode,
+    navigationId: nextNavigationId
+  });
+
+  history.pushState(nextState, document.title);
+  navigationHistoryState.currentId = nextNavigationId;
+  navigationHistoryState.maxId = nextNavigationId;
+}
+
+function syncNavigationHistoryState(historyEntry) {
+  if (historyEntry === 'push') {
+    pushCurrentNavigationState();
     return;
+  }
+
+  if (historyEntry === 'replace') {
+    replaceCurrentNavigationState();
+  }
+}
+
+function recordPersonSelectionHistory(sourceRowId) {
+  if (!sourceRowId) {
+    return false;
   }
 
   const currentSourceRowId = personSelectionHistory.entries[personSelectionHistory.index];
   if (currentSourceRowId === sourceRowId) {
-    replaceCurrentPersonHistoryState(sourceRowId);
-    return;
+    return false;
   }
 
   const nextEntries = personSelectionHistory.entries.slice(0, personSelectionHistory.index + 1);
@@ -1475,7 +1591,7 @@ function pushPersonSelectionToHistory(sourceRowId) {
     index: nextEntries.length - 1
   };
   persistPersonSelectionHistory();
-  history.pushState(buildPersonHistoryState(sourceRowId, personSelectionHistory.index), document.title);
+  return true;
 }
 
 function syncPersonSelectionHistoryIndex(historyIndex, sourceRowId) {
@@ -1502,14 +1618,32 @@ function syncPersonSelectionHistoryIndex(historyIndex, sourceRowId) {
 
 function handlePersonSelectionPopState(event) {
   const state = event.state;
-  if (state?.kind !== PERSON_SELECTION_HISTORY_STATE_KIND) {
+  if (state?.kind !== MAP_NAVIGATION_HISTORY_STATE_KIND) {
     return;
   }
 
-  const historyIndex = clampHistoryIndex(state.historyIndex, personSelectionHistory.entries.length || 1);
   const sourceRowId = state.sourceRowId ? String(state.sourceRowId) : null;
+  const shouldClearHistory = !sourceRowId && Number(state.historyIndex) < 0;
+  navigationHistoryState.currentId = Number.isInteger(state.navigationId) ? state.navigationId : 0;
+  navigationHistoryState.maxId = Math.max(
+    navigationHistoryState.maxId,
+    navigationHistoryState.currentId
+  );
 
-  syncPersonSelectionHistoryIndex(historyIndex, sourceRowId);
+  if (sourceRowId) {
+    const historyIndex = clampHistoryIndex(
+      state.historyIndex,
+      personSelectionHistory.entries.length || 1
+    );
+    syncPersonSelectionHistoryIndex(historyIndex, sourceRowId);
+  } else if (shouldClearHistory) {
+    syncPersonSelectionHistoryIndex(-1, null);
+  }
+
+  applyNavigationPanelState({
+    infoMode: state.infoPanelMode,
+    isSettingsPanelOpen: state.isSettingsOpen
+  });
 
   if (!sourceRowId) {
     clearActiveSelection({ resetPanel: true });
@@ -1550,7 +1684,7 @@ function handleMouseHistoryNavigation(event) {
   if (event.button === 3) {
     event.preventDefault();
     event.stopPropagation();
-    if (personSelectionHistory.index > 0) {
+    if (navigationHistoryState.currentId > 0) {
       history.back();
     }
     return;
@@ -1559,10 +1693,34 @@ function handleMouseHistoryNavigation(event) {
   if (event.button === 4) {
     event.preventDefault();
     event.stopPropagation();
-    if (personSelectionHistory.index >= 0 && personSelectionHistory.index < personSelectionHistory.entries.length - 1) {
+    if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
       history.forward();
     }
   }
+}
+
+function handleKeyboardHistoryNavigation(event) {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    return false;
+  }
+
+  if (event.key === 'ArrowLeft') {
+    if (navigationHistoryState.currentId > 0) {
+      event.preventDefault();
+      history.back();
+    }
+    return true;
+  }
+
+  if (event.key === 'ArrowRight') {
+    if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
+      event.preventDefault();
+      history.forward();
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function readStoredMapPanelState() {
@@ -1618,6 +1776,69 @@ function persistMapPanelState() {
   }
 }
 
+function readStoredMapViewportState() {
+  try {
+    const raw = window.localStorage.getItem(MAP_VIEWPORT_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    return normalizeMapViewportState(JSON.parse(raw));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function normalizeMapViewportState(input) {
+  const lat = Number(input?.center?.lat);
+  const lng = Number(input?.center?.lng);
+  const zoom = Number(input?.zoom);
+
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    !Number.isFinite(zoom) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    return null;
+  }
+
+  return {
+    center: { lat, lng },
+    zoom
+  };
+}
+
+function persistMapViewportState() {
+  if (!mapInstance) {
+    return;
+  }
+
+  const center = mapInstance.getCenter?.();
+  const zoom = mapInstance.getZoom?.();
+  if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng) || !Number.isFinite(zoom)) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      MAP_VIEWPORT_STORAGE_KEY,
+      JSON.stringify({
+        center: {
+          lat: center.lat,
+          lng: center.lng
+        },
+        zoom
+      })
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
 function readStoredMapDateFilterState() {
   try {
     const raw = window.localStorage.getItem(MAP_DATE_FILTER_STORAGE_KEY);
@@ -1658,6 +1879,21 @@ function saveLastSelectedPersonId(sourceRowId) {
 
   try {
     window.localStorage.setItem(LAST_SELECTED_PERSON_STORAGE_KEY, sourceRowId);
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
+function saveLastSelectedPersonDetails(details) {
+  if (!details?.person?.sourceRowId) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY,
+      JSON.stringify(details)
+    );
   } catch (_error) {
     // Ignore storage failures and keep the current session working.
   }
@@ -1869,19 +2105,28 @@ async function selectPersonPoint(person, marker, options = {}) {
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
   cacheKnownPeople([person]);
+  const panelStateChanged = applySelectionPanelState(options.panelMode);
 
   saveLastSelectedPersonId(person.sourceRowId);
   if (options.historyMode !== 'restore') {
-    pushPersonSelectionToHistory(person.sourceRowId);
+    const personHistoryChanged = recordPersonSelectionHistory(person.sourceRowId);
+    if (personHistoryChanged || panelStateChanged) {
+      pushCurrentNavigationState({
+        sourceRowId: person.sourceRowId,
+        historyIndex: personSelectionHistory.index
+      });
+    } else {
+      replaceCurrentNavigationState({
+        sourceRowId: person.sourceRowId,
+        historyIndex: personSelectionHistory.index
+      });
+    }
   }
   setActiveSelection({
     key,
     type: 'person',
     marker
   });
-  if (options.panelMode) {
-    setInfoPanelMode(options.panelMode);
-  }
   const ensuredMarker = ensurePersonMarkerVisible(person);
   if (activeSelection?.key === key) {
     activeSelection.marker = ensuredMarker;
@@ -1895,20 +2140,19 @@ async function selectPersonPoint(person, marker, options = {}) {
   }
 
   cacheKnownPeople([details.person]);
+  saveLastSelectedPersonDetails(details);
   renderPersonSelection(details);
 }
 
 function selectCustomPoint(point, marker, options = {}) {
   clearHoveredPersonSourceRowId({ restoreMap: false });
   selectionRequestToken += 1;
+  applySelectionPanelState(options.panelMode);
   setActiveSelection({
     key: buildCustomPointKey(point),
     type: 'custom',
     marker
   });
-  if (options.panelMode) {
-    setInfoPanelMode(options.panelMode);
-  }
   renderCustomPointSelection(point);
 }
 
@@ -2182,10 +2426,65 @@ function buildCustomPointPopupHtml(point) {
   return `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(point.addressText || 'Punkt lokalny')}`;
 }
 
-function setInfoPanelMode(mode) {
+function openInfoPanelMode(mode) {
+  const nextMode = normalizeInfoPanelMode(mode);
+  if (!isSettingsOpen && infoPanelMode === nextMode) {
+    return false;
+  }
+
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false, { historyEntry: 'skip' });
+  }
+
+  setInfoPanelMode(nextMode, { historyEntry: 'skip' });
+  pushCurrentNavigationState();
+  return true;
+}
+
+function applyNavigationPanelState({
+  infoMode = infoPanelMode,
+  isSettingsPanelOpen = isSettingsOpen
+} = {}) {
+  const nextMode = normalizeInfoPanelMode(infoMode);
+  let didChange = false;
+
+  if (infoPanelMode !== nextMode) {
+    setInfoPanelMode(nextMode, { historyEntry: 'skip' });
+    didChange = true;
+  }
+
+  if (isSettingsOpen !== Boolean(isSettingsPanelOpen)) {
+    toggleSettingsPanel(Boolean(isSettingsPanelOpen), { historyEntry: 'skip' });
+    didChange = true;
+  }
+
+  return didChange;
+}
+
+function applySelectionPanelState(panelMode) {
+  const nextMode = panelMode ? normalizeInfoPanelMode(panelMode) : null;
+  let didChange = false;
+
+  if (isSettingsOpen) {
+    toggleSettingsPanel(false, { historyEntry: 'skip' });
+    didChange = true;
+  }
+
+  if (nextMode && infoPanelMode !== nextMode) {
+    setInfoPanelMode(nextMode, { historyEntry: 'skip' });
+    didChange = true;
+  }
+
+  return didChange;
+}
+
+function setInfoPanelMode(mode, options = {}) {
   const nextMode = normalizeInfoPanelMode(mode);
   if (infoPanelMode === nextMode) {
-    return;
+    if (options.historyEntry === 'replace') {
+      replaceCurrentNavigationState();
+    }
+    return false;
   }
 
   clearHoveredPersonSourceRowId();
@@ -2193,6 +2492,8 @@ function setInfoPanelMode(mode) {
   syncInfoToolButtons();
   persistMapPanelState();
   renderCurrentInfoPanel();
+  syncNavigationHistoryState(options.historyEntry);
+  return true;
 }
 
 function renderCurrentInfoPanel() {

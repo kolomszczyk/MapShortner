@@ -14,6 +14,8 @@ const PEOPLE_SEARCH_BATCH_SIZE = 50;
 const PEOPLE_SEARCH_SCROLL_THRESHOLD_PX = 120;
 const PEOPLE_SEARCH_ROW_GAP_PX = 10;
 const PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 96;
+const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
+const LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY = 'people:lastSelectedPersonDetails';
 
 const searchInput = document.getElementById('people-search');
 const resultsEl = document.getElementById('people-results');
@@ -28,6 +30,7 @@ const notesListEl = document.getElementById('person-notes');
 let activePersonId = null;
 let searchTimer = null;
 let peopleSearchRequestToken = 0;
+let personDetailsRequestToken = 0;
 let peopleSearchRowHeight = PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let peopleSearchState = {
   query: '',
@@ -87,13 +90,19 @@ bootstrap();
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
   applySummary(bootstrapData.summary);
-  await loadPeople('', { reset: true });
+  const restoredSelectionPromise = restoreInitialPersonSelection();
+  await loadPeople('', { reset: true, allowSelectionFallback: !activePersonId });
+  const restoredSelection = await restoredSelectionPromise;
+  if (!restoredSelection && !activePersonId && peopleSearchState.items.length > 0) {
+    void loadPerson(peopleSearchState.items[0].sourceRowId);
+  }
 }
 
 async function loadPeople(query, options = {}) {
   const requestToken = options.requestToken ?? ++peopleSearchRequestToken;
   const normalizedQuery = String(query || '');
   const reset = options.reset !== false;
+  const allowSelectionFallback = options.allowSelectionFallback !== false;
 
   peopleSearchState = reset
     ? {
@@ -144,6 +153,7 @@ async function loadPeople(query, options = {}) {
 
   if (
     reset &&
+    allowSelectionFallback &&
     peopleSearchState.items.length > 0 &&
     !peopleSearchState.items.some((person) => person.sourceRowId === activePersonId)
   ) {
@@ -285,13 +295,39 @@ function getPeopleSearchRowStride() {
 }
 
 async function loadPerson(sourceRowId) {
-  const details = await window.appApi.getPersonDetails(sourceRowId);
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  if (!normalizedSourceRowId) {
+    return false;
+  }
+
+  const requestToken = ++personDetailsRequestToken;
+  const details = await window.appApi.getPersonDetails(normalizedSourceRowId);
+  if (requestToken !== personDetailsRequestToken) {
+    return false;
+  }
+
   if (!details) {
+    if (activePersonId === normalizedSourceRowId) {
+      activePersonId = null;
+      syncPeopleSelectionState();
+      renderEmptyPersonDetails();
+    }
+    clearStoredLastSelectedPerson();
+    return false;
+  }
+
+  activePersonId = normalizedSourceRowId;
+  persistLastSelectedPerson(details);
+  syncPeopleSelectionState();
+  renderPersonDetails(details);
+  return true;
+}
+
+function renderPersonDetails(details) {
+  if (!details?.person) {
     return;
   }
 
-  activePersonId = sourceRowId;
-  syncPeopleSelectionState();
   detailTitleEl.textContent = details.person.fullName || 'Szczegoly osoby';
   detailMetaEl.innerHTML = renderKeyValueList([
     { label: 'Adres', value: details.person.routeAddress || details.person.addressText },
@@ -335,6 +371,78 @@ async function loadPerson(sourceRowId) {
         )
         .join('')
     : '<p class="empty-state">Brak lokalnych notatek.</p>';
+}
+
+async function restoreInitialPersonSelection() {
+  const lastSelectedPersonId = readLastSelectedPersonId();
+  if (!lastSelectedPersonId) {
+    return false;
+  }
+
+  activePersonId = lastSelectedPersonId;
+  syncPeopleSelectionState();
+
+  const cachedDetails = readStoredLastSelectedPersonDetails(lastSelectedPersonId);
+  if (cachedDetails) {
+    renderPersonDetails(cachedDetails);
+  }
+
+  return loadPerson(lastSelectedPersonId);
+}
+
+function renderEmptyPersonDetails() {
+  detailTitleEl.textContent = 'Wybierz osobe z listy';
+  detailMetaEl.innerHTML = '';
+  serviceCardsEl.innerHTML = '<p class="empty-state">Brak kart serwisowych dla wybranej osoby.</p>';
+  notesListEl.innerHTML = '<p class="empty-state">Brak lokalnych notatek.</p>';
+}
+
+function readLastSelectedPersonId() {
+  try {
+    return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function readStoredLastSelectedPersonDetails(sourceRowId) {
+  try {
+    const raw = window.localStorage.getItem(LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed?.person?.sourceRowId === sourceRowId ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function persistLastSelectedPerson(details) {
+  const sourceRowId = details?.person?.sourceRowId;
+  if (!sourceRowId) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LAST_SELECTED_PERSON_STORAGE_KEY, sourceRowId);
+    window.localStorage.setItem(
+      LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY,
+      JSON.stringify(details)
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
+function clearStoredLastSelectedPerson() {
+  try {
+    window.localStorage.removeItem(LAST_SELECTED_PERSON_STORAGE_KEY);
+    window.localStorage.removeItem(LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY);
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
 }
 
 function syncPeopleSelectionState() {
