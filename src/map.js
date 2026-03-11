@@ -3456,7 +3456,8 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
           <div class="legend-value-box">
             ${renderMapTimeColorPreviewField(range, 'left')}
           </div>
-          <div class="legend-chip-swatch" aria-hidden="true">
+          <div class="legend-chip-swatch">
+            <i class="legend-chip-swatch-fill" aria-hidden="true"></i>
             <input
               class="legend-chip-color-input"
               type="color"
@@ -3465,6 +3466,9 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
               data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
               aria-label="Kolor zakresu ${escapeHtml(range.label || '')}"
             />
+            <span class="legend-chip-swatch-edit" aria-hidden="true">
+              <i class="fa-solid fa-pen"></i>
+            </span>
           </div>
           <div class="legend-value-box">
             ${renderMapTimeColorPreviewField(range, 'right')}
@@ -4452,11 +4456,6 @@ function syncTimeColorPreview(options = {}) {
     const fieldName = inputElement.getAttribute('data-map-time-color-preview-field');
     const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
     if (!range || !fieldName) {
-      return;
-    }
-
-    if (fieldName === 'color') {
-      inputElement.value = range.color;
       return;
     }
 
