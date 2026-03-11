@@ -71,6 +71,10 @@ const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
 const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
+const HOVERED_PERSON_PREVIEW_DELAY_MS = 320;
+const HOVERED_PERSON_RESTORE_DELAY_MS = 160;
+const HOVERED_PERSON_PREVIEW_PAN_DURATION_MS = 560;
+const HOVERED_PERSON_RESTORE_PAN_DURATION_MS = 420;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const MAX_PERSON_SELECTION_HISTORY_ENTRIES = 100;
@@ -142,6 +146,7 @@ let mapSearchRowHeight = MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let mapDateFilterRenderedCount = 0;
 let mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
 let hoveredPersonSourceRowId = null;
+let hoveredPersonPreviewedSourceRowId = null;
 let hoveredPersonMapRestoreState = null;
 let selectionExtraPointerState = {
   clientX: null,
@@ -150,6 +155,9 @@ let selectionExtraPointerState = {
 };
 let hoveredPersonPointerSyncFrame = 0;
 let hoveredPersonPointerSyncTimeout = 0;
+let hoveredPersonPreviewTimer = 0;
+let hoveredPersonRestoreTimer = 0;
+let hoveredPersonMapAnimationFrame = 0;
 let historyPeopleLoadingSourceRowIds = new Set();
 
 settingsButtonEl?.addEventListener('click', () => {
@@ -350,7 +358,7 @@ selectionExtraEl?.addEventListener('mouseout', (event) => {
     return;
   }
 
-  clearHoveredPersonSourceRowId();
+  scheduleHoveredPersonSourceRowIdClear();
 });
 
 selectionExtraEl?.addEventListener('pointermove', (event) => {
@@ -368,7 +376,7 @@ selectionExtraEl?.addEventListener('pointerleave', () => {
     clientY: null,
     isInside: false
   };
-  clearHoveredPersonSourceRowId();
+  scheduleHoveredPersonSourceRowIdClear();
 });
 
 selectionExtraEl?.addEventListener(
@@ -1665,6 +1673,18 @@ function focusSelectionOnMap(person) {
   });
 }
 
+function focusPersonPreviewOnMap(person) {
+  if (!mapInstance || !Number.isFinite(person?.lat) || !Number.isFinite(person?.lng)) {
+    return;
+  }
+
+  animateHoveredPersonMapView({
+    center: [person.lat, person.lng],
+    zoom: mapInstance.getZoom(),
+    durationMs: HOVERED_PERSON_PREVIEW_PAN_DURATION_MS
+  });
+}
+
 function rememberMapViewBeforeHoveredPersonPreview() {
   if (hoveredPersonMapRestoreState || !mapInstance) {
     return;
@@ -1689,13 +1709,116 @@ function restoreMapViewAfterHoveredPersonPreview() {
 
   const { center, zoom } = hoveredPersonMapRestoreState;
   hoveredPersonMapRestoreState = null;
-  mapInstance.setView(center, zoom, {
-    animate: false
+  hoveredPersonPreviewedSourceRowId = null;
+  animateHoveredPersonMapView({
+    center,
+    zoom,
+    durationMs: HOVERED_PERSON_RESTORE_PAN_DURATION_MS
   });
 }
 
 function discardHoveredPersonMapRestoreState() {
   hoveredPersonMapRestoreState = null;
+  hoveredPersonPreviewedSourceRowId = null;
+  stopHoveredPersonMapAnimation();
+}
+
+function animateHoveredPersonMapView({ center, zoom, durationMs }) {
+  if (
+    !mapInstance ||
+    !Array.isArray(center) ||
+    center.length < 2 ||
+    !Number.isFinite(center[0]) ||
+    !Number.isFinite(center[1]) ||
+    !Number.isFinite(zoom)
+  ) {
+    return;
+  }
+
+  stopHoveredPersonMapAnimation();
+
+  const currentCenter = mapInstance.getCenter?.();
+  const currentZoom = mapInstance.getZoom?.();
+  if (
+    !currentCenter ||
+    !Number.isFinite(currentCenter.lat) ||
+    !Number.isFinite(currentCenter.lng) ||
+    !Number.isFinite(currentZoom)
+  ) {
+    mapInstance.setView(center, zoom, { animate: false });
+    return;
+  }
+
+  const startState = {
+    lat: currentCenter.lat,
+    lng: currentCenter.lng,
+    zoom: currentZoom
+  };
+  const targetState = {
+    lat: center[0],
+    lng: center[1],
+    zoom
+  };
+
+  if (
+    Math.abs(startState.lat - targetState.lat) < 0.000001 &&
+    Math.abs(startState.lng - targetState.lng) < 0.000001 &&
+    Math.abs(startState.zoom - targetState.zoom) < 0.000001
+  ) {
+    mapInstance.setView(center, zoom, { animate: false });
+    return;
+  }
+
+  const startedAt = performance.now();
+  const totalDurationMs = Math.max(1, durationMs || 1);
+
+  const step = (now) => {
+    const rawProgress = Math.min(1, (now - startedAt) / totalDurationMs);
+    const easedProgress = easeInOutQuint(rawProgress);
+    const nextLat = interpolateNumber(startState.lat, targetState.lat, easedProgress);
+    const nextLng = interpolateNumber(startState.lng, targetState.lng, easedProgress);
+    const nextZoom = interpolateNumber(startState.zoom, targetState.zoom, easedProgress);
+
+    mapInstance.setView([nextLat, nextLng], nextZoom, {
+      animate: false
+    });
+
+    if (rawProgress >= 1) {
+      hoveredPersonMapAnimationFrame = 0;
+      return;
+    }
+
+    hoveredPersonMapAnimationFrame = window.requestAnimationFrame(step);
+  };
+
+  hoveredPersonMapAnimationFrame = window.requestAnimationFrame(step);
+}
+
+function stopHoveredPersonMapAnimation() {
+  if (!hoveredPersonMapAnimationFrame) {
+    return;
+  }
+
+  window.cancelAnimationFrame(hoveredPersonMapAnimationFrame);
+  hoveredPersonMapAnimationFrame = 0;
+}
+
+function interpolateNumber(start, end, progress) {
+  return start + (end - start) * progress;
+}
+
+function easeInOutQuint(progress) {
+  if (progress <= 0) {
+    return 0;
+  }
+
+  if (progress >= 1) {
+    return 1;
+  }
+
+  return progress < 0.5
+    ? 16 * Math.pow(progress, 5)
+    : 1 - Math.pow(-2 * progress + 2, 5) / 2;
 }
 
 function attachLazyPopup(marker, buildHtml, onSelect) {
@@ -2939,13 +3062,13 @@ function syncHoveredPersonFromPointer() {
 
   const hoveredElement = document.elementFromPoint(clientX, clientY);
   if (!hoveredElement || !selectionExtraEl.contains(hoveredElement)) {
-    clearHoveredPersonSourceRowId();
+    scheduleHoveredPersonSourceRowIdClear();
     return;
   }
 
   const personRow = hoveredElement.closest('[data-map-hover-source-row-id]');
   if (!personRow || !selectionExtraEl.contains(personRow)) {
-    clearHoveredPersonSourceRowId();
+    scheduleHoveredPersonSourceRowIdClear();
     return;
   }
 
@@ -2954,7 +3077,12 @@ function syncHoveredPersonFromPointer() {
 
 function setHoveredPersonSourceRowId(sourceRowId) {
   const normalizedSourceRowId = typeof sourceRowId === 'string' ? sourceRowId : '';
+  cancelHoveredPersonRestore();
+
   if (hoveredPersonSourceRowId === normalizedSourceRowId) {
+    if (normalizedSourceRowId && hoveredPersonPreviewedSourceRowId !== normalizedSourceRowId) {
+      scheduleHoveredPersonPreview(normalizedSourceRowId);
+    }
     return;
   }
 
@@ -2965,24 +3093,25 @@ function setHoveredPersonSourceRowId(sourceRowId) {
   syncPersonMarkerAppearanceBySourceRowId(previousSourceRowId);
 
   if (!hoveredPersonSourceRowId) {
+    cancelHoveredPersonPreview();
     return;
   }
 
   const person = findPersonBySourceRowId(hoveredPersonSourceRowId);
   if (!person) {
-    hoveredPersonSourceRowId = null;
-    restoreMapViewAfterHoveredPersonPreview();
+    clearHoveredPersonSourceRowId();
     return;
   }
 
-  rememberMapViewBeforeHoveredPersonPreview();
-  focusSelectionOnMap(person);
-  const marker = ensurePersonMarkerVisible(person);
+  const marker = getPersonMarkerBySourceRowId(hoveredPersonSourceRowId);
   syncPersonMarkerAppearance(marker, hoveredPersonSourceRowId);
+  scheduleHoveredPersonPreview(hoveredPersonSourceRowId);
 }
 
 function clearHoveredPersonSourceRowId(options = {}) {
   const shouldRestoreMap = options.restoreMap !== false;
+  cancelHoveredPersonPreview();
+  cancelHoveredPersonRestore();
   if (!hoveredPersonSourceRowId) {
     if (shouldRestoreMap) {
       restoreMapViewAfterHoveredPersonPreview();
@@ -2994,6 +3123,7 @@ function clearHoveredPersonSourceRowId(options = {}) {
 
   const previousSourceRowId = hoveredPersonSourceRowId;
   hoveredPersonSourceRowId = null;
+  hoveredPersonPreviewedSourceRowId = null;
   syncHoveredPersonListRows();
   syncSupplementalPeopleMarkers();
   syncPersonMarkerAppearanceBySourceRowId(previousSourceRowId);
@@ -3003,6 +3133,65 @@ function clearHoveredPersonSourceRowId(options = {}) {
   } else {
     discardHoveredPersonMapRestoreState();
   }
+}
+
+function scheduleHoveredPersonPreview(sourceRowId) {
+  cancelHoveredPersonPreview();
+  if (!sourceRowId || hoveredPersonPreviewedSourceRowId === sourceRowId) {
+    return;
+  }
+
+  hoveredPersonPreviewTimer = window.setTimeout(() => {
+    hoveredPersonPreviewTimer = 0;
+    runHoveredPersonPreview(sourceRowId);
+  }, HOVERED_PERSON_PREVIEW_DELAY_MS);
+}
+
+function runHoveredPersonPreview(sourceRowId) {
+  if (!sourceRowId || hoveredPersonSourceRowId !== sourceRowId) {
+    return;
+  }
+
+  const person = findPersonBySourceRowId(sourceRowId);
+  if (!person) {
+    clearHoveredPersonSourceRowId();
+    return;
+  }
+
+  rememberMapViewBeforeHoveredPersonPreview();
+  focusPersonPreviewOnMap(person);
+  const marker = ensurePersonMarkerVisible(person, {
+    allowMapPan: false
+  });
+  syncPersonMarkerAppearance(marker, sourceRowId);
+  hoveredPersonPreviewedSourceRowId = sourceRowId;
+}
+
+function scheduleHoveredPersonSourceRowIdClear(options = {}) {
+  cancelHoveredPersonPreview();
+  cancelHoveredPersonRestore();
+  hoveredPersonRestoreTimer = window.setTimeout(() => {
+    hoveredPersonRestoreTimer = 0;
+    clearHoveredPersonSourceRowId(options);
+  }, HOVERED_PERSON_RESTORE_DELAY_MS);
+}
+
+function cancelHoveredPersonPreview() {
+  if (!hoveredPersonPreviewTimer) {
+    return;
+  }
+
+  window.clearTimeout(hoveredPersonPreviewTimer);
+  hoveredPersonPreviewTimer = 0;
+}
+
+function cancelHoveredPersonRestore() {
+  if (!hoveredPersonRestoreTimer) {
+    return;
+  }
+
+  window.clearTimeout(hoveredPersonRestoreTimer);
+  hoveredPersonRestoreTimer = 0;
 }
 
 function syncHoveredPersonListRows() {
@@ -3065,7 +3254,7 @@ async function loadMissingHistoryPeople(sourceRowIds) {
   }
 }
 
-function ensurePersonMarkerVisible(person) {
+function ensurePersonMarkerVisible(person, options = {}) {
   if (!person?.sourceRowId) {
     return null;
   }
@@ -3077,7 +3266,10 @@ function ensurePersonMarkerVisible(person) {
   }
 
   const point = [person.lat, person.lng];
-  if (isHiddenByCurrentFilter || !mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING).contains(point)) {
+  const shouldPanToPoint =
+    options.allowMapPan !== false &&
+    (isHiddenByCurrentFilter || !mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING).contains(point));
+  if (shouldPanToPoint) {
     mapInstance.panTo(point, {
       animate: false
     });
