@@ -377,6 +377,17 @@ selectionExtraEl?.addEventListener('click', (event) => {
     return;
   }
 
+  const legendValueBox = event.target.closest('.legend-value-box');
+  if (legendValueBox && infoPanelMode === 'colors') {
+    const input = legendValueBox.querySelector('.legend-value-input');
+    if (input) {
+      input.focus();
+      const valueLength = typeof input.value === 'string' ? input.value.length : 0;
+      input.setSelectionRange?.(valueLength, valueLength);
+    }
+    return;
+  }
+
   const historyRowButton = event.target.closest('[data-history-source-row-id]');
   if (historyRowButton && infoPanelMode === 'history') {
     const sourceRowId = historyRowButton.getAttribute('data-history-source-row-id');
@@ -411,6 +422,16 @@ selectionExtraEl?.addEventListener('click', (event) => {
 selectionExtraEl?.addEventListener('input', (event) => {
   const searchField = event.target.closest('[data-map-person-search-input]');
   if (!searchField || infoPanelMode !== 'search') {
+    const previewField = event.target.closest('[data-map-time-color-preview-field]');
+    if (previewField && infoPanelMode === 'colors') {
+      updateMapTimeColorRangeFromPreviewField(
+        previewField.getAttribute('data-map-time-color-preview-range-id'),
+        previewField.getAttribute('data-map-time-color-preview-field'),
+        previewField.value
+      );
+      return;
+    }
+
     const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] textarea');
     if (!timeColorField || infoPanelMode !== 'colors') {
       return;
@@ -431,6 +452,16 @@ selectionExtraEl?.addEventListener('input', (event) => {
 });
 
 selectionExtraEl?.addEventListener('change', (event) => {
+  const previewField = event.target.closest('[data-map-time-color-preview-field]');
+  if (previewField && infoPanelMode === 'colors') {
+    updateMapTimeColorRangeFromPreviewField(
+      previewField.getAttribute('data-map-time-color-preview-range-id'),
+      previewField.getAttribute('data-map-time-color-preview-field'),
+      previewField.value
+    );
+    return;
+  }
+
   const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] select');
   if (timeColorField && infoPanelMode === 'colors') {
     const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
@@ -474,6 +505,18 @@ selectionExtraEl?.addEventListener('change', (event) => {
 });
 
 selectionExtraEl?.addEventListener('pointerdown', (event) => {
+  const legendValueBox = event.target.closest('.legend-value-box');
+  if (legendValueBox && infoPanelMode === 'colors') {
+    const input = legendValueBox.querySelector('.legend-value-input');
+    if (input) {
+      event.preventDefault();
+      input.focus();
+      const valueLength = typeof input.value === 'string' ? input.value.length : 0;
+      input.setSelectionRange?.(valueLength, valueLength);
+    }
+    return;
+  }
+
   const dragHandle = event.target.closest('[data-map-time-color-chart-handle]');
   const dragBar = event.target.closest('[data-map-time-color-chart-bar-drag]');
   const dragTarget = dragHandle || dragBar;
@@ -3411,18 +3454,74 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
       >
         <div class="legend-chip-data">
           <div class="legend-value-box">
-            <strong>${escapeHtml(formatMapTimeColorRangeStart(range))}</strong>
+            ${renderMapTimeColorPreviewField(range, 'left')}
+          </div>
+          <div class="legend-chip-swatch" aria-hidden="true">
+            <input
+              class="legend-chip-color-input"
+              type="color"
+              value="${escapeHtml(range.color)}"
+              data-map-time-color-preview-field="color"
+              data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
+              aria-label="Kolor zakresu ${escapeHtml(range.label || '')}"
+            />
           </div>
           <div class="legend-value-box">
-            <strong>${escapeHtml(formatMapTimeColorRangeEnd(range))}</strong>
+            ${renderMapTimeColorPreviewField(range, 'right')}
           </div>
-        </div>
-        <div class="legend-chip-swatch" aria-hidden="true">
-          <i aria-hidden="true"></i>
         </div>
       </div>
     `)
     .join('');
+}
+
+function renderMapTimeColorPreviewField(range, side) {
+  const isLeft = side === 'left';
+  if (range.mode === 'dates') {
+    const fieldName = isLeft ? 'dateTo' : 'dateFrom';
+    const fieldValue = isLeft ? range.dateTo : range.dateFrom;
+    const fieldSize = Math.max(4, String(fieldValue || '').length || 0);
+    return `
+      <input
+        class="legend-value-input"
+        type="text"
+        value="${escapeHtml(fieldValue || '')}"
+        size="${escapeHtml(String(fieldSize))}"
+        inputmode="numeric"
+        pattern="[0-9-]*"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="brak"
+        data-map-time-color-preview-field="${fieldName}"
+        data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
+      />
+      <span class="legend-value-edit-icon" aria-hidden="true">
+        <i class="fa-solid fa-pen"></i>
+      </span>
+    `;
+  }
+
+  const fieldName = isLeft ? 'daysTo' : 'daysFrom';
+  const fieldValue = isLeft ? range.daysTo : range.daysFrom;
+  const fieldSize = Math.max(4, String(fieldValue || '').length || 0);
+  return `
+    <input
+      class="legend-value-input"
+      type="text"
+      value="${escapeHtml(fieldValue || '')}"
+      size="${escapeHtml(String(fieldSize))}"
+      inputmode="numeric"
+      pattern="[0-9]*"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="brak"
+      data-map-time-color-preview-field="${fieldName}"
+      data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
+    />
+    <span class="legend-value-edit-icon" aria-hidden="true">
+      <i class="fa-solid fa-pen"></i>
+    </span>
+  `;
 }
 
 function renderMapTimeColorChartMarkup(ranges = mapTimeColorRanges) {
@@ -4284,7 +4383,57 @@ function getMapTimeColorRangeDateComparableValue(value) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function syncTimeColorPreview() {
+function updateMapTimeColorRangeFromPreviewField(rangeId, fieldName, fieldValue) {
+  if (!rangeId || !fieldName) {
+    return;
+  }
+
+  const rangeIndex = mapTimeColorRanges.findIndex((entry) => entry.id === rangeId);
+  if (rangeIndex < 0) {
+    return;
+  }
+
+  const currentRange = mapTimeColorRanges[rangeIndex];
+  const sanitizedFieldValue = sanitizeMapTimeColorPreviewFieldValue(fieldName, fieldValue);
+  const nextRange = normalizeMapTimeColorRange({
+    ...currentRange,
+    [fieldName]: sanitizedFieldValue
+  }, rangeIndex);
+
+  mapTimeColorRanges = mapTimeColorRanges.map((entry, index) => {
+    return index === rangeIndex ? nextRange : entry;
+  });
+  persistMapTimeColorRanges();
+  syncTimeColorPreview({ skipPreviewRerender: true });
+}
+
+function sanitizeMapTimeColorPreviewFieldValue(fieldName, fieldValue) {
+  const normalizedFieldName = typeof fieldName === 'string' ? fieldName : '';
+  const normalizedFieldValue = typeof fieldValue === 'string' ? fieldValue : '';
+
+  if (normalizedFieldName === 'daysFrom' || normalizedFieldName === 'daysTo') {
+    return normalizedFieldValue.replace(/\D+/g, '');
+  }
+
+  if (normalizedFieldName === 'dateFrom' || normalizedFieldName === 'dateTo') {
+    return normalizedFieldValue.replace(/[^0-9-]+/g, '').slice(0, 10);
+  }
+
+  return normalizedFieldValue;
+}
+
+function syncMapTimeColorPreviewFieldWidths(rootElement = selectionExtraEl) {
+  rootElement?.querySelectorAll('.legend-value-input').forEach((input) => {
+    const inputValueLength = typeof input.value === 'string' ? input.value.length : 0;
+    const placeholderLength = typeof input.placeholder === 'string' ? input.placeholder.length : 0;
+    const widthInChars = Math.max(4, inputValueLength, placeholderLength || 0);
+    input.setAttribute('size', String(widthInChars));
+    input.style.width = `${widthInChars}ch`;
+  });
+}
+
+function syncTimeColorPreview(options = {}) {
+  const skipPreviewRerender = Boolean(options?.skipPreviewRerender);
   if (infoPanelMode !== 'colors') {
     return;
   }
@@ -4295,9 +4444,25 @@ function syncTimeColorPreview() {
   }
 
   const previewEl = selectionExtraEl?.querySelector('[data-map-time-color-preview]');
-  if (previewEl) {
+  if (previewEl && !skipPreviewRerender) {
     previewEl.innerHTML = renderMapTimeColorPreviewMarkup(mapTimeColorRanges);
   }
+  previewEl?.querySelectorAll('[data-map-time-color-preview-field]').forEach((inputElement) => {
+    const rangeId = inputElement.getAttribute('data-map-time-color-preview-range-id');
+    const fieldName = inputElement.getAttribute('data-map-time-color-preview-field');
+    const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
+    if (!range || !fieldName) {
+      return;
+    }
+
+    if (fieldName === 'color') {
+      inputElement.value = range.color;
+      return;
+    }
+
+    inputElement.value = typeof range[fieldName] === 'string' ? range[fieldName] : '';
+  });
+  syncMapTimeColorPreviewFieldWidths(previewEl);
 
   selectionExtraEl?.querySelectorAll('[data-map-time-color-row-id]').forEach((rowElement) => {
     const rangeId = rowElement.getAttribute('data-map-time-color-row-id');
@@ -4319,6 +4484,43 @@ function syncTimeColorPreview() {
     const colorValueEl = rowElement.querySelector('.time-color-picker-value');
     if (colorValueEl) {
       colorValueEl.textContent = range.color;
+    }
+
+    const colorInputEl = rowElement.querySelector('[data-map-time-color-field="color"]');
+    if (colorInputEl) {
+      colorInputEl.value = range.color;
+    }
+
+    const daysFromInputEl = rowElement.querySelector('[data-map-time-color-field="daysFrom"]');
+    if (daysFromInputEl) {
+      daysFromInputEl.value = range.daysFrom;
+      daysFromInputEl.disabled = range.daysFrom === '';
+    }
+
+    const daysToInputEl = rowElement.querySelector('[data-map-time-color-field="daysTo"]');
+    if (daysToInputEl) {
+      daysToInputEl.value = range.daysTo;
+      daysToInputEl.disabled = range.daysTo === '';
+    }
+
+    const daysFromOpenEl = rowElement.querySelector('[data-map-time-color-field="daysFromOpen"]');
+    if (daysFromOpenEl) {
+      daysFromOpenEl.checked = range.daysFrom === '';
+    }
+
+    const daysToOpenEl = rowElement.querySelector('[data-map-time-color-field="daysToOpen"]');
+    if (daysToOpenEl) {
+      daysToOpenEl.checked = range.daysTo === '';
+    }
+
+    const dateFromInputEl = rowElement.querySelector('[data-map-time-color-field="dateFrom"]');
+    if (dateFromInputEl) {
+      dateFromInputEl.value = range.dateFrom;
+    }
+
+    const dateToInputEl = rowElement.querySelector('[data-map-time-color-field="dateTo"]');
+    if (dateToInputEl) {
+      dateToInputEl.value = range.dateTo;
     }
   });
 }
