@@ -12,9 +12,8 @@ initShell('people');
 
 const PEOPLE_SEARCH_BATCH_SIZE = 50;
 const PEOPLE_SEARCH_SCROLL_THRESHOLD_PX = 120;
-const PEOPLE_SEARCH_OVERSCAN_ROWS = 40;
 const PEOPLE_SEARCH_ROW_GAP_PX = 10;
-const PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 108;
+const PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 96;
 
 const searchInput = document.getElementById('people-search');
 const resultsEl = document.getElementById('people-results');
@@ -28,9 +27,8 @@ const notesListEl = document.getElementById('person-notes');
 
 let activePersonId = null;
 let searchTimer = null;
-let peopleSearchSessionId = 0;
-let peopleVirtualFrame = 0;
-let peopleVirtualRowHeight = PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
+let peopleSearchRequestToken = 0;
+let peopleSearchRowHeight = PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let peopleSearchState = {
   query: '',
   items: [],
@@ -45,14 +43,14 @@ window.appApi.onOperationStatus(async (payload) => {
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
   ) {
-    await refreshPeopleSearch(searchInput.value);
+    await loadPeople(searchInput.value, { reset: true });
   }
 });
 
 searchInput.addEventListener('input', () => {
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => {
-    void refreshPeopleSearch(searchInput.value);
+    void loadPeople(searchInput.value, { reset: true });
   }, 160);
 });
 
@@ -66,13 +64,7 @@ resultsEl.addEventListener('click', (event) => {
 });
 
 resultsEl.addEventListener('scroll', () => {
-  schedulePeopleVirtualRender();
   void maybeLoadMorePeople();
-});
-
-window.addEventListener('resize', () => {
-  schedulePeopleVirtualRender();
-  queuePeopleSearchAutofill();
 });
 
 notesForm.addEventListener('submit', async (event) => {
@@ -95,45 +87,68 @@ bootstrap();
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
   applySummary(bootstrapData.summary);
-  await refreshPeopleSearch('');
+  await loadPeople('', { reset: true });
 }
 
-async function refreshPeopleSearch(query) {
-  peopleSearchSessionId += 1;
-  const sessionId = peopleSearchSessionId;
-  peopleSearchState = {
-    query: String(query || ''),
-    items: [],
-    total: 0,
-    isLoading: true,
-    hasLoaded: false,
-    hasMore: false
-  };
-  renderPeople();
+async function loadPeople(query, options = {}) {
+  const requestToken = options.requestToken ?? ++peopleSearchRequestToken;
+  const normalizedQuery = String(query || '');
+  const reset = options.reset !== false;
+
+  peopleSearchState = reset
+    ? {
+        query: normalizedQuery,
+        items: [],
+        total: 0,
+        isLoading: true,
+        hasLoaded: false,
+        hasMore: false
+      }
+    : {
+        ...peopleSearchState,
+        query: normalizedQuery,
+        isLoading: true
+      };
+
+  if (reset) {
+    renderPeople();
+  } else {
+    resultCountEl.textContent = `${formatNumber(peopleSearchState.total)} rekordow`;
+    showPeopleLoadingState();
+  }
 
   const response = await window.appApi.listPeople({
-    query: peopleSearchState.query,
+    query: normalizedQuery,
     limit: PEOPLE_SEARCH_BATCH_SIZE,
-    offset: 0
+    offset: reset ? 0 : peopleSearchState.items.length
   });
 
-  if (sessionId !== peopleSearchSessionId) {
+  if (requestToken !== peopleSearchRequestToken) {
     return;
   }
 
-  applyPeopleSearchResponse(response);
+  const items = Array.isArray(response?.items) ? response.items : [];
+  peopleSearchState = {
+    query: normalizedQuery,
+    items: reset ? items : [...peopleSearchState.items, ...items],
+    total: Number(response?.total || 0),
+    isLoading: false,
+    hasLoaded: true,
+    hasMore: Boolean(response?.hasMore)
+  };
+  if (reset) {
+    renderPeople();
+  } else {
+    appendPeople(items);
+  }
 
   if (
+    reset &&
     peopleSearchState.items.length > 0 &&
     !peopleSearchState.items.some((person) => person.sourceRowId === activePersonId)
   ) {
-    await loadPerson(peopleSearchState.items[0].sourceRowId);
-    queuePeopleSearchAutofill();
-    return;
+    void loadPerson(peopleSearchState.items[0].sourceRowId);
   }
-
-  syncPeopleSelectionState();
-  queuePeopleSearchAutofill();
 }
 
 async function maybeLoadMorePeople() {
@@ -141,98 +156,52 @@ async function maybeLoadMorePeople() {
     return;
   }
 
-  const visibleRange = computeVisibleRange({
-    itemCount: peopleSearchState.total,
-    scrollTop: resultsEl.scrollTop,
-    viewportHeight: resultsEl.clientHeight,
-    rowHeight: peopleVirtualRowHeight,
-    rowGap: PEOPLE_SEARCH_ROW_GAP_PX,
-    overscan: PEOPLE_SEARCH_OVERSCAN_ROWS
-  });
-  const needsNextBatch = visibleRange.endIndex >= peopleSearchState.items.length - Math.floor(PEOPLE_SEARCH_BATCH_SIZE / 2);
-  const remainingScroll = resultsEl.scrollHeight - resultsEl.scrollTop - resultsEl.clientHeight;
-  if (!needsNextBatch && remainingScroll > PEOPLE_SEARCH_SCROLL_THRESHOLD_PX) {
+  const loadedContentHeight = peopleSearchState.items.length * getPeopleSearchRowStride();
+  const viewportBottom = resultsEl.scrollTop + resultsEl.clientHeight;
+  if (viewportBottom + PEOPLE_SEARCH_SCROLL_THRESHOLD_PX < loadedContentHeight) {
     return;
   }
 
-  const sessionId = peopleSearchSessionId;
-  peopleSearchState = {
-    ...peopleSearchState,
-    isLoading: true
-  };
-  renderPeople();
-
-  const response = await window.appApi.listPeople({
-    query: peopleSearchState.query,
-    limit: PEOPLE_SEARCH_BATCH_SIZE,
-    offset: peopleSearchState.items.length
+  await loadPeople(peopleSearchState.query, {
+    reset: false,
+    requestToken: peopleSearchRequestToken
   });
-
-  if (sessionId !== peopleSearchSessionId) {
-    return;
-  }
-
-  applyPeopleSearchResponse(response, {
-    append: true
-  });
-  queuePeopleSearchAutofill();
-}
-
-function applyPeopleSearchResponse(response, options = {}) {
-  const items = Array.isArray(response?.items) ? response.items : [];
-  peopleSearchState = {
-    query: peopleSearchState.query,
-    items: options.append ? [...peopleSearchState.items, ...items] : items,
-    total: Number(response?.total || 0),
-    isLoading: false,
-    hasLoaded: true,
-    hasMore: Boolean(response?.hasMore)
-  };
-  renderPeople();
 }
 
 function renderPeople() {
-  resultCountEl.textContent = peopleSearchState.isLoading && !peopleSearchState.hasLoaded
-    ? 'Ladowanie...'
-    : `${formatNumber(peopleSearchState.total)} rekordow`;
-
   if (peopleSearchState.isLoading && !peopleSearchState.hasLoaded) {
+    resultCountEl.textContent = 'Ladowanie...';
     resultsEl.innerHTML = '<p class="empty-state">Ladowanie wynikow wyszukiwania...</p>';
     return;
   }
+
+  resultCountEl.textContent = `${formatNumber(peopleSearchState.total)} rekordow`;
 
   if (peopleSearchState.items.length === 0) {
     resultsEl.innerHTML = '<p class="empty-state">Brak wynikow dla podanego zapytania.</p>';
     return;
   }
 
-  renderVisiblePeople();
+  resultsEl.replaceChildren();
+  resultsEl.insertAdjacentHTML('beforeend', renderPeopleRows(peopleSearchState.items));
+  syncPeopleResultsTail();
+  updatePeopleRowHeight();
+  syncPeopleSelectionState();
 }
 
-function renderVisiblePeople() {
-  const visibleRange = computeVisibleRange({
-    itemCount: peopleSearchState.total,
-    scrollTop: resultsEl.scrollTop,
-    viewportHeight: resultsEl.clientHeight,
-    rowHeight: peopleVirtualRowHeight,
-    rowGap: PEOPLE_SEARCH_ROW_GAP_PX,
-    overscan: PEOPLE_SEARCH_OVERSCAN_ROWS
-  });
-  const rowsMarkup = Array.from(
-    { length: Math.max(0, visibleRange.endIndex - visibleRange.startIndex) },
-    (_unused, offset) => {
-      const itemIndex = visibleRange.startIndex + offset;
-      const person = peopleSearchState.items[itemIndex];
-      if (!person) {
-        return `
-          <article class="person-row person-row-placeholder" aria-hidden="true">
-            <span class="person-row-title">Ladowanie osoby...</span>
-            <span class="person-row-copy">Trwa pobieranie kolejnych wynikow.</span>
-            <span class="person-row-copy person-row-meta">Prosze czekac</span>
-          </article>
-        `;
-      }
+function appendPeople(items) {
+  removePeopleResultsTail();
+  if (items.length > 0) {
+    resultsEl.insertAdjacentHTML('beforeend', renderPeopleRows(items));
+  }
+  syncPeopleResultsTail();
+  updatePeopleRowHeight();
+  syncPeopleSelectionState();
+}
 
+function renderPeopleRows(people) {
+  return people
+    .map((person) => {
       const isSelected = person.sourceRowId === activePersonId;
       return `
         <button
@@ -247,25 +216,72 @@ function renderVisiblePeople() {
           </span>
         </button>
       `;
-    }
-  )
+    })
     .join('');
-  const statusCopy = buildPeopleSearchStatusCopy();
-  const statusMarkup = statusCopy
-    ? `<p class="lazy-results-status">${escapeHtml(statusCopy)}</p>`
-    : '';
+}
 
-  resultsEl.innerHTML = `
-    ${buildVirtualSpacerMarkup(visibleRange.topSpacerHeight)}
-    ${rowsMarkup}
-    ${buildVirtualSpacerMarkup(visibleRange.bottomSpacerHeight)}
-    ${statusMarkup}
-  `;
+function removePeopleLoadingState() {
+  resultsEl.querySelector('[data-people-loading-more]')?.remove();
+}
 
-  updatePeopleVirtualRowHeight();
-  if (visibleRange.endIndex > peopleSearchState.items.length && peopleSearchState.hasMore) {
-    queuePeopleSearchAutofill();
+function removePeopleResultsTail() {
+  removePeopleLoadingState();
+  resultsEl.querySelector('[data-people-results-spacer]')?.remove();
+}
+
+function showPeopleLoadingState() {
+  if (resultsEl.querySelector('[data-people-loading-more]')) {
+    return;
   }
+
+  const loading = document.createElement('p');
+  loading.className = 'empty-state';
+  loading.dataset.peopleLoadingMore = 'true';
+  loading.textContent = 'Ladowanie kolejnych wynikow...';
+  resultsEl.appendChild(loading);
+}
+
+function syncPeopleResultsTail() {
+  removePeopleResultsTail();
+  if (peopleSearchState.isLoading && peopleSearchState.hasLoaded) {
+    showPeopleLoadingState();
+  }
+  appendPeopleResultsSpacer();
+}
+
+function appendPeopleResultsSpacer() {
+  const remainingCount = Math.max(0, peopleSearchState.total - peopleSearchState.items.length);
+  if (remainingCount <= 0) {
+    return;
+  }
+
+  const spacer = document.createElement('div');
+  spacer.className = 'results-spacer';
+  spacer.dataset.peopleResultsSpacer = 'true';
+  spacer.style.height = `${Math.round(remainingCount * getPeopleSearchRowStride())}px`;
+  spacer.setAttribute('aria-hidden', 'true');
+  resultsEl.appendChild(spacer);
+}
+
+function updatePeopleRowHeight() {
+  const rows = Array.from(resultsEl.querySelectorAll('.person-row'));
+  if (rows.length === 0) {
+    return;
+  }
+
+  const nextHeight = Math.round(rows.reduce((sum, row) => sum + row.offsetHeight, 0) / rows.length);
+  if (Number.isFinite(nextHeight) && nextHeight > 0 && nextHeight !== peopleSearchRowHeight) {
+    peopleSearchRowHeight = nextHeight;
+    const spacer = resultsEl.querySelector('[data-people-results-spacer]');
+    if (spacer) {
+      const remainingCount = Math.max(0, peopleSearchState.total - peopleSearchState.items.length);
+      spacer.style.height = `${Math.round(remainingCount * getPeopleSearchRowStride())}px`;
+    }
+  }
+}
+
+function getPeopleSearchRowStride() {
+  return peopleSearchRowHeight + PEOPLE_SEARCH_ROW_GAP_PX;
 }
 
 async function loadPerson(sourceRowId) {
@@ -321,98 +337,8 @@ async function loadPerson(sourceRowId) {
     : '<p class="empty-state">Brak lokalnych notatek.</p>';
 }
 
-function schedulePeopleVirtualRender() {
-  if (peopleVirtualFrame) {
-    return;
-  }
-
-  peopleVirtualFrame = requestAnimationFrame(() => {
-    peopleVirtualFrame = 0;
-    if (!peopleSearchState.hasLoaded || peopleSearchState.items.length === 0) {
-      return;
-    }
-
-    renderVisiblePeople();
-  });
-}
-
-function updatePeopleVirtualRowHeight() {
-  const rows = Array.from(resultsEl.querySelectorAll('.person-row'));
-  if (rows.length === 0) {
-    return;
-  }
-
-  const nextHeight = Math.round(
-    rows.reduce((sum, element) => sum + element.offsetHeight, 0) / rows.length
-  );
-  if (Number.isFinite(nextHeight) && Math.abs(nextHeight - peopleVirtualRowHeight) >= 2) {
-    peopleVirtualRowHeight = nextHeight;
-    schedulePeopleVirtualRender();
-  }
-}
-
 function syncPeopleSelectionState() {
   resultsEl.querySelectorAll('[data-person-id]').forEach((element) => {
     element.classList.toggle('is-selected', element.getAttribute('data-person-id') === activePersonId);
   });
-}
-
-function buildPeopleSearchStatusCopy() {
-  if (peopleSearchState.isLoading && peopleSearchState.hasLoaded) {
-    return 'Ladowanie kolejnych wynikow...';
-  }
-
-  if (peopleSearchState.hasMore) {
-    return 'Przewin liste, aby doladowac kolejne osoby.';
-  }
-
-  return '';
-}
-
-function queuePeopleSearchAutofill() {
-  if (!peopleSearchState.hasMore || peopleSearchState.isLoading) {
-    return;
-  }
-
-  requestAnimationFrame(() => {
-    void maybeLoadMorePeople();
-  });
-}
-
-function computeVisibleRange(input) {
-  const itemCount = Number(input.itemCount || 0);
-  const scrollTop = Math.max(0, Number(input.scrollTop || 0));
-  const viewportHeight = Math.max(1, Number(input.viewportHeight || 0));
-  const rowHeight = Math.max(1, Number(input.rowHeight || PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX));
-  const rowGap = Math.max(0, Number(input.rowGap || 0));
-  const overscan = Math.max(0, Number(input.overscan || 0));
-  const stride = rowHeight + rowGap;
-  const visibleCount = Math.max(1, Math.ceil(viewportHeight / stride));
-  const startIndex = Math.max(0, Math.floor(scrollTop / stride) - overscan);
-  const endIndex = Math.min(itemCount, startIndex + visibleCount + overscan * 2);
-  const topSpacerHeight = buildVirtualSpacerHeight(startIndex, rowHeight, rowGap);
-  const bottomSpacerHeight = buildVirtualSpacerHeight(itemCount - endIndex, rowHeight, rowGap);
-
-  return {
-    startIndex,
-    endIndex,
-    topSpacerHeight,
-    bottomSpacerHeight
-  };
-}
-
-function buildVirtualSpacerHeight(itemCount, rowHeight, rowGap) {
-  if (itemCount <= 0) {
-    return 0;
-  }
-
-  return itemCount * rowHeight + Math.max(0, itemCount - 1) * rowGap;
-}
-
-function buildVirtualSpacerMarkup(height) {
-  if (height <= 0) {
-    return '';
-  }
-
-  return `<div class="virtual-spacer" style="height:${Math.round(height)}px" aria-hidden="true"></div>`;
 }

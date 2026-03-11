@@ -357,10 +357,14 @@ textarea {
 
 .map-info-view.map-info-view-filter {
   gap: 10px;
+  min-height: 100%;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .map-info-view.map-info-view-search {
   gap: 10px;
+  min-height: 100%;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .map-info-view[data-map-view="settings"].map-info-view-active {
@@ -386,10 +390,14 @@ textarea {
 
 .map-selection-cards.map-selection-cards-filter {
   margin-top: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .map-selection-cards.map-selection-cards-search {
   margin-top: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .map-selection-cards .empty-state {
@@ -1193,6 +1201,46 @@ body.map-page .service-map {
   overflow: auto;
 }
 
+#people-results,
+.map-tool-results-list {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(48, 67, 54, 0.42) rgba(48, 67, 54, 0.08);
+}
+
+#people-results::-webkit-scrollbar,
+.map-tool-results-list::-webkit-scrollbar {
+  width: 11px;
+}
+
+#people-results::-webkit-scrollbar-track,
+.map-tool-results-list::-webkit-scrollbar-track {
+  background: rgba(48, 67, 54, 0.08);
+  border-radius: 999px;
+}
+
+#people-results::-webkit-scrollbar-thumb,
+.map-tool-results-list::-webkit-scrollbar-thumb {
+  background: rgba(48, 67, 54, 0.42);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+#people-results::-webkit-scrollbar-thumb:hover,
+.map-tool-results-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(48, 67, 54, 0.56);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.map-tool-results-list {
+  min-height: 0;
+  max-height: none;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
 .compact-list {
   max-height: 420px;
 }
@@ -1226,11 +1274,6 @@ body.map-page .service-map {
   background: rgba(226, 242, 231, 0.92);
 }
 
-.person-row-placeholder {
-  cursor: default;
-  opacity: 0.72;
-}
-
 .person-row-title,
 .detail-title {
   font-weight: 700;
@@ -1245,15 +1288,7 @@ body.map-page .service-map {
   font-size: 0.92rem;
 }
 
-.lazy-results-status {
-  margin: 0;
-  padding: 6px 10px 2px;
-  color: var(--muted);
-  text-align: center;
-  font-size: 0.9rem;
-}
-
-.virtual-spacer {
+.results-spacer {
   width: 100%;
   pointer-events: none;
 }

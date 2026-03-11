@@ -918,14 +918,13 @@ function searchPeople(db, input = {}) {
     ? Math.floor(requestedOffset)
     : 0;
   const total = countPeople(db, query);
-  const items = total > 0 ? listPeople(db, { query, limit, offset }) : [];
 
   return {
-    items,
+    items: total > 0 ? listPeople(db, { query, limit, offset }) : [],
     total,
     offset,
     limit,
-    hasMore: offset + items.length < total
+    hasMore: offset + limit < total
   };
 }
 
