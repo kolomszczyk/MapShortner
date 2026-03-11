@@ -60,9 +60,9 @@ To utworzy tag typu `v0.1.1` i pipeline zbuduje instalatory oraz opublikuje rele
 
 ## 5) Jak działa auto-update w aplikacji
 
-- Po starcie appka wywołuje `checkForUpdatesAndNotify()`.
-- Jeśli znajdzie nowszy release na GitHubie, pobierze aktualizację.
-- Po pobraniu pokaże komunikat i można kliknąć „Zainstaluj i uruchom ponownie”.
+- Po starcie aplikacja sprawdza, czy na GitHub Releases jest nowsza wersja.
+- Jeśli znajdzie nowszy release, pobierze aktualizację automatycznie.
+- Po zakonczeniu pobierania aplikacja sama uruchomi instalacje i zrobi restart.
 
 ## 6) Jak przetestować aktualizację
 

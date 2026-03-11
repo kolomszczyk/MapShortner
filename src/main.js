@@ -166,6 +166,46 @@ function releaseStartupUpdateBlock(message, patch = {}) {
   return true;
 }
 
+function installDownloadedUpdate({ version = null, visible = false, source = currentUpdateCheckSource } = {}) {
+  clearStartupUpdateInstallTimer();
+
+  const versionLabel = version ? ` ${version}` : '';
+  const downloadedMessage = `Aktualizacja${versionLabel} pobrana. Za chwile instalacja i restart aplikacji.`;
+
+  sendUpdateStatus(downloadedMessage);
+  setUpdaterState({
+    phase: 'downloaded',
+    message: downloadedMessage,
+    visible,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: 100,
+    version,
+    source
+  });
+
+  startupUpdateInstallTimer = setTimeout(() => {
+    startupUpdateInstallTimer = null;
+
+    if (source === 'startup' && !startupUpdateInstallArmed) {
+      return;
+    }
+
+    sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
+    setUpdaterState({
+      phase: 'installing',
+      message: 'Instalowanie aktualizacji i ponowne uruchamianie...',
+      visible,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: 100,
+      version,
+      source
+    });
+    autoUpdater.quitAndInstall();
+  }, STARTUP_UPDATE_INSTALL_DELAY_MS);
+}
+
 async function runStartupUpdateFlow() {
   if (!autoUpdater) {
     return;
@@ -688,57 +728,11 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    clearStartupUpdateInstallTimer();
-
     const startupFlowActive = currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise);
-    if (startupFlowActive && startupUpdateInstallArmed) {
-      const message = `Aktualizacja ${info.version} pobrana. Za chwile instalacja i restart aplikacji.`;
-      sendUpdateStatus(message);
-      setUpdaterState({
-        phase: 'downloaded',
-        message,
-        visible: true,
-        canSkip: true,
-        readyToInstall: true,
-        progressPercent: 100,
-        version: info.version,
-        source: 'startup'
-      });
-
-      startupUpdateInstallTimer = setTimeout(() => {
-        startupUpdateInstallTimer = null;
-        if (!startupUpdateFlowPromise || !startupUpdateInstallArmed) {
-          return;
-        }
-
-        sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
-        setUpdaterState({
-          phase: 'installing',
-          message: 'Instalowanie aktualizacji i ponowne uruchamianie...',
-          visible: true,
-          canSkip: false,
-          readyToInstall: true,
-          progressPercent: 100,
-          source: 'startup'
-        });
-        autoUpdater.quitAndInstall();
-      }, STARTUP_UPDATE_INSTALL_DELAY_MS);
-
-      return;
-    }
-
-    sendUpdateStatus(
-      `Aktualizacja ${info.version} gotowa. Kliknij "Zainstaluj i uruchom ponownie".`
-    );
-    setUpdaterState({
-      phase: 'downloaded',
-      message: `Aktualizacja ${info.version} gotowa. Kliknij "Zainstaluj i uruchom ponownie".`,
-      visible: false,
-      canSkip: false,
-      readyToInstall: true,
-      progressPercent: 100,
+    installDownloadedUpdate({
       version: info.version,
-      source: currentUpdateCheckSource
+      visible: startupFlowActive,
+      source: startupFlowActive ? 'startup' : currentUpdateCheckSource
     });
   });
 }
