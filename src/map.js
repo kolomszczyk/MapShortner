@@ -75,8 +75,12 @@ const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const MAX_PERSON_SELECTION_HISTORY_ENTRIES = 100;
 const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
-const MAP_PERSON_SEARCH_LIMIT = 100;
+const MAP_PERSON_SEARCH_BATCH_SIZE = 50;
 const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
+const MAP_PERSON_SEARCH_SCROLL_THRESHOLD_PX = 80;
+const MAP_PERSON_SEARCH_OVERSCAN_ROWS = 40;
+const MAP_PERSON_SEARCH_ROW_GAP_PX = 10;
+const MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 116;
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
@@ -126,9 +130,13 @@ let personSearchRequestToken = 0;
 let personSearchState = {
   query: '',
   results: [],
+  total: 0,
   isLoading: false,
-  hasLoaded: false
+  hasLoaded: false,
+  hasMore: false
 };
+let mapSearchVirtualFrame = 0;
+let mapSearchVirtualRowHeight = MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let hoveredPersonSourceRowId = null;
 let selectionExtraPointerState = {
   clientX: null,
@@ -539,6 +547,8 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     mapInstance?.invalidateSize();
+    scheduleMapSearchVirtualRender();
+    queueMapSearchAutofill();
   }, 120);
 });
 
@@ -576,7 +586,12 @@ async function loadPoints() {
   }
 
   if (infoPanelMode === 'search' && personSearchState.hasLoaded) {
-    void loadPersonSearchResults(personSearchState.query, { showLoadingState: false });
+    personSearchRequestToken += 1;
+    void loadPersonSearchResults(personSearchState.query, {
+      showLoadingState: false,
+      reset: true,
+      requestToken: personSearchRequestToken
+    });
   }
 
   syncSupplementalPeopleMarkers();
@@ -2036,12 +2051,13 @@ function renderCurrentInfoPanel() {
   }
 
   if (infoPanelMode === 'search') {
-    paintSearchPanel();
+    paintSearchPanel({ shouldFocusInput: personSearchState.hasLoaded });
     if (!personSearchState.hasLoaded) {
-      void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
-    } else if (!isSettingsOpen) {
-      requestAnimationFrame(() => {
-        focusMapSearchInput();
+      personSearchRequestToken += 1;
+      void loadPersonSearchResults(personSearchState.query, {
+        showLoadingState: true,
+        reset: true,
+        requestToken: personSearchRequestToken
       });
     }
     return;
@@ -2147,36 +2163,31 @@ function paintStatsSelection(summary) {
   selectionExtraEl.hidden = false;
 }
 
-function paintSearchPanel() {
+function paintSearchPanel(options = {}) {
   clearHoveredPersonSourceRowId();
-  syncOverviewSpacing(false);
+  syncOverviewSpacing(false, false, true);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
   });
 
   const query = personSearchState.query.trim();
-  const resultCountLabel = personSearchState.isLoading
+  const searchCountLabel = personSearchState.isLoading && !personSearchState.hasLoaded
     ? 'Ladowanie...'
-    : personSearchState.hasLoaded
-      ? `${formatNumber(personSearchState.results.length)} wynikow`
-      : 'Brak wynikow';
-  const helperText = query
-    ? `Wyszukiwanie po wszystkich polach i datach dla: ${query}`
-    : 'Wpisz imie, nazwisko, adres, telefon albo date, np. 2025-03-10 lub 10.03.2025.';
-
+    : personSearchState.total === 1
+      ? '1 osoba'
+      : `${formatNumber(personSearchState.total)} osob`;
+  const shouldFocusInput = options.shouldFocusInput === true;
+  const resultsScrollTop = Number.isFinite(options.resultsScrollTop)
+    ? options.resultsScrollTop
+    : null;
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Wyszukiwanie osob';
   selectionCopyEl.hidden = true;
-  selectionMetaEl.innerHTML = renderKeyValueList([
-    { label: 'Zakres', value: 'Wszystkie pola rekordu' },
-    { label: 'Zapytanie', value: query || 'Brak' },
-    { label: 'Wyniki', value: resultCountLabel }
-  ]);
-  selectionMetaEl.hidden = false;
+  selectionMetaEl.innerHTML = '';
+  selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-person-search-form>
       <label class="field">
-        <span>Szukaj po wszystkich polach, takze po datach</span>
         <div class="search-input-wrap">
           <span class="search-input-icon" aria-hidden="true">
             <i class="fa-solid fa-magnifying-glass"></i>
@@ -2190,46 +2201,78 @@ function paintSearchPanel() {
           />
         </div>
       </label>
-      <div class="time-filter-summary">
-        <strong>${escapeHtml(resultCountLabel)}</strong>
-        <span>${escapeHtml(helperText)}</span>
-      </div>
-      <div class="action-row">
+      <div class="action-row filter-action-row">
+        <span class="filter-action-count">${escapeHtml(searchCountLabel)}</span>
         <button type="submit" class="button-strong">Szukaj</button>
         <button type="button" class="button-muted" data-map-person-search-clear${query ? '' : ' disabled'}>
           Wyczysc
         </button>
       </div>
-      <div class="vertical-list compact-list">
-        ${renderPersonSearchResults()}
-      </div>
+      <div class="vertical-list compact-list" data-map-person-search-results></div>
     </form>
   `;
   bindHoverTrackingToRenderedPersonLists();
+  bindLazyLoadingToRenderedPersonSearchResults();
   selectionExtraEl.hidden = false;
 
-  if (!isSettingsOpen) {
+  const resultsList = selectionExtraEl?.querySelector('[data-map-person-search-results]');
+  if (resultsList) {
+    if (resultsScrollTop !== null) {
+      resultsList.scrollTop = resultsScrollTop;
+    }
+    renderMapSearchResultsList(resultsList);
+  }
+
+  if (shouldFocusInput && !isSettingsOpen) {
     requestAnimationFrame(() => {
       focusMapSearchInput();
     });
   }
 }
 
-function renderPersonSearchResults() {
+function renderMapSearchResultsList(listElement) {
+  if (!listElement) {
+    return;
+  }
+
   if (personSearchState.isLoading && !personSearchState.hasLoaded) {
-    return '<p class="empty-state">Ladowanie wynikow wyszukiwania...</p>';
+    listElement.innerHTML = '<p class="empty-state">Ladowanie wynikow wyszukiwania...</p>';
+    return;
   }
 
   if (personSearchState.results.length === 0) {
-    return personSearchState.query.trim()
+    listElement.innerHTML = personSearchState.query.trim()
       ? '<p class="empty-state">Brak wynikow dla podanego zapytania.</p>'
       : '<p class="empty-state">Wpisz zapytanie, aby wyszukac osobe po wszystkich polach i datach.</p>';
+    return;
   }
 
   const currentSelectedPersonId = getCurrentSelectedPersonSourceRowId();
+  const visibleRange = computeVirtualRange({
+    itemCount: personSearchState.total,
+    scrollTop: listElement.scrollTop,
+    viewportHeight: listElement.clientHeight,
+    rowHeight: mapSearchVirtualRowHeight,
+    rowGap: MAP_PERSON_SEARCH_ROW_GAP_PX,
+    overscan: MAP_PERSON_SEARCH_OVERSCAN_ROWS
+  });
+  const rowsMarkup = Array.from(
+    { length: Math.max(0, visibleRange.endIndex - visibleRange.startIndex) },
+    (_unused, offset) => {
+      const itemIndex = visibleRange.startIndex + offset;
+      const person = personSearchState.results[itemIndex];
+      if (!person) {
+        return `
+          <article class="person-row map-history-row person-row-placeholder" aria-hidden="true">
+            <div class="list-card-heading">
+              <strong>Ladowanie osoby...</strong>
+            </div>
+            <span>Trwa pobieranie kolejnych wynikow.</span>
+            <span>Prosze czekac</span>
+          </article>
+        `;
+      }
 
-  return personSearchState.results
-    .map((person) => {
       const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
       const isCurrent = person.sourceRowId === currentSelectedPersonId;
       const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
@@ -2253,8 +2296,25 @@ function renderPersonSearchResults() {
           <span>${escapeHtml(locationLabel)}</span>
         </button>
       `;
-    })
+    }
+  )
     .join('');
+  const statusCopy = buildPersonSearchStatusCopy();
+  const statusMarkup = statusCopy
+    ? `<p class="lazy-results-status">${escapeHtml(statusCopy)}</p>`
+    : '';
+
+  listElement.innerHTML = `
+    ${buildVirtualSpacerMarkup(visibleRange.topSpacerHeight)}
+    ${rowsMarkup}
+    ${buildVirtualSpacerMarkup(visibleRange.bottomSpacerHeight)}
+    ${statusMarkup}
+  `;
+  updateMapSearchVirtualRowHeight(listElement);
+  syncHoveredPersonListRows();
+  if (visibleRange.endIndex > personSearchState.results.length && personSearchState.hasMore) {
+    queueMapSearchAutofill();
+  }
 }
 
 function paintFilterPanel() {
@@ -2388,51 +2448,96 @@ function updatePersonSearchQuery(nextQuery, options = {}) {
   }
 
   if (options.immediate) {
-    void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
+    personSearchRequestToken += 1;
+    void loadPersonSearchResults(personSearchState.query, {
+      showLoadingState: true,
+      reset: true,
+      requestToken: personSearchRequestToken
+    });
     return;
   }
 
   personSearchTimer = window.setTimeout(() => {
     personSearchTimer = null;
-    void loadPersonSearchResults(personSearchState.query, { showLoadingState: true });
+    personSearchRequestToken += 1;
+    void loadPersonSearchResults(personSearchState.query, {
+      showLoadingState: true,
+      reset: true,
+      requestToken: personSearchRequestToken
+    });
   }, MAP_PERSON_SEARCH_DEBOUNCE_MS);
 }
 
 async function loadPersonSearchResults(query, options = {}) {
-  personSearchRequestToken += 1;
-  const requestToken = personSearchRequestToken;
+  const requestToken = Number.isFinite(options.requestToken)
+    ? options.requestToken
+    : personSearchRequestToken;
   const normalizedQuery = String(query || '');
   const showLoadingState = options.showLoadingState !== false;
+  const reset = options.reset !== false;
+  const currentResultsScrollTop = options.preserveScrollTop
+    ?? selectionExtraEl?.querySelector('[data-map-person-search-results]')?.scrollTop
+    ?? 0;
+  const nextOffset = reset ? 0 : personSearchState.results.length;
 
-  personSearchState = {
-    ...personSearchState,
-    query: normalizedQuery,
-    isLoading: showLoadingState
-  };
+  personSearchState = reset
+    ? {
+        query: normalizedQuery,
+        results: [],
+        total: 0,
+        isLoading: showLoadingState,
+        hasLoaded: false,
+        hasMore: false
+      }
+    : {
+        ...personSearchState,
+        query: normalizedQuery,
+        isLoading: true
+      };
 
-  if (infoPanelMode === 'search') {
-    paintSearchPanel();
+  if (infoPanelMode === 'search' && (reset || showLoadingState)) {
+    paintSearchPanel({ shouldFocusInput: reset });
   }
 
-  const results = await window.appApi.listPeople({
+  const response = await window.appApi.listPeople({
     query: normalizedQuery,
-    limit: MAP_PERSON_SEARCH_LIMIT
+    limit: MAP_PERSON_SEARCH_BATCH_SIZE,
+    offset: nextOffset
   });
 
   if (requestToken !== personSearchRequestToken) {
     return;
   }
 
+  const items = Array.isArray(response?.items) ? response.items : [];
   personSearchState = {
     query: normalizedQuery,
-    results: Array.isArray(results) ? results : [],
+    results: reset ? items : [...personSearchState.results, ...items],
+    total: Number(response?.total || 0),
     isLoading: false,
-    hasLoaded: true
+    hasLoaded: true,
+    hasMore: Boolean(response?.hasMore)
   };
-  cacheKnownPeople(personSearchState.results);
+  cacheKnownPeople(items);
 
   if (infoPanelMode === 'search') {
-    paintSearchPanel();
+    if (reset) {
+      paintSearchPanel({
+        shouldFocusInput: true,
+        resultsScrollTop: null
+      });
+    } else {
+      const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
+      if (listElement) {
+        renderMapSearchResultsList(listElement);
+      } else {
+        paintSearchPanel({
+          shouldFocusInput: false,
+          resultsScrollTop: currentResultsScrollTop
+        });
+      }
+    }
+    queueMapSearchAutofill();
   }
 }
 
@@ -2511,11 +2616,13 @@ function paintHistorySelection() {
   selectionExtraEl.hidden = false;
 }
 
-function syncOverviewSpacing(isHistoryMode, isFilterMode = false) {
+function syncOverviewSpacing(isHistoryMode, isFilterMode = false, isSearchMode = false) {
   overviewViewEl?.classList.toggle('map-info-view-history', Boolean(isHistoryMode));
   overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
+  overviewViewEl?.classList.toggle('map-info-view-search', Boolean(isSearchMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-history', Boolean(isHistoryMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-filter', Boolean(isFilterMode));
+  selectionExtraEl?.classList.toggle('map-selection-cards-search', Boolean(isSearchMode));
 }
 
 function bindHoverTrackingToRenderedPersonLists() {
@@ -2551,6 +2658,144 @@ function bindHoverTrackingToRenderedPersonLists() {
   });
 
   syncHoveredPersonListRows();
+}
+
+function bindLazyLoadingToRenderedPersonSearchResults() {
+  const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
+  if (!listElement || listElement.dataset.lazyLoadingBound === 'true') {
+    return;
+  }
+
+  listElement.dataset.lazyLoadingBound = 'true';
+  listElement.addEventListener('scroll', () => {
+    scheduleMapSearchVirtualRender();
+    void maybeLoadMorePersonSearchResults(listElement);
+  });
+}
+
+async function maybeLoadMorePersonSearchResults(listElement) {
+  if (infoPanelMode !== 'search' || personSearchState.isLoading || !personSearchState.hasMore) {
+    return;
+  }
+
+  const visibleRange = computeVirtualRange({
+    itemCount: personSearchState.total,
+    scrollTop: listElement.scrollTop,
+    viewportHeight: listElement.clientHeight,
+    rowHeight: mapSearchVirtualRowHeight,
+    rowGap: MAP_PERSON_SEARCH_ROW_GAP_PX,
+    overscan: MAP_PERSON_SEARCH_OVERSCAN_ROWS
+  });
+  const needsNextBatch = visibleRange.endIndex >= personSearchState.results.length - Math.floor(MAP_PERSON_SEARCH_BATCH_SIZE / 2);
+  const remainingScroll = listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight;
+  if (!needsNextBatch && remainingScroll > MAP_PERSON_SEARCH_SCROLL_THRESHOLD_PX) {
+    return;
+  }
+
+  await loadPersonSearchResults(personSearchState.query, {
+    showLoadingState: false,
+    reset: false,
+    requestToken: personSearchRequestToken,
+    preserveScrollTop: listElement.scrollTop
+  });
+}
+
+function buildPersonSearchStatusCopy() {
+  if (personSearchState.isLoading && personSearchState.hasLoaded) {
+    return 'Ladowanie kolejnych wynikow...';
+  }
+
+  if (personSearchState.hasMore) {
+    return 'Przewin liste, aby doladowac kolejne osoby.';
+  }
+
+  return '';
+}
+
+function queueMapSearchAutofill() {
+  if (infoPanelMode !== 'search' || personSearchState.isLoading || !personSearchState.hasMore) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
+    if (!listElement) {
+      return;
+    }
+
+    void maybeLoadMorePersonSearchResults(listElement);
+  });
+}
+
+function scheduleMapSearchVirtualRender() {
+  if (mapSearchVirtualFrame) {
+    return;
+  }
+
+  mapSearchVirtualFrame = requestAnimationFrame(() => {
+    mapSearchVirtualFrame = 0;
+    if (infoPanelMode !== 'search' || !personSearchState.hasLoaded) {
+      return;
+    }
+
+    const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
+    if (!listElement) {
+      return;
+    }
+
+    renderMapSearchResultsList(listElement);
+  });
+}
+
+function updateMapSearchVirtualRowHeight(listElement) {
+  const rows = Array.from(listElement.querySelectorAll('.person-row'));
+  if (rows.length === 0) {
+    return;
+  }
+
+  const nextHeight = Math.round(
+    rows.reduce((sum, element) => sum + element.offsetHeight, 0) / rows.length
+  );
+  if (Number.isFinite(nextHeight) && Math.abs(nextHeight - mapSearchVirtualRowHeight) >= 2) {
+    mapSearchVirtualRowHeight = nextHeight;
+    scheduleMapSearchVirtualRender();
+  }
+}
+
+function computeVirtualRange(input) {
+  const itemCount = Math.max(0, Number(input.itemCount || 0));
+  const scrollTop = Math.max(0, Number(input.scrollTop || 0));
+  const viewportHeight = Math.max(1, Number(input.viewportHeight || 0));
+  const rowHeight = Math.max(1, Number(input.rowHeight || MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX));
+  const rowGap = Math.max(0, Number(input.rowGap || 0));
+  const overscan = Math.max(0, Number(input.overscan || 0));
+  const stride = rowHeight + rowGap;
+  const visibleCount = Math.max(1, Math.ceil(viewportHeight / stride));
+  const startIndex = Math.max(0, Math.floor(scrollTop / stride) - overscan);
+  const endIndex = Math.min(itemCount, startIndex + visibleCount + overscan * 2);
+
+  return {
+    startIndex,
+    endIndex,
+    topSpacerHeight: buildVirtualSpacerHeight(startIndex, rowHeight, rowGap),
+    bottomSpacerHeight: buildVirtualSpacerHeight(itemCount - endIndex, rowHeight, rowGap)
+  };
+}
+
+function buildVirtualSpacerHeight(itemCount, rowHeight, rowGap) {
+  if (itemCount <= 0) {
+    return 0;
+  }
+
+  return itemCount * rowHeight + Math.max(0, itemCount - 1) * rowGap;
+}
+
+function buildVirtualSpacerMarkup(height) {
+  if (height <= 0) {
+    return '';
+  }
+
+  return `<div class="virtual-spacer" style="height:${Math.round(height)}px" aria-hidden="true"></div>`;
 }
 
 function cacheKnownPeople(people) {

@@ -1326,7 +1326,7 @@ ipcMain.handle('geocode:run', async (_event, payload = {}) => {
 ipcMain.handle('dashboard:getSummary', () => store.getDashboardSummary());
 ipcMain.handle('data:getTables', () => store.getImportTables());
 ipcMain.handle('data:getTableRows', (_event, input) => store.getTableRows(input));
-ipcMain.handle('people:list', (_event, input) => store.listPeople(input));
+ipcMain.handle('people:list', (_event, input) => store.searchPeople(input));
 ipcMain.handle('people:getDetails', (_event, sourceRowId) => store.getPersonDetails(sourceRowId));
 ipcMain.handle('map:getPoints', (_event, input) => store.listMapPoints(input));
 ipcMain.handle('map:getDateFilterOptions', () => store.listMapDateFilterOptions());

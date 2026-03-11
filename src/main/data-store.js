@@ -68,6 +68,7 @@ function createDataStore(app) {
     getImportTables: () => getImportTables(db),
     getTableRows: (input) => getTableRows(db, input),
     listPeople: (input) => listPeople(db, input),
+    searchPeople: (input) => searchPeople(db, input),
     getPersonDetails: (sourceRowId) => getPersonDetails(db, sourceRowId),
     listMapPoints: (input) => listMapPoints(db, input),
     listMapDateFilterOptions: () => listMapDateFilterOptions(db),
@@ -874,7 +875,84 @@ function getTableRows(db, input = {}) {
 
 function listPeople(db, input = {}) {
   const query = (input.query || '').trim();
-  const limit = Math.min(500, Math.max(25, Number(input.limit || 100)));
+  const { limit, offset, hasLimit } = normalizePeopleWindow(input);
+  const { searchPatterns, whereClause } = buildPeopleSearchQueryParts(query);
+  const sql = `
+    SELECT
+      source_row_id AS sourceRowId,
+      full_name AS fullName,
+      company_name AS companyName,
+      city,
+      address_text AS addressText,
+      route_address AS routeAddress,
+      phone,
+      email,
+      lat,
+      lng,
+      geocode_status AS geocodeStatus,
+      last_visit_at AS lastVisitAt,
+      last_payment_at AS lastPaymentAt,
+      planned_visit_at AS plannedVisitAt,
+      total_paid AS totalPaid
+    FROM people_cache
+    ${whereClause}
+    ORDER BY full_name COLLATE NOCASE ASC
+    ${hasLimit ? 'LIMIT ? OFFSET ?' : ''}
+  `;
+  const params = hasLimit
+    ? [...searchPatterns, limit, offset]
+    : searchPatterns;
+  const rows = db.prepare(sql).all(...params);
+
+  return rows.map(normalizePeopleRow);
+}
+
+function searchPeople(db, input = {}) {
+  const query = (input.query || '').trim();
+  const requestedLimit = Number(input.limit);
+  const requestedOffset = Number(input.offset);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.max(1, Math.floor(requestedLimit))
+    : 50;
+  const offset = Number.isFinite(requestedOffset) && requestedOffset > 0
+    ? Math.floor(requestedOffset)
+    : 0;
+  const total = countPeople(db, query);
+  const items = total > 0 ? listPeople(db, { query, limit, offset }) : [];
+
+  return {
+    items,
+    total,
+    offset,
+    limit,
+    hasMore: offset + items.length < total
+  };
+}
+
+function countPeople(db, query = '') {
+  const { searchPatterns, whereClause } = buildPeopleSearchQueryParts(query);
+  const row = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM people_cache
+    ${whereClause}
+  `).get(...searchPatterns);
+
+  return Number(row?.total || 0);
+}
+
+function normalizePeopleWindow(input = {}) {
+  const requestedLimit = Number(input.limit);
+  const requestedOffset = Number(input.offset);
+  const hasLimit = Number.isFinite(requestedLimit) && requestedLimit > 0;
+
+  return {
+    hasLimit,
+    limit: hasLimit ? Math.max(1, Math.floor(requestedLimit)) : null,
+    offset: Number.isFinite(requestedOffset) && requestedOffset > 0 ? Math.floor(requestedOffset) : 0
+  };
+}
+
+function buildPeopleSearchQueryParts(query) {
   const searchPatterns = buildPeopleSearchPatterns(query);
   const searchExpression = `
     LOWER(
@@ -896,56 +974,12 @@ function listPeople(db, input = {}) {
     )
   `;
 
-  const sql = searchPatterns.length
-    ? `
-      SELECT
-        source_row_id AS sourceRowId,
-        full_name AS fullName,
-        company_name AS companyName,
-        city,
-        address_text AS addressText,
-        route_address AS routeAddress,
-        phone,
-        email,
-        lat,
-        lng,
-        geocode_status AS geocodeStatus,
-        last_visit_at AS lastVisitAt,
-        last_payment_at AS lastPaymentAt,
-        planned_visit_at AS plannedVisitAt,
-        total_paid AS totalPaid
-      FROM people_cache
-      WHERE ${searchPatterns.map(() => `${searchExpression} LIKE ?`).join(' OR ')}
-      ORDER BY full_name COLLATE NOCASE ASC
-      LIMIT ?
-    `
-    : `
-      SELECT
-        source_row_id AS sourceRowId,
-        full_name AS fullName,
-        company_name AS companyName,
-        city,
-        address_text AS addressText,
-        route_address AS routeAddress,
-        phone,
-        email,
-        lat,
-        lng,
-        geocode_status AS geocodeStatus,
-        last_visit_at AS lastVisitAt,
-        last_payment_at AS lastPaymentAt,
-        planned_visit_at AS plannedVisitAt,
-        total_paid AS totalPaid
-      FROM people_cache
-      ORDER BY full_name COLLATE NOCASE ASC
-      LIMIT ?
-    `;
-
-  const rows = searchPatterns.length
-    ? db.prepare(sql).all(...searchPatterns, limit)
-    : db.prepare(sql).all(limit);
-
-  return rows.map(normalizePeopleRow);
+  return {
+    searchPatterns,
+    whereClause: searchPatterns.length
+      ? `WHERE ${searchPatterns.map(() => `${searchExpression} LIKE ?`).join(' OR ')}`
+      : ''
+  };
 }
 
 function getPersonDetails(db, sourceRowId) {

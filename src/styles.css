@@ -359,6 +359,10 @@ textarea {
   gap: 10px;
 }
 
+.map-info-view.map-info-view-search {
+  gap: 10px;
+}
+
 .map-info-view[data-map-view="settings"].map-info-view-active {
   min-height: 0;
 }
@@ -381,6 +385,10 @@ textarea {
 }
 
 .map-selection-cards.map-selection-cards-filter {
+  margin-top: 0;
+}
+
+.map-selection-cards.map-selection-cards-search {
   margin-top: 0;
 }
 
@@ -1151,16 +1159,6 @@ textarea {
   border: 2px solid var(--swatch-border, #23412e);
 }
 
-.time-filter-summary strong {
-  font-size: 0.96rem;
-}
-
-.time-filter-summary span {
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-
 .service-map {
   width: 100%;
   min-height: 620px;
@@ -1228,6 +1226,11 @@ body.map-page .service-map {
   background: rgba(226, 242, 231, 0.92);
 }
 
+.person-row-placeholder {
+  cursor: default;
+  opacity: 0.72;
+}
+
 .person-row-title,
 .detail-title {
   font-weight: 700;
@@ -1240,6 +1243,19 @@ body.map-page .service-map {
 
 .person-row-meta {
   font-size: 0.92rem;
+}
+
+.lazy-results-status {
+  margin: 0;
+  padding: 6px 10px 2px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.virtual-spacer {
+  width: 100%;
+  pointer-events: none;
 }
 
 .stacked-cards {
