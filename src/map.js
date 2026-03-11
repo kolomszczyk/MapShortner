@@ -47,6 +47,15 @@ const ACTIVE_PERSON_MARKER_STYLE = {
   fillColor: '#f1a167',
   fillOpacity: 1
 };
+const HOVER_PERSON_MARKER_STYLE = {
+  radius: 9,
+  color: '#1e4f86',
+  weight: 3,
+  fillColor: '#79b7ff',
+  fillOpacity: 1
+};
+const SUPPLEMENTAL_PERSON_ICON_SIZE = 26;
+const SUPPLEMENTAL_PERSON_ICON_RADIUS = 9;
 
 const POLAND_BOUNDS = [
   [49.0, 14.1],
@@ -81,12 +90,15 @@ const restoredMapDateFilterState = readStoredMapDateFilterState();
 
 let mapInstance;
 let peopleLayer;
+let supplementalPeopleLayer;
 let customLayer;
 let personRenderer;
 let allPeople = [];
 let allCustomPoints = [];
 let visiblePeopleMarkers = new Map();
+let supplementalPeopleMarkers = new Map();
 let visibleCustomMarkers = new Map();
+let knownPeopleBySourceRowId = new Map();
 let markerSyncGeneration = 0;
 let resizeTimer;
 let isSettingsOpen = restoredMapPanelState.activePanel === SETTINGS_PANEL_STORAGE_STATE;
@@ -117,6 +129,15 @@ let personSearchState = {
   isLoading: false,
   hasLoaded: false
 };
+let hoveredPersonSourceRowId = null;
+let selectionExtraPointerState = {
+  clientX: null,
+  clientY: null,
+  isInside: false
+};
+let hoveredPersonPointerSyncFrame = 0;
+let hoveredPersonPointerSyncTimeout = 0;
+let historyPeopleLoadingSourceRowIds = new Set();
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
@@ -211,13 +232,13 @@ selectionExtraEl?.addEventListener('click', (event) => {
   const historyRowButton = event.target.closest('[data-history-source-row-id]');
   if (historyRowButton && infoPanelMode === 'history') {
     const sourceRowId = historyRowButton.getAttribute('data-history-source-row-id');
-    const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
+    const person = findPersonBySourceRowId(sourceRowId);
     if (!person) {
       return;
     }
 
     focusSelectionOnMap(person);
-    void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
+    void selectPersonPoint(person, getPersonMarkerBySourceRowId(sourceRowId), {
       panelMode: 'selection'
     });
   }
@@ -300,6 +321,63 @@ selectionExtraEl?.addEventListener('submit', (event) => {
     ...mapDateFilterDraft
   });
 });
+
+selectionExtraEl?.addEventListener('mouseover', (event) => {
+  const personRow = event.target.closest('[data-map-hover-source-row-id]');
+  if (!personRow || personRow.contains(event.relatedTarget)) {
+    return;
+  }
+
+  setHoveredPersonSourceRowId(personRow.getAttribute('data-map-hover-source-row-id'));
+});
+
+selectionExtraEl?.addEventListener('mouseout', (event) => {
+  const personRow = event.target.closest('[data-map-hover-source-row-id]');
+  if (!personRow || personRow.contains(event.relatedTarget)) {
+    return;
+  }
+
+  clearHoveredPersonSourceRowId();
+});
+
+selectionExtraEl?.addEventListener('pointermove', (event) => {
+  selectionExtraPointerState = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    isInside: true
+  };
+  scheduleHoveredPersonPointerSync();
+});
+
+selectionExtraEl?.addEventListener('pointerleave', () => {
+  selectionExtraPointerState = {
+    clientX: null,
+    clientY: null,
+    isInside: false
+  };
+  clearHoveredPersonSourceRowId();
+});
+
+selectionExtraEl?.addEventListener(
+  'scroll',
+  () => {
+    scheduleHoveredPersonPointerSync({ afterLayout: true });
+  },
+  true
+);
+
+selectionExtraEl?.addEventListener(
+  'wheel',
+  (event) => {
+    selectionExtraPointerState = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      isInside: true
+    };
+    scheduleHoveredPersonPointerSync({ afterLayout: true });
+  },
+  { passive: true }
+);
 
 window.addEventListener('popstate', (event) => {
   handlePersonSelectionPopState(event);
@@ -442,6 +520,7 @@ function buildMap() {
 
   focusPoland();
   peopleLayer = L.layerGroup().addTo(mapInstance);
+  supplementalPeopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
   mapInstance.on('moveend zoomend', () => {
     scheduleVisibleMarkerSync();
@@ -468,11 +547,13 @@ async function loadPoints() {
     return;
   }
 
+  clearHoveredPersonSourceRowId();
   const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
   const shouldAutoSelectPerson = infoPanelMode !== 'filter';
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
+  cacheKnownPeople(allPeople);
   const nextPerson = shouldAutoSelectPerson
     ? hasActiveMapDateFilter()
       ? resolveVisiblePersonSelection(allPeople)
@@ -498,6 +579,7 @@ async function loadPoints() {
     void loadPersonSearchResults(personSearchState.query, { showLoadingState: false });
   }
 
+  syncSupplementalPeopleMarkers();
   scheduleVisibleMarkerSync(0);
 }
 
@@ -1033,6 +1115,7 @@ function renderMarkerBatch(state) {
       ...DEFAULT_PERSON_MARKER_STYLE,
       renderer: personRenderer
     });
+    marker.__personSourceRowId = person.sourceRowId;
     attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
       void selectPersonPoint(person, marker, { panelMode: 'selection' });
     });
@@ -1044,6 +1127,7 @@ function renderMarkerBatch(state) {
 
     peopleLayer.addLayer(marker);
     visiblePeopleMarkers.set(key, marker);
+    syncPersonMarkerAppearance(marker, person.sourceRowId);
     processed += 1;
   }
 
@@ -1091,7 +1175,15 @@ function isPointVisible(bounds, point) {
 }
 
 function buildPersonKey(person) {
-  return `person:${person.sourceRowId}`;
+  return buildPersonKeyFromSourceRowId(person?.sourceRowId);
+}
+
+function buildPersonKeyFromSourceRowId(sourceRowId) {
+  if (!sourceRowId) {
+    return '';
+  }
+
+  return `person:${sourceRowId}`;
 }
 
 function buildCustomPointKey(point) {
@@ -1398,14 +1490,23 @@ function handlePersonSelectionPopState(event) {
 
   const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
   if (!person) {
-    const fallbackPerson = resolveCurrentPersonSelection(allPeople);
-    if (!fallbackPerson) {
-      clearActiveSelection({ resetPanel: true });
+    const hiddenPerson = findPersonBySourceRowId(sourceRowId);
+    if (!hiddenPerson) {
+      const fallbackPerson = resolveCurrentPersonSelection(allPeople);
+      if (!fallbackPerson) {
+        clearActiveSelection({ resetPanel: true });
+        return;
+      }
+
+      focusSelectionOnMap(fallbackPerson);
+      void selectPersonPoint(fallbackPerson, visiblePeopleMarkers.get(buildPersonKey(fallbackPerson)) || null, {
+        historyMode: 'restore'
+      });
       return;
     }
 
-    focusSelectionOnMap(fallbackPerson);
-    void selectPersonPoint(fallbackPerson, visiblePeopleMarkers.get(buildPersonKey(fallbackPerson)) || null, {
+    focusSelectionOnMap(hiddenPerson);
+    void selectPersonPoint(hiddenPerson, getPersonMarkerBySourceRowId(sourceRowId), {
       historyMode: 'restore'
     });
     return;
@@ -1590,6 +1691,7 @@ async function selectPersonPoint(person, marker, options = {}) {
   const key = buildPersonKey(person);
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
+  cacheKnownPeople([person]);
 
   saveLastSelectedPersonId(person.sourceRowId);
   if (options.historyMode !== 'restore') {
@@ -1603,6 +1705,11 @@ async function selectPersonPoint(person, marker, options = {}) {
   if (options.panelMode) {
     setInfoPanelMode(options.panelMode);
   }
+  const ensuredMarker = ensurePersonMarkerVisible(person);
+  if (activeSelection?.key === key) {
+    activeSelection.marker = ensuredMarker;
+    applyMarkerSelection(ensuredMarker, 'person');
+  }
   renderPersonSelectionState(person);
 
   const details = await window.appApi.getPersonDetails(person.sourceRowId);
@@ -1610,10 +1717,12 @@ async function selectPersonPoint(person, marker, options = {}) {
     return;
   }
 
+  cacheKnownPeople([details.person]);
   renderPersonSelection(details);
 }
 
 function selectCustomPoint(point, marker, options = {}) {
+  clearHoveredPersonSourceRowId();
   selectionRequestToken += 1;
   setActiveSelection({
     key: buildCustomPointKey(point),
@@ -1633,6 +1742,7 @@ function setActiveSelection(nextSelection) {
 
   activeSelection = nextSelection;
   applyMarkerSelection(nextSelection.marker, nextSelection.type);
+  syncSupplementalPeopleMarkers();
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
   });
@@ -1654,6 +1764,7 @@ function clearActiveSelection(options = {}) {
   }
 
   activeSelection = null;
+  syncSupplementalPeopleMarkers();
 
   if (infoPanelMode === 'filter') {
     paintFilterPanel();
@@ -1674,8 +1785,7 @@ function applyMarkerSelection(marker, type) {
   }
 
   if (type === 'person' && typeof marker.setStyle === 'function') {
-    marker.setStyle(ACTIVE_PERSON_MARKER_STYLE);
-    marker.bringToFront?.();
+    syncPersonMarkerAppearance(marker, marker.__personSourceRowId);
     return;
   }
 
@@ -1690,7 +1800,7 @@ function resetMarkerSelection(marker, type) {
   }
 
   if (type === 'person' && typeof marker.setStyle === 'function') {
-    marker.setStyle(DEFAULT_PERSON_MARKER_STYLE);
+    syncPersonMarkerAppearance(marker, marker.__personSourceRowId);
     return;
   }
 
@@ -1712,6 +1822,7 @@ function renderEmptySelection() {
 }
 
 function paintEmptySelection() {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
@@ -1740,6 +1851,7 @@ function renderPersonSelectionState(person) {
 }
 
 function paintPersonSelectionState(person) {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false);
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
@@ -1770,6 +1882,7 @@ function renderPersonSelection(details) {
 }
 
 function paintPersonSelection(details) {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false);
   const person = details.person;
   selectionHeaderEl.hidden = false;
@@ -1854,6 +1967,7 @@ function renderCustomPointSelection(point) {
 }
 
 function paintCustomPointSelection(point) {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false);
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = point.label || 'Punkt lokalny';
@@ -1898,6 +2012,7 @@ function setInfoPanelMode(mode) {
     return;
   }
 
+  clearHoveredPersonSourceRowId();
   infoPanelMode = nextMode;
   syncInfoToolButtons();
   persistMapPanelState();
@@ -2033,6 +2148,7 @@ function paintStatsSelection(summary) {
 }
 
 function paintSearchPanel() {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
@@ -2089,6 +2205,7 @@ function paintSearchPanel() {
       </div>
     </form>
   `;
+  bindHoverTrackingToRenderedPersonLists();
   selectionExtraEl.hidden = false;
 
   if (!isSettingsOpen) {
@@ -2126,6 +2243,7 @@ function renderPersonSearchResults() {
           type="button"
           class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
           data-map-search-source-row-id="${escapeHtml(person.sourceRowId)}"
+          data-map-hover-source-row-id="${escapeHtml(person.sourceRowId)}"
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
@@ -2140,6 +2258,7 @@ function renderPersonSearchResults() {
 }
 
 function paintFilterPanel() {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(false, true);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
@@ -2206,6 +2325,7 @@ function paintFilterPanel() {
       </div>
     </form>
   `;
+  bindHoverTrackingToRenderedPersonLists();
   selectionExtraEl.hidden = false;
 }
 
@@ -2226,6 +2346,7 @@ function renderMapDateFilterResults() {
           type="button"
           class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
           data-map-filter-source-row-id="${escapeHtml(person.sourceRowId)}"
+          data-map-hover-source-row-id="${escapeHtml(person.sourceRowId)}"
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
@@ -2308,6 +2429,7 @@ async function loadPersonSearchResults(query, options = {}) {
     isLoading: false,
     hasLoaded: true
   };
+  cacheKnownPeople(personSearchState.results);
 
   if (infoPanelMode === 'search') {
     paintSearchPanel();
@@ -2325,18 +2447,26 @@ function focusMapSearchInput() {
 }
 
 function paintHistorySelection() {
+  clearHoveredPersonSourceRowId();
   syncOverviewSpacing(true);
   const historyEntries = personSelectionHistory.entries
     .map((sourceRowId, index) => {
-      const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
+      const person = findPersonBySourceRowId(sourceRowId);
       return {
         index,
         sourceRowId,
         person
       };
     })
-    .filter((entry) => entry.person)
     .reverse();
+  const missingSourceRowIds = historyEntries
+    .filter((entry) => !entry.person)
+    .map((entry) => entry.sourceRowId)
+    .filter(Boolean);
+
+  if (missingSourceRowIds.length > 0) {
+    void loadMissingHistoryPeople(missingSourceRowIds);
+  }
 
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
@@ -2362,19 +2492,22 @@ function paintHistorySelection() {
         return `
           <button
             type="button"
-            class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
+            class="person-row map-history-row${isCurrent ? ' is-current' : ''}${person ? '' : ' is-loading'}"
             data-history-source-row-id="${escapeHtml(sourceRowId)}"
+            ${person ? `data-map-hover-source-row-id="${escapeHtml(sourceRowId)}"` : ''}
+            ${person ? '' : 'disabled'}
           >
             <div class="list-card-heading">
-              <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+              <strong>${escapeHtml(person?.fullName || person?.companyName || 'Ladowanie osoby...')}</strong>
             </div>
-            <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
-            <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+            <span>${escapeHtml(person?.routeAddress || person?.addressText || 'Pobieranie danych z historii...')}</span>
+            <span>Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}</span>
           </button>
         `;
       })
       .join('')}
   `;
+  bindHoverTrackingToRenderedPersonLists();
   selectionExtraEl.hidden = false;
 }
 
@@ -2383,4 +2516,432 @@ function syncOverviewSpacing(isHistoryMode, isFilterMode = false) {
   overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-history', Boolean(isHistoryMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-filter', Boolean(isFilterMode));
+}
+
+function bindHoverTrackingToRenderedPersonLists() {
+  selectionExtraEl?.querySelectorAll('.vertical-list.compact-list').forEach((listElement) => {
+    if (listElement.dataset.hoverTrackingBound === 'true') {
+      return;
+    }
+
+    listElement.dataset.hoverTrackingBound = 'true';
+    listElement.addEventListener('pointermove', (event) => {
+      selectionExtraPointerState = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        isInside: true
+      };
+      scheduleHoveredPersonPointerSync();
+    });
+    listElement.addEventListener(
+      'wheel',
+      (event) => {
+        selectionExtraPointerState = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          isInside: true
+        };
+        scheduleHoveredPersonPointerSync({ afterLayout: true });
+      },
+      { passive: true }
+    );
+    listElement.addEventListener('scroll', () => {
+      scheduleHoveredPersonPointerSync({ afterLayout: true });
+    });
+  });
+
+  syncHoveredPersonListRows();
+}
+
+function cacheKnownPeople(people) {
+  if (!Array.isArray(people)) {
+    return;
+  }
+
+  people.forEach((person) => {
+    if (!person?.sourceRowId) {
+      return;
+    }
+
+    knownPeopleBySourceRowId.set(person.sourceRowId, person);
+  });
+}
+
+function isPersonIncludedInCurrentMapData(sourceRowId) {
+  if (!sourceRowId) {
+    return false;
+  }
+
+  return allPeople.some((entry) => entry.sourceRowId === sourceRowId);
+}
+
+function scheduleHoveredPersonPointerSync(options = {}) {
+  if (options.afterLayout) {
+    if (hoveredPersonPointerSyncTimeout) {
+      window.clearTimeout(hoveredPersonPointerSyncTimeout);
+    }
+    hoveredPersonPointerSyncTimeout = window.setTimeout(() => {
+      hoveredPersonPointerSyncTimeout = 0;
+      runHoveredPersonPointerSync();
+    }, 0);
+    return;
+  }
+
+  runHoveredPersonPointerSync();
+}
+
+function runHoveredPersonPointerSync() {
+  if (hoveredPersonPointerSyncTimeout) {
+    window.clearTimeout(hoveredPersonPointerSyncTimeout);
+    hoveredPersonPointerSyncTimeout = 0;
+  }
+
+  if (hoveredPersonPointerSyncFrame) {
+    return;
+  }
+
+  hoveredPersonPointerSyncFrame = window.requestAnimationFrame(() => {
+    hoveredPersonPointerSyncFrame = 0;
+    syncHoveredPersonFromPointer();
+  });
+}
+
+function syncHoveredPersonFromPointer() {
+  if (!selectionExtraEl || !selectionExtraPointerState.isInside) {
+    return;
+  }
+
+  const { clientX, clientY } = selectionExtraPointerState;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return;
+  }
+
+  const hoveredElement = document.elementFromPoint(clientX, clientY);
+  if (!hoveredElement || !selectionExtraEl.contains(hoveredElement)) {
+    clearHoveredPersonSourceRowId();
+    return;
+  }
+
+  const personRow = hoveredElement.closest('[data-map-hover-source-row-id]');
+  if (!personRow || !selectionExtraEl.contains(personRow)) {
+    clearHoveredPersonSourceRowId();
+    return;
+  }
+
+  setHoveredPersonSourceRowId(personRow.getAttribute('data-map-hover-source-row-id'));
+}
+
+function setHoveredPersonSourceRowId(sourceRowId) {
+  const normalizedSourceRowId = typeof sourceRowId === 'string' ? sourceRowId : '';
+  if (hoveredPersonSourceRowId === normalizedSourceRowId) {
+    return;
+  }
+
+  const previousSourceRowId = hoveredPersonSourceRowId;
+  hoveredPersonSourceRowId = normalizedSourceRowId;
+  syncHoveredPersonListRows();
+  syncSupplementalPeopleMarkers();
+  syncPersonMarkerAppearanceBySourceRowId(previousSourceRowId);
+
+  if (!hoveredPersonSourceRowId) {
+    return;
+  }
+
+  const person = findPersonBySourceRowId(hoveredPersonSourceRowId);
+  if (!person) {
+    hoveredPersonSourceRowId = null;
+    return;
+  }
+
+  const marker = ensurePersonMarkerVisible(person);
+  syncPersonMarkerAppearance(marker, hoveredPersonSourceRowId);
+}
+
+function clearHoveredPersonSourceRowId() {
+  if (!hoveredPersonSourceRowId) {
+    return;
+  }
+
+  const previousSourceRowId = hoveredPersonSourceRowId;
+  hoveredPersonSourceRowId = null;
+  syncHoveredPersonListRows();
+  syncSupplementalPeopleMarkers();
+  syncPersonMarkerAppearanceBySourceRowId(previousSourceRowId);
+}
+
+function syncHoveredPersonListRows() {
+  selectionExtraEl?.querySelectorAll('[data-map-hover-source-row-id]').forEach((rowElement) => {
+    const isHovered = rowElement.getAttribute('data-map-hover-source-row-id') === hoveredPersonSourceRowId;
+    rowElement.classList.toggle('is-hovered', isHovered);
+  });
+}
+
+function findPersonBySourceRowId(sourceRowId) {
+  if (!sourceRowId) {
+    return null;
+  }
+
+  const personFromSelectionState = selectionPanelState.kind === 'person'
+    ? selectionPanelState.details?.person
+    : selectionPanelState.kind === 'person-loading'
+      ? selectionPanelState.person
+      : null;
+
+  return (
+    allPeople.find((entry) => entry.sourceRowId === sourceRowId) ||
+    knownPeopleBySourceRowId.get(sourceRowId) ||
+    (personFromSelectionState?.sourceRowId === sourceRowId ? personFromSelectionState : null) ||
+    personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId) ||
+    null
+  );
+}
+
+async function loadMissingHistoryPeople(sourceRowIds) {
+  const missingSourceRowIds = Array.from(new Set(sourceRowIds))
+    .filter((sourceRowId) => sourceRowId && !findPersonBySourceRowId(sourceRowId))
+    .filter((sourceRowId) => !historyPeopleLoadingSourceRowIds.has(sourceRowId));
+
+  if (missingSourceRowIds.length === 0) {
+    return;
+  }
+
+  missingSourceRowIds.forEach((sourceRowId) => {
+    historyPeopleLoadingSourceRowIds.add(sourceRowId);
+  });
+
+  await Promise.all(
+    missingSourceRowIds.map(async (sourceRowId) => {
+      try {
+        const details = await window.appApi.getPersonDetails(sourceRowId);
+        if (details?.person) {
+          cacheKnownPeople([details.person]);
+        }
+      } catch (_error) {
+        // Ignore fetch failures for history placeholders.
+      } finally {
+        historyPeopleLoadingSourceRowIds.delete(sourceRowId);
+      }
+    })
+  );
+
+  if (infoPanelMode === 'history') {
+    paintHistorySelection();
+  }
+}
+
+function ensurePersonMarkerVisible(person) {
+  if (!person?.sourceRowId) {
+    return null;
+  }
+
+  const isHiddenByCurrentFilter = !isPersonIncludedInCurrentMapData(person.sourceRowId);
+  let marker = getPersonMarkerBySourceRowId(person.sourceRowId);
+  if (!mapInstance || !Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
+    return marker;
+  }
+
+  const point = [person.lat, person.lng];
+  if (isHiddenByCurrentFilter || !mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING).contains(point)) {
+    mapInstance.panTo(point, {
+      animate: false
+    });
+  }
+
+  if (isHiddenByCurrentFilter) {
+    syncSupplementalPeopleMarkers();
+  } else if (!marker) {
+    syncVisibleMarkers();
+  }
+  marker = getPersonMarkerBySourceRowId(person.sourceRowId);
+  return marker;
+}
+
+function getPersonMarkerBySourceRowId(sourceRowId) {
+  const personKey = buildPersonKeyFromSourceRowId(sourceRowId);
+  if (!personKey) {
+    return null;
+  }
+
+  const visibleMarker = visiblePeopleMarkers.get(personKey);
+  if (visibleMarker) {
+    return visibleMarker;
+  }
+
+  const supplementalMarker = supplementalPeopleMarkers.get(personKey);
+  if (supplementalMarker) {
+    return supplementalMarker;
+  }
+
+  if (activeSelection?.type === 'person' && activeSelection.key === personKey && activeSelection.marker) {
+    return activeSelection.marker;
+  }
+
+  return null;
+}
+
+function syncPersonMarkerAppearanceBySourceRowId(sourceRowId) {
+  if (!sourceRowId) {
+    return;
+  }
+
+  syncPersonMarkerAppearance(getPersonMarkerBySourceRowId(sourceRowId), sourceRowId);
+}
+
+function syncPersonMarkerAppearance(marker, sourceRowId) {
+  if (!marker || !sourceRowId) {
+    return;
+  }
+
+  const personKey = buildPersonKeyFromSourceRowId(sourceRowId);
+  const isActivePerson = activeSelection?.type === 'person' && activeSelection.key === personKey;
+  const isHoveredPerson = hoveredPersonSourceRowId === sourceRowId;
+
+  if (typeof marker.setStyle === 'function') {
+    const nextStyle = isHoveredPerson
+        ? HOVER_PERSON_MARKER_STYLE
+      : isActivePerson
+        ? ACTIVE_PERSON_MARKER_STYLE
+        : DEFAULT_PERSON_MARKER_STYLE;
+    marker.setStyle(nextStyle);
+  }
+
+  if (typeof marker.setIcon === 'function' && marker.__personMarkerVariant === 'supplemental') {
+    syncSupplementalPersonMarkerIcon(marker, sourceRowId, {
+      isActivePerson,
+      isHoveredPerson
+    });
+  }
+
+  syncHighlightedPersonMarkerOrder();
+}
+
+function syncSupplementalPersonMarkerIcon(marker, sourceRowId, state) {
+  marker.setIcon(buildSupplementalPersonIcon(sourceRowId));
+  if (typeof marker.setZIndexOffset === 'function') {
+    marker.setZIndexOffset(state?.isHoveredPerson ? 2200 : state?.isActivePerson ? 1800 : 0);
+  }
+}
+
+function buildSupplementalPersonIcon(sourceRowId) {
+  const size = SUPPLEMENTAL_PERSON_ICON_SIZE;
+  const center = size / 2;
+  const radius = SUPPLEMENTAL_PERSON_ICON_RADIUS;
+  const baseFill = '#79b7ff';
+  const strokeColor = HOVER_PERSON_MARKER_STYLE.color;
+  const innerStrokeColor = '#d2efff';
+  const hatchColor = '#c2e7fb';
+  const patternId = `supplemental-pattern-${String(sourceRowId || 'person').replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
+  return L.divIcon({
+    className: 'supplemental-person-marker',
+    iconSize: [size, size],
+    iconAnchor: [center, center],
+    popupAnchor: [0, -center + 4],
+    html: `
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+        <defs>
+          <pattern id="${patternId}" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="6" stroke="${hatchColor}" stroke-width="2" stroke-linecap="round" />
+          </pattern>
+        </defs>
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="${baseFill}" />
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="url(#${patternId})" />
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${innerStrokeColor}" stroke-width="1.5" />
+        <circle cx="${center}" cy="${center}" r="${radius + 1}" fill="none" stroke="${strokeColor}" stroke-width="2.5" />
+      </svg>
+    `
+  });
+}
+
+function syncSupplementalPeopleMarkers() {
+  const requiredSourceRowIds = new Set();
+  const activePersonSourceRowId =
+    activeSelection?.type === 'person' ? activeSelection.key.replace(/^person:/, '') : '';
+
+  if (activePersonSourceRowId && !isPersonIncludedInCurrentMapData(activePersonSourceRowId)) {
+    requiredSourceRowIds.add(activePersonSourceRowId);
+  }
+
+  if (hoveredPersonSourceRowId && !isPersonIncludedInCurrentMapData(hoveredPersonSourceRowId)) {
+    requiredSourceRowIds.add(hoveredPersonSourceRowId);
+  }
+
+  for (const [personKey, marker] of supplementalPeopleMarkers.entries()) {
+    const sourceRowId = marker.__personSourceRowId || personKey.replace(/^person:/, '');
+    if (requiredSourceRowIds.has(sourceRowId)) {
+      continue;
+    }
+
+    supplementalPeopleLayer?.removeLayer(marker);
+    supplementalPeopleMarkers.delete(personKey);
+    if (activeSelection?.type === 'person' && activeSelection.key === personKey && activeSelection.marker === marker) {
+      activeSelection.marker = visiblePeopleMarkers.get(personKey) || null;
+    }
+  }
+
+  requiredSourceRowIds.forEach((sourceRowId) => {
+    const person = findPersonBySourceRowId(sourceRowId);
+    if (!person || !Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
+      return;
+    }
+
+    const marker = ensureSupplementalPersonMarker(person);
+    if (activeSelection?.type === 'person' && activeSelection.key === buildPersonKeyFromSourceRowId(sourceRowId)) {
+      activeSelection.marker = marker;
+    }
+    syncPersonMarkerAppearance(marker, sourceRowId);
+  });
+}
+
+function ensureSupplementalPersonMarker(person) {
+  const personKey = buildPersonKey(person);
+  let marker = supplementalPeopleMarkers.get(personKey);
+  const latLng = [person.lat, person.lng];
+
+  if (!marker) {
+    marker = L.marker(latLng, {
+      icon: buildSupplementalPersonIcon(person.sourceRowId),
+      keyboard: false,
+      title: person.fullName || person.companyName || 'Osoba'
+    });
+    marker.__personMarkerVariant = 'supplemental';
+    marker.__personSourceRowId = person.sourceRowId;
+    attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
+      void selectPersonPoint(person, marker, { panelMode: 'selection' });
+    });
+    supplementalPeopleLayer?.addLayer(marker);
+    supplementalPeopleMarkers.set(personKey, marker);
+    return marker;
+  }
+
+  marker.setLatLng(latLng);
+  return marker;
+}
+
+function syncHighlightedPersonMarkerOrder() {
+  const activePersonSourceRowId = getCurrentSelectedPersonSourceRowId();
+  const activeMarker = getPersonMarkerBySourceRowId(activePersonSourceRowId);
+  const hoveredMarker = getPersonMarkerBySourceRowId(hoveredPersonSourceRowId);
+  const hoveredIsActive = Boolean(
+    activeMarker &&
+      hoveredMarker &&
+      activeMarker === hoveredMarker
+  );
+
+  activeMarker?.bringToFront?.();
+  activeMarker?.setZIndexOffset?.(hoveredIsActive ? 2200 : 1800);
+  if (hoveredMarker && hoveredMarker !== activeMarker) {
+    hoveredMarker.bringToFront?.();
+    hoveredMarker.setZIndexOffset?.(2200);
+  }
+
+  if (activeMarker?.__personMarkerVariant === 'supplemental') {
+    activeMarker.bringToFront?.();
+    activeMarker.setZIndexOffset?.(hoveredIsActive ? 2800 : 2600);
+  }
+
+  if (hoveredMarker?.__personMarkerVariant === 'supplemental') {
+    hoveredMarker.bringToFront?.();
+    hoveredMarker.setZIndexOffset?.(2800);
+  }
 }
