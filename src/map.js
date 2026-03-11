@@ -18,7 +18,6 @@ const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
 const settingsButtonEl = document.querySelector('.settings-gear-button');
-const statsButtonEl = document.querySelector('[data-map-tool="stats"]');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
@@ -98,7 +97,7 @@ const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
-const INFO_PANEL_MODES = ['stats', 'selection', 'search', 'history', 'filter'];
+const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter'];
 const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
 const EARLIEST_COMPARABLE_DATE = '0001-01-01';
 const LATEST_COMPARABLE_DATE = '9999-12-31';
@@ -175,10 +174,6 @@ let historyPeopleLoadingSourceRowIds = new Set();
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel(undefined, { historyEntry: 'push' });
-});
-
-statsButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('stats');
 });
 
 selectionButtonEl?.addEventListener('click', () => {
@@ -518,9 +513,6 @@ function renderOverviewSummary(summary) {
       : 'Jeszcze nie importowano';
   }
 
-  if (infoPanelMode === 'stats') {
-    paintStatsSelection(summary);
-  }
 }
 
 function buildMap() {
@@ -2589,11 +2581,6 @@ function setInfoPanelMode(mode, options = {}) {
 }
 
 function renderCurrentInfoPanel() {
-  if (infoPanelMode === 'stats') {
-    paintStatsSelection(latestOverviewSummary);
-    return;
-  }
-
   if (infoPanelMode === 'history') {
     paintHistorySelection();
     return;
@@ -2626,15 +2613,11 @@ function normalizeInfoPanelMode(value) {
 
 function syncInfoToolButtons() {
   const shouldHighlightInfoMode = !isSettingsOpen;
-  const isStatsMode = shouldHighlightInfoMode && infoPanelMode === 'stats';
   const isSelectionMode = shouldHighlightInfoMode && infoPanelMode === 'selection';
   const isSearchMode = shouldHighlightInfoMode && infoPanelMode === 'search';
   const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
   const isFilterMode =
     shouldHighlightInfoMode && (infoPanelMode === 'filter' || hasActiveMapDateFilter());
-
-  statsButtonEl?.classList.toggle('is-active', isStatsMode);
-  statsButtonEl?.setAttribute('aria-pressed', String(isStatsMode));
 
   selectionButtonEl?.classList.toggle('is-active', isSelectionMode);
   selectionButtonEl?.setAttribute('aria-pressed', String(isSelectionMode));
