@@ -33,26 +33,31 @@ const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
 const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
 
+const PERSON_LOCATION_MARKER_OPACITY = 0.5;
+const PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY = 1;
 const DEFAULT_PERSON_MARKER_STYLE = {
   radius: 7,
   color: '#23412e',
+  opacity: PERSON_LOCATION_MARKER_OPACITY,
   weight: 2,
   fillColor: '#4db06f',
-  fillOpacity: 0.9
+  fillOpacity: PERSON_LOCATION_MARKER_OPACITY
 };
 const ACTIVE_PERSON_MARKER_STYLE = {
   radius: 9,
   color: '#7f3512',
+  opacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY,
   weight: 3,
   fillColor: '#f1a167',
-  fillOpacity: 1
+  fillOpacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY
 };
 const HOVER_PERSON_MARKER_STYLE = {
   radius: 9,
   color: '#1e4f86',
+  opacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY,
   weight: 3,
   fillColor: '#79b7ff',
-  fillOpacity: 1
+  fillOpacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY
 };
 const SUPPLEMENTAL_PERSON_ICON_SIZE = 26;
 const SUPPLEMENTAL_PERSON_ICON_RADIUS = 9;
@@ -3764,10 +3769,10 @@ function buildSupplementalPersonIcon(sourceRowId) {
             <line x1="0" y1="0" x2="0" y2="6" stroke="${hatchColor}" stroke-width="2" stroke-linecap="round" />
           </pattern>
         </defs>
-        <circle cx="${center}" cy="${center}" r="${radius}" fill="${baseFill}" />
-        <circle cx="${center}" cy="${center}" r="${radius}" fill="url(#${patternId})" />
-        <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${innerStrokeColor}" stroke-width="1.5" />
-        <circle cx="${center}" cy="${center}" r="${radius + 1}" fill="none" stroke="${strokeColor}" stroke-width="2.5" />
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="${baseFill}" fill-opacity="${PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY}" />
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="url(#${patternId})" fill-opacity="${PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY}" />
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${innerStrokeColor}" stroke-width="1.5" stroke-opacity="${PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY}" />
+        <circle cx="${center}" cy="${center}" r="${radius + 1}" fill="none" stroke="${strokeColor}" stroke-width="2.5" stroke-opacity="${PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY}" />
       </svg>
     `
   });

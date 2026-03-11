@@ -575,7 +575,7 @@ textarea {
 }
 
 .map-tool-button-search i {
-  transform: scaleX(-1);
+  transform: none;
 }
 
 .map-stats-grid {
