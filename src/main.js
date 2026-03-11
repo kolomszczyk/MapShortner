@@ -1193,6 +1193,7 @@ ipcMain.handle('data:getTableRows', (_event, input) => store.getTableRows(input)
 ipcMain.handle('people:list', (_event, input) => store.listPeople(input));
 ipcMain.handle('people:getDetails', (_event, sourceRowId) => store.getPersonDetails(sourceRowId));
 ipcMain.handle('map:getPoints', (_event, input) => store.listMapPoints(input));
+ipcMain.handle('map:getDateFilterOptions', () => store.listMapDateFilterOptions());
 
 ipcMain.handle('route:build', async (_event, payload = {}) => {
   let originLat = payload.originLat;

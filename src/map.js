@@ -68,15 +68,20 @@ const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
 const MAP_PERSON_SEARCH_LIMIT = 100;
 const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
+const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
 const INFO_PANEL_MODES = ['stats', 'selection', 'search', 'history', 'filter'];
+const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
 const restoredMapPanelState = readStoredMapPanelState();
+const restoredMapDateFilterState = readStoredMapDateFilterState();
 
 let mapInstance;
 let peopleLayer;
 let customLayer;
 let personRenderer;
+let sourcePeople = [];
+let sourceCustomPoints = [];
 let allPeople = [];
 let allCustomPoints = [];
 let visiblePeopleMarkers = new Map();
@@ -96,7 +101,13 @@ let personSelectionHistory = {
   index: -1
 };
 let isPersonSelectionHistoryReady = false;
-let mapDateFilter = normalizeMapDateFilter({});
+let mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(restoredMapDateFilterState);
+let mapDateFilter = mapDateFilterHasInvalidRange
+  ? normalizeMapDateFilter({})
+  : normalizeMapDateFilter(restoredMapDateFilterState);
+let mapDateFilterOptions = [];
+let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, mapDateFilter);
+let mapDateFilterApplyTimer = null;
 let personSearchTimer = null;
 let personSearchRequestToken = 0;
 let personSearchState = {
@@ -150,6 +161,21 @@ filterButtonEl?.addEventListener('click', () => {
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
+  const filterResultButton = event.target.closest('[data-map-filter-source-row-id]');
+  if (filterResultButton && infoPanelMode === 'filter') {
+    const sourceRowId = filterResultButton.getAttribute('data-map-filter-source-row-id');
+    const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
+    if (!person) {
+      return;
+    }
+
+    focusSelectionOnMap(person);
+    void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
+      panelMode: 'selection'
+    });
+    return;
+  }
+
   const searchResultButton = event.target.closest('[data-map-search-source-row-id]');
   if (searchResultButton && infoPanelMode === 'search') {
     const sourceRowId = searchResultButton.getAttribute('data-map-search-source-row-id');
@@ -174,6 +200,7 @@ selectionExtraEl?.addEventListener('click', (event) => {
 
   const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
   if (resetFilterButton && infoPanelMode === 'filter') {
+    mapDateFilterDraft = buildMapDateFilterDraft({});
     void applyMapDateFilter({});
     return;
   }
@@ -218,6 +245,29 @@ selectionExtraEl?.addEventListener('input', (event) => {
   updatePersonSearchQuery(searchField.value);
 });
 
+selectionExtraEl?.addEventListener('change', (event) => {
+  const filterField = event.target.closest('[data-map-date-filter-form] select');
+  if (!filterField || infoPanelMode !== 'filter') {
+    return;
+  }
+
+  const filterForm = filterField.closest('[data-map-date-filter-form]');
+  if (!filterForm) {
+    return;
+  }
+
+  const formData = new FormData(filterForm);
+  mapDateFilterDraft = normalizeMapDateFilterDraft({
+    fromMonth: formData.get('fromMonth'),
+    fromYear: formData.get('fromYear'),
+    toMonth: formData.get('toMonth'),
+    toYear: formData.get('toYear')
+  });
+  mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
+  paintFilterPanel();
+  scheduleMapDateFilterApply();
+});
+
 selectionExtraEl?.addEventListener('submit', (event) => {
   const searchForm = event.target.closest('[data-map-person-search-form]');
   if (searchForm && infoPanelMode === 'search') {
@@ -234,9 +284,15 @@ selectionExtraEl?.addEventListener('submit', (event) => {
 
   event.preventDefault();
   const formData = new FormData(filterForm);
+  mapDateFilterDraft = normalizeMapDateFilterDraft({
+    fromMonth: formData.get('fromMonth'),
+    fromYear: formData.get('fromYear'),
+    toMonth: formData.get('toMonth'),
+    toYear: formData.get('toYear')
+  });
+  mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
   void applyMapDateFilter({
-    dateFrom: formData.get('dateFrom'),
-    dateTo: formData.get('dateTo')
+    ...mapDateFilterDraft
   });
 });
 
@@ -259,6 +315,9 @@ window.appApi.onOperationStatus(async (payload) => {
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
   ) {
+    if (payload.type === 'import' || payload.type === 'trasa-import') {
+      await loadMapDateFilterOptions();
+    }
     await loadPoints();
   }
 });
@@ -268,7 +327,10 @@ renderCurrentInfoPanel();
 bootstrap();
 
 async function bootstrap() {
-  const bootstrapData = await window.appApi.getBootstrap();
+  const [bootstrapData] = await Promise.all([
+    window.appApi.getBootstrap(),
+    loadMapDateFilterOptions()
+  ]);
   renderOverviewSummary(bootstrapData.summary);
   initDashboardPanel({
     root: settingsViewEl,
@@ -400,15 +462,27 @@ async function loadPoints() {
     return;
   }
 
-  const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
+  const payload = await window.appApi.getMapPoints({
+    query: '',
+    includeUnresolved: false
+  });
+  sourcePeople = payload.people || [];
+  sourceCustomPoints = payload.customPoints || [];
+  applyCurrentMapPoints();
+}
 
-  allPeople = payload.people || [];
-  allCustomPoints = payload.customPoints || [];
-  const nextPerson = hasActiveMapDateFilter()
-    ? resolveVisiblePersonSelection(allPeople)
-    : resolveCurrentPersonSelection(allPeople);
+function applyCurrentMapPoints() {
+  const shouldAutoSelectPerson = infoPanelMode !== 'filter';
 
-  clearActiveSelection({ resetPanel: !nextPerson });
+  allPeople = filterPeopleByCurrentMapDateRange(sourcePeople);
+  allCustomPoints = sourceCustomPoints;
+  const nextPerson = shouldAutoSelectPerson
+    ? hasActiveMapDateFilter()
+      ? resolveVisiblePersonSelection(allPeople)
+      : resolveCurrentPersonSelection(allPeople)
+    : null;
+
+  clearActiveSelection({ resetPanel: shouldAutoSelectPerson ? !nextPerson : false });
 
   if (nextPerson) {
     focusSelectionOnMap(nextPerson);
@@ -430,22 +504,18 @@ async function loadPoints() {
   scheduleVisibleMarkerSync(0);
 }
 
-function buildMapPointsRequest() {
-  const payload = {
-    query: '',
-    includeUnresolved: false
-  };
-
-  if (!hasActiveMapDateFilter()) {
-    return payload;
+function scheduleMapDateFilterApply() {
+  if (mapDateFilterApplyTimer) {
+    window.clearTimeout(mapDateFilterApplyTimer);
+    mapDateFilterApplyTimer = null;
   }
 
-  return {
-    ...payload,
-    dateField: 'lastVisitAt',
-    dateFrom: mapDateFilter.dateFrom || undefined,
-    dateTo: mapDateFilter.dateTo || undefined
-  };
+  mapDateFilterApplyTimer = window.setTimeout(() => {
+    mapDateFilterApplyTimer = null;
+    void applyMapDateFilter({
+      ...mapDateFilterDraft
+    });
+  }, 0);
 }
 
 function hasActiveMapDateFilter() {
@@ -454,6 +524,17 @@ function hasActiveMapDateFilter() {
 
 async function applyMapDateFilter(nextFilter) {
   const normalizedFilter = normalizeMapDateFilter(nextFilter);
+  mapDateFilterDraft = resolveMapDateFilterDraft(nextFilter, normalizedFilter);
+  mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
+  persistMapDateFilterState();
+
+  if (mapDateFilterHasInvalidRange) {
+    if (infoPanelMode === 'filter') {
+      paintFilterPanel();
+    }
+    return;
+  }
+
   const didChange =
     normalizedFilter.dateFrom !== mapDateFilter.dateFrom || normalizedFilter.dateTo !== mapDateFilter.dateTo;
 
@@ -467,15 +548,31 @@ async function applyMapDateFilter(nextFilter) {
     return;
   }
 
-  await loadPoints();
+  applyCurrentMapPoints();
 }
 
 function normalizeMapDateFilter(input = {}) {
-  let dateFrom = normalizeDateInputValue(input?.dateFrom);
-  let dateTo = normalizeDateInputValue(input?.dateTo);
+  let dateFrom = '';
+  let dateTo = '';
+  const normalizedFromMonth = normalizeMonthNumberInputValue(input?.fromMonth);
+  const normalizedFromYear = normalizeYearInputValue(input?.fromYear);
+  const normalizedToMonth = normalizeMonthNumberInputValue(input?.toMonth);
+  const normalizedToYear = normalizeYearInputValue(input?.toYear);
 
-  if (dateFrom && dateTo && dateFrom > dateTo) {
-    [dateFrom, dateTo] = [dateTo, dateFrom];
+  if (normalizedFromMonth && normalizedFromYear) {
+    dateFrom = `${normalizedFromYear}-${normalizedFromMonth}-01`;
+  } else if (normalizeMonthInputValue(input?.monthFrom)) {
+    dateFrom = `${normalizeMonthInputValue(input?.monthFrom)}-01`;
+  } else {
+    dateFrom = normalizeDateInputValue(input?.dateFrom);
+  }
+
+  if (normalizedToMonth && normalizedToYear) {
+    dateTo = getMonthEndDate(`${normalizedToYear}-${normalizedToMonth}`);
+  } else if (normalizeMonthInputValue(input?.monthTo)) {
+    dateTo = getMonthEndDate(normalizeMonthInputValue(input?.monthTo));
+  } else {
+    dateTo = normalizeDateInputValue(input?.dateTo);
   }
 
   return {
@@ -512,6 +609,194 @@ function normalizeDateInputValue(value) {
   }
 
   return parsedDate.toISOString().slice(0, 10);
+}
+
+function filterPeopleByCurrentMapDateRange(people) {
+  if (!Array.isArray(people)) {
+    return [];
+  }
+
+  if (!hasActiveMapDateFilter()) {
+    return people;
+  }
+
+  const from = mapDateFilter.dateFrom || '';
+  const to = mapDateFilter.dateTo || '';
+
+  return people.filter((person) => {
+    const value = normalizeDateInputValue(person?.lastVisitAt);
+    if (!value) {
+      return false;
+    }
+
+    if (from && value < from) {
+      return false;
+    }
+
+    if (to && value > to) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function normalizeMapDateFilterDraft(input = {}) {
+  return {
+    fromMonth: normalizeMonthNumberInputValue(input?.fromMonth),
+    fromYear: normalizeYearInputValue(input?.fromYear),
+    toMonth: normalizeMonthNumberInputValue(input?.toMonth),
+    toYear: normalizeYearInputValue(input?.toYear)
+  };
+}
+
+function hasInvalidMapDateRangeDraft(input = mapDateFilterDraft) {
+  const draft = normalizeMapDateFilterDraft(input);
+  if (!draft.fromYear || !draft.fromMonth || !draft.toYear || !draft.toMonth) {
+    return false;
+  }
+
+  const fromDate = `${draft.fromYear}-${draft.fromMonth}-01`;
+  const toDate = getMonthEndDate(`${draft.toYear}-${draft.toMonth}`);
+  return Boolean(fromDate && toDate && fromDate > toDate);
+}
+
+function normalizeMonthInputValue(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}$/.test(trimmed) ? trimmed : '';
+}
+
+function normalizeMonthNumberInputValue(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return /^(0[1-9]|1[0-2])$/.test(trimmed) ? trimmed : '';
+}
+
+function normalizeYearInputValue(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return /^\d{4}$/.test(trimmed) ? trimmed : '';
+}
+
+function getMonthEndDate(monthValue) {
+  const normalized = normalizeMonthInputValue(monthValue);
+  if (!normalized) {
+    return '';
+  }
+
+  const [yearPart, monthPart] = normalized.split('-');
+  const year = Number(yearPart);
+  const monthIndex = Number(monthPart);
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 1 || monthIndex > 12) {
+    return '';
+  }
+
+  const lastDay = new Date(Date.UTC(year, monthIndex, 0));
+  return lastDay.toISOString().slice(0, 10);
+}
+
+function extractMonthValue(dateValue) {
+  const normalizedDate = normalizeDateInputValue(dateValue);
+  return normalizedDate ? normalizedDate.slice(0, 7) : '';
+}
+
+function extractYearValue(dateValue) {
+  const monthValue = extractMonthValue(dateValue);
+  return monthValue ? monthValue.slice(0, 4) : '';
+}
+
+function extractMonthNumberValue(dateValue) {
+  const monthValue = extractMonthValue(dateValue);
+  return monthValue ? monthValue.slice(5, 7) : '';
+}
+
+function buildMapDateFilterDraft(filter = {}) {
+  return {
+    fromMonth: extractMonthNumberValue(filter.dateFrom),
+    fromYear: extractYearValue(filter.dateFrom),
+    toMonth: extractMonthNumberValue(filter.dateTo),
+    toYear: extractYearValue(filter.dateTo)
+  };
+}
+
+function resolveMapDateFilterDraft(nextFilter = {}, normalizedFilter = mapDateFilter) {
+  const nextDraft = normalizeMapDateFilterDraft(nextFilter);
+  if (nextDraft.fromMonth || nextDraft.fromYear || nextDraft.toMonth || nextDraft.toYear) {
+    return nextDraft;
+  }
+
+  return buildMapDateFilterDraft(normalizedFilter);
+}
+
+function formatMonthYear(monthValue) {
+  const normalized = normalizeMonthInputValue(monthValue);
+  if (!normalized) {
+    return 'Brak';
+  }
+
+  const [yearPart, monthPart] = normalized.split('-');
+  const monthIndex = Number(monthPart) - 1;
+  return `${MONTH_LABELS[monthIndex] || monthPart} ${yearPart}`;
+}
+
+function buildMonthNumberOptionsMarkup(selectedValue) {
+  const normalizedSelectedValue = normalizeMonthNumberInputValue(selectedValue);
+  const options = ['<option value="">Miesiac</option>'];
+
+  MONTH_LABELS.forEach((label, index) => {
+    const monthValue = String(index + 1).padStart(2, '0');
+    options.push(
+      `<option value="${monthValue}"${monthValue === normalizedSelectedValue ? ' selected' : ''}>${escapeHtml(label)}</option>`
+    );
+  });
+
+  return options.join('');
+}
+
+function buildYearOptionsMarkup(selectedValue) {
+  const normalizedSelectedValue = normalizeYearInputValue(selectedValue);
+  const values = getMapDateFilterYears();
+  const options = ['<option value="">Rok</option>'];
+
+  values.forEach((yearValue) => {
+    options.push(
+      `<option value="${yearValue}"${yearValue === normalizedSelectedValue ? ' selected' : ''}>${escapeHtml(yearValue)}</option>`
+    );
+  });
+
+  return options.join('');
+}
+
+function getMapDateFilterYears() {
+  const years = new Set(
+    mapDateFilterOptions
+      .map((monthValue) => normalizeMonthInputValue(monthValue))
+      .filter(Boolean)
+      .map((monthValue) => monthValue.slice(0, 4))
+  );
+
+  return Array.from(years).sort((left, right) => right.localeCompare(left));
+}
+
+async function loadMapDateFilterOptions() {
+  const options = await window.appApi.getMapDateFilterOptions();
+  mapDateFilterOptions = Array.isArray(options)
+    ? options.filter((value) => normalizeMonthInputValue(value))
+    : [];
+
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
 }
 
 function focusPoland() {
@@ -1138,6 +1423,31 @@ function persistMapPanelState() {
   }
 }
 
+function readStoredMapDateFilterState() {
+  try {
+    const raw = window.localStorage.getItem(MAP_DATE_FILTER_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    return normalizeMapDateFilterDraft(parsed);
+  } catch (_error) {
+    return {};
+  }
+}
+
+function persistMapDateFilterState() {
+  try {
+    window.localStorage.setItem(
+      MAP_DATE_FILTER_STORAGE_KEY,
+      JSON.stringify(normalizeMapDateFilterDraft(mapDateFilterDraft))
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
 function readLastSelectedPersonId() {
   try {
     return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
@@ -1745,12 +2055,20 @@ function renderPersonSearchResults() {
 }
 
 function paintFilterPanel() {
-  syncOverviewSpacing(false);
+  syncOverviewSpacing(false, true);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
   });
 
-  const filterSummary = buildMapDateFilterSummary();
+  const fromMonth = mapDateFilterDraft.fromMonth;
+  const fromYear = mapDateFilterDraft.fromYear;
+  const toMonth = mapDateFilterDraft.toMonth;
+  const toYear = mapDateFilterDraft.toYear;
+  const hasMonthOptions = mapDateFilterOptions.length > 0;
+  const filteredPeopleLabel = allPeople.length === 1 ? '1 osoba' : `${formatNumber(allPeople.length)} osob`;
+  const isFromMonthActive = hasMonthOptions && Boolean(fromYear);
+  const isToMonthActive = hasMonthOptions && Boolean(toYear);
+  const hasInvalidDateRange = mapDateFilterHasInvalidRange;
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Filtr dat';
@@ -1759,69 +2077,74 @@ function paintFilterPanel() {
   selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
-      <div class="two-cols">
-        <label class="field">
+      <div class="filter-date-stack">
+        <div class="field filter-date-box">
           <span>Data poczatkowa</span>
-          <input type="date" name="dateFrom" value="${escapeHtml(mapDateFilter.dateFrom)}" />
-        </label>
-        <label class="field">
+          <div class="filter-date-box-grid">
+            <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="fromYear"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildYearOptionsMarkup(fromYear)}
+              </select>
+            </div>
+            <div class="select-wrap${isFromMonthActive ? '' : ' is-dimmed'}${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="fromMonth"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildMonthNumberOptionsMarkup(fromMonth)}
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="field filter-date-box">
           <span>Data koncowa</span>
-          <input type="date" name="dateTo" value="${escapeHtml(mapDateFilter.dateTo)}" />
-        </label>
+          <div class="filter-date-box-grid">
+            <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="toYear"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildYearOptionsMarkup(toYear)}
+              </select>
+            </div>
+            <div class="select-wrap${isToMonthActive ? '' : ' is-dimmed'}${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="toMonth"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildMonthNumberOptionsMarkup(toMonth)}
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="time-filter-summary">
-        <strong>${escapeHtml(filterSummary.title)}</strong>
-        <span>${escapeHtml(filterSummary.description)}</span>
-      </div>
-      <div class="action-row">
-        <button type="submit" class="button-strong">Zastosuj filtr</button>
+      <div class="action-row filter-action-row">
+        <span class="filter-action-count">${escapeHtml(filteredPeopleLabel)}</span>
         <button type="button" data-map-date-filter-reset${hasActiveMapDateFilter() ? '' : ' disabled'}>
           Wyczysc
         </button>
+      </div>
+      <div class="vertical-list compact-list">
+        ${renderMapDateFilterResults()}
       </div>
     </form>
   `;
   selectionExtraEl.hidden = false;
 }
 
-function buildMapDateFilterSummary() {
-  const hasFilter = hasActiveMapDateFilter();
-  const rangeLabel = summarizeMapDateRangeLabel();
-  const visiblePeopleLabel =
-    allPeople.length === 1 ? '1 osoba pasuje do zakresu.' : `${formatNumber(allPeople.length)} osob pasuje do zakresu.`;
-
-  if (!hasFilter) {
-    return {
-      rangeLabel,
-      title: 'Brak aktywnego filtra',
-      description: 'Wybierz date poczatkowa i koncowa, aby zawezic mape po dacie ostatniej wizyty.'
-    };
+function renderMapDateFilterResults() {
+  if (allPeople.length === 0) {
+    return hasActiveMapDateFilter()
+      ? '<p class="empty-state">Brak osob pasujacych do wybranego zakresu dat.</p>'
+      : '<p class="empty-state">Brak osob dostepnych na mapie dla biezacych danych.</p>';
   }
 
-  return {
-    rangeLabel,
-    title: 'Aktywny zakres dat',
-    description: `${rangeLabel}. ${visiblePeopleLabel}`
-  };
-}
-
-function summarizeMapDateRangeLabel() {
-  const fromLabel = mapDateFilter.dateFrom ? formatDate(mapDateFilter.dateFrom) : null;
-  const toLabel = mapDateFilter.dateTo ? formatDate(mapDateFilter.dateTo) : null;
-
-  if (fromLabel && toLabel) {
-    return `${fromLabel} - ${toLabel}`;
-  }
-
-  if (fromLabel) {
-    return `Od ${fromLabel}`;
-  }
-
-  if (toLabel) {
-    return `Do ${toLabel}`;
-  }
-
-  return 'Bez ograniczen';
+  return allPeople
+    .map((person) => `
+      <button
+        type="button"
+        class="person-row"
+        data-map-filter-source-row-id="${escapeHtml(person.sourceRowId)}"
+      >
+        <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
+        <span class="person-row-copy">${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
+        <span class="person-row-copy person-row-meta">
+          Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
+        </span>
+      </button>
+    `)
+    .join('');
 }
 
 function updatePersonSearchQuery(nextQuery, options = {}) {
@@ -1952,7 +2275,9 @@ function paintHistorySelection() {
   selectionExtraEl.hidden = false;
 }
 
-function syncOverviewSpacing(isHistoryMode) {
+function syncOverviewSpacing(isHistoryMode, isFilterMode = false) {
   overviewViewEl?.classList.toggle('map-info-view-history', Boolean(isHistoryMode));
+  overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-history', Boolean(isHistoryMode));
+  selectionExtraEl?.classList.toggle('map-selection-cards-filter', Boolean(isFilterMode));
 }

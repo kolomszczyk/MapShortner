@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('appApi', {
   listPeople: (payload) => ipcRenderer.invoke('people:list', payload),
   getPersonDetails: (sourceRowId) => ipcRenderer.invoke('people:getDetails', sourceRowId),
   getMapPoints: (payload) => ipcRenderer.invoke('map:getPoints', payload),
+  getMapDateFilterOptions: () => ipcRenderer.invoke('map:getDateFilterOptions'),
   buildRoute: (payload) => ipcRenderer.invoke('route:build', payload),
   addNote: (payload) => ipcRenderer.invoke('notes:add', payload),
   addCustomPoint: (payload) => ipcRenderer.invoke('customPoints:add', payload),

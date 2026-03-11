@@ -70,6 +70,7 @@ function createDataStore(app) {
     listPeople: (input) => listPeople(db, input),
     getPersonDetails: (sourceRowId) => getPersonDetails(db, sourceRowId),
     listMapPoints: (input) => listMapPoints(db, input),
+    listMapDateFilterOptions: () => listMapDateFilterOptions(db),
     listPendingGeocodes: (limit) => listPendingGeocodes(db, limit),
     updatePersonCoordinates: (payload) => updatePersonCoordinates(db, payload),
     addNote: (payload) => addNote(db, payload),
@@ -1039,6 +1040,17 @@ function listMapPoints(db, input = {}) {
     people: filterPeopleByDateRange(rows.map(normalizePeopleRow), input),
     customPoints: listCustomPoints(db)
   };
+}
+
+function listMapDateFilterOptions(db) {
+  return db.prepare(`
+    SELECT DISTINCT substr(last_visit_at, 1, 7) AS monthKey
+    FROM people_cache
+    WHERE last_visit_at IS NOT NULL
+      AND last_visit_at != ''
+      AND length(last_visit_at) >= 7
+    ORDER BY monthKey DESC
+  `).all().map((row) => row.monthKey).filter((value) => /^\d{4}-\d{2}$/.test(value));
 }
 
 function listPendingGeocodes(db, limit = 50) {
