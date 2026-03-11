@@ -80,6 +80,10 @@ body {
   min-height: 100%;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   font-family: 'Inter', 'Segoe UI', sans-serif;
   color: var(--text);
@@ -142,6 +146,47 @@ button:disabled {
 
 .button-muted:hover:not(:disabled) {
   background: rgba(255, 253, 248, 0.96);
+}
+
+.section-toggle-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+  background: rgba(255, 252, 245, 0.56);
+  border-color: rgba(48, 67, 54, 0.12);
+}
+
+.section-toggle-button::before {
+  content: '-';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: rgba(48, 67, 54, 0.08);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.section-toggle-button[aria-expanded='false']::before {
+  content: '+';
+}
+
+.section-toggle-button:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 253, 248, 0.94);
+  border-color: rgba(48, 67, 54, 0.2);
 }
 
 input,
@@ -879,6 +924,32 @@ textarea {
   align-items: start;
 }
 
+.subpanel-header {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.raw-fields-header-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+
+.raw-fields-header-row h3 {
+  margin: 0;
+  font-family: 'Fraunces', Georgia, serif;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+
+.subpanel-header + .kv-grid,
+.subpanel-header + .note-form,
+.subpanel-header + .stacked-cards {
+  margin-top: 14px;
+}
+
 .chip-line {
   display: flex;
   flex-wrap: wrap;
@@ -1327,6 +1398,10 @@ body.map-page .service-map {
   gap: 10px;
 }
 
+.kv-grid-compact {
+  gap: 8px;
+}
+
 .kv-row {
   display: flex;
   justify-content: space-between;
@@ -1345,6 +1420,14 @@ body.map-page .service-map {
   text-align: right;
   max-width: 66%;
   overflow-wrap: anywhere;
+}
+
+.kv-grid-compact .kv-row {
+  padding: 10px 12px;
+}
+
+.kv-grid-compact .kv-value {
+  max-width: 58%;
 }
 
 .note-form {

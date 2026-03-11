@@ -5,6 +5,7 @@ import {
   formatMoney,
   formatNumber,
   initShell,
+  renderRecordFields,
   renderKeyValueList,
   summarizePath
 } from './app-shell.js';
@@ -92,6 +93,9 @@ const MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX = 96;
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
 const MAP_VIEWPORT_STORAGE_KEY = 'map:viewportState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
+const RAW_FIELDS_EXPANDED_STORAGE_KEY = 'person:rawFieldsExpanded';
+const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
+const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
 const INFO_PANEL_MODES = ['stats', 'selection', 'search', 'history', 'filter'];
@@ -142,6 +146,7 @@ let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, m
 let mapDateFilterApplyTimer = null;
 let personSearchTimer = null;
 let personSearchRequestToken = 0;
+let areMapRawFieldsExpanded = readStoredMapRawFieldsExpanded();
 let personSearchState = {
   query: '',
   results: [],
@@ -195,6 +200,14 @@ filterButtonEl?.addEventListener('click', () => {
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
+  const rawFieldsToggleButton = event.target.closest('[data-map-toggle-raw-fields]');
+  if (rawFieldsToggleButton && infoPanelMode === 'selection' && selectionPanelState.kind === 'person') {
+    areMapRawFieldsExpanded = !areMapRawFieldsExpanded;
+    persistMapRawFieldsExpanded();
+    paintPersonSelection(selectionPanelState.details);
+    return;
+  }
+
   const filterResultButton = event.target.closest('[data-map-filter-source-row-id]');
   if (filterResultButton && infoPanelMode === 'filter') {
     const sourceRowId = filterResultButton.getAttribute('data-map-filter-source-row-id');
@@ -2275,8 +2288,8 @@ function paintPersonSelectionState(person) {
   syncOverviewSpacing(false);
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
-  selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Ladowanie szczegolow osoby...';
-  selectionCopyEl.hidden = false;
+  selectionCopyEl.textContent = '';
+  selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
@@ -2307,8 +2320,8 @@ function paintPersonSelection(details) {
   const person = details.person;
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
-  selectionCopyEl.textContent = person.routeAddress || person.addressText || 'Brak adresu';
-  selectionCopyEl.hidden = false;
+  selectionCopyEl.textContent = '';
+  selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
@@ -2365,6 +2378,27 @@ function paintPersonSelection(details) {
         `
       )
     );
+  }
+
+  if (details.person.raw && Object.keys(details.person.raw).length > 0) {
+    cards.push(`
+      <article class="list-card">
+        <div class="list-card-heading">
+          <strong>Pelne dane z bazy</strong>
+          <button
+            type="button"
+            class="button-muted section-toggle-button"
+            data-map-toggle-raw-fields
+            aria-expanded="${areMapRawFieldsExpanded ? 'true' : 'false'}"
+          >
+            ${areMapRawFieldsExpanded ? 'Ukryj' : 'Pokaz'}
+          </button>
+        </div>
+        <div class="kv-grid kv-grid-compact"${areMapRawFieldsExpanded ? '' : ' hidden'}>
+          ${renderRecordFields(details.person.raw)}
+        </div>
+      </article>
+    `);
   }
 
   selectionExtraEl.innerHTML = cards.length
@@ -2724,7 +2758,6 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
           </div>
-          <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
           <span>${escapeHtml(locationLabel)}</span>
         </button>
@@ -2842,7 +2875,6 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
           </div>
-          <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
         </button>
       `;
@@ -3029,7 +3061,6 @@ function paintHistorySelection() {
             <div class="list-card-heading">
               <strong>${escapeHtml(person?.fullName || person?.companyName || 'Ladowanie osoby...')}</strong>
             </div>
-            <span>${escapeHtml(person?.routeAddress || person?.addressText || 'Pobieranie danych z historii...')}</span>
             <span>Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}</span>
           </button>
         `;
@@ -3520,6 +3551,25 @@ function findPersonBySourceRowId(sourceRowId) {
     personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId) ||
     null
   );
+}
+
+function readStoredMapRawFieldsExpanded() {
+  try {
+    const rawValue = window.localStorage.getItem(RAW_FIELDS_EXPANDED_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY);
+    return rawValue == null ? true : rawValue === 'true';
+  } catch (_error) {
+    return true;
+  }
+}
+
+function persistMapRawFieldsExpanded() {
+  try {
+    window.localStorage.setItem(RAW_FIELDS_EXPANDED_STORAGE_KEY, String(areMapRawFieldsExpanded));
+  } catch (_error) {
+    // Ignore storage write errors.
+  }
 }
 
 async function loadMissingHistoryPeople(sourceRowIds) {

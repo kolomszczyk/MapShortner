@@ -5,6 +5,7 @@ import {
   formatMoney,
   formatNumber,
   initShell,
+  renderRecordFields,
   renderKeyValueList
 } from './app-shell.js';
 
@@ -16,6 +17,9 @@ const PEOPLE_SEARCH_ROW_GAP_PX = 10;
 const PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 96;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY = 'people:lastSelectedPersonDetails';
+const RAW_FIELDS_EXPANDED_STORAGE_KEY = 'person:rawFieldsExpanded';
+const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
+const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 
 const searchInput = document.getElementById('people-search');
 const resultsEl = document.getElementById('people-results');
@@ -24,14 +28,19 @@ const notesForm = document.getElementById('person-note-form');
 const noteInput = document.getElementById('person-note-input');
 const detailTitleEl = document.getElementById('person-detail-title');
 const detailMetaEl = document.getElementById('person-detail-meta');
+const rawFieldsEl = document.getElementById('person-raw-fields');
+const rawFieldsToggleButtonEl = document.getElementById('person-raw-fields-toggle');
 const serviceCardsEl = document.getElementById('person-service-cards');
 const notesListEl = document.getElementById('person-notes');
+const notesSectionEl = notesForm?.closest('.subpanel') || null;
+const serviceCardsSectionEl = serviceCardsEl?.closest('.subpanel') || null;
 
 let activePersonId = null;
 let searchTimer = null;
 let peopleSearchRequestToken = 0;
 let personDetailsRequestToken = 0;
 let peopleSearchRowHeight = PEOPLE_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
+let areRawFieldsExpanded = readStoredRawFieldsExpanded();
 let peopleSearchState = {
   query: '',
   items: [],
@@ -85,11 +94,18 @@ notesForm.addEventListener('submit', async (event) => {
   await loadPerson(activePersonId);
 });
 
+rawFieldsToggleButtonEl?.addEventListener('click', () => {
+  areRawFieldsExpanded = !areRawFieldsExpanded;
+  persistRawFieldsExpanded();
+  syncRawFieldsVisibility();
+});
+
 bootstrap();
 
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
   applySummary(bootstrapData.summary);
+  syncRawFieldsVisibility();
   const restoredSelectionPromise = restoreInitialPersonSelection();
   await loadPeople('', { reset: true, allowSelectionFallback: !activePersonId });
   const restoredSelection = await restoredSelectionPromise;
@@ -220,7 +236,6 @@ function renderPeopleRows(people) {
           data-person-id="${escapeHtml(person.sourceRowId)}"
         >
           <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
-          <span class="person-row-copy">${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
           <span class="person-row-copy person-row-meta">
             Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
           </span>
@@ -338,6 +353,8 @@ function renderPersonDetails(details) {
     { label: 'Planowana wizyta', value: formatDate(details.person.plannedVisitAt) },
     { label: 'Suma wplat', value: formatMoney(details.person.raw['Suma wpłat']) }
   ]);
+  rawFieldsEl.innerHTML = renderRecordFields(details.person.raw);
+  syncRawFieldsVisibility();
 
   serviceCardsEl.innerHTML = details.serviceCards.length
     ? details.serviceCards
@@ -393,8 +410,44 @@ async function restoreInitialPersonSelection() {
 function renderEmptyPersonDetails() {
   detailTitleEl.textContent = 'Wybierz osobe z listy';
   detailMetaEl.innerHTML = '';
+  rawFieldsEl.innerHTML = '<p class="empty-state">Pelne dane pojawia sie po wybraniu osoby.</p>';
+  syncRawFieldsVisibility();
   serviceCardsEl.innerHTML = '<p class="empty-state">Brak kart serwisowych dla wybranej osoby.</p>';
   notesListEl.innerHTML = '<p class="empty-state">Brak lokalnych notatek.</p>';
+}
+
+function syncRawFieldsVisibility() {
+  if (!detailMetaEl || !rawFieldsToggleButtonEl) {
+    return;
+  }
+
+  const isExpanded = areRawFieldsExpanded;
+
+  detailMetaEl.hidden = !isExpanded;
+  rawFieldsEl.hidden = !isExpanded;
+  notesSectionEl.hidden = !isExpanded;
+  serviceCardsSectionEl.hidden = !isExpanded;
+  rawFieldsToggleButtonEl.textContent = areRawFieldsExpanded ? 'Ukryj' : 'Pokaz';
+  rawFieldsToggleButtonEl.setAttribute('aria-expanded', String(areRawFieldsExpanded));
+}
+
+function readStoredRawFieldsExpanded() {
+  try {
+    const rawValue = window.localStorage.getItem(RAW_FIELDS_EXPANDED_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY);
+    return rawValue == null ? true : rawValue === 'true';
+  } catch (_error) {
+    return true;
+  }
+}
+
+function persistRawFieldsExpanded() {
+  try {
+    window.localStorage.setItem(RAW_FIELDS_EXPANDED_STORAGE_KEY, String(areRawFieldsExpanded));
+  } catch (_error) {
+    // Ignore storage write errors.
+  }
 }
 
 function readLastSelectedPersonId() {

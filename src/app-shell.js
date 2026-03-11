@@ -332,3 +332,97 @@ export function renderKeyValueList(items) {
     )
     .join('');
 }
+
+export function renderRecordFields(record, options = {}) {
+  const entries = Object.entries(record || {});
+  const includeEmpty = options.includeEmpty !== false;
+  const items = entries
+    .filter(([label, value]) => label && (includeEmpty || !isRecordValueEmpty(value)))
+    .map(([label, value]) => ({
+      label,
+      value: formatRecordValue(value, label)
+    }));
+
+  return items.length > 0 ? renderKeyValueList(items) : '';
+}
+
+export function formatRecordValue(value, label = '') {
+  if (isRecordValueEmpty(value)) {
+    return 'Brak';
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Tak' : 'Nie';
+  }
+
+  if (typeof value === 'number') {
+    return isMoneyLabel(label) ? formatMoney(value) : String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.length > 0
+      ? value.map((entry) => formatRecordValue(entry, label)).join(', ')
+      : 'Brak';
+  }
+
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+
+  const normalizedValue = String(value).trim();
+  if (!normalizedValue) {
+    return 'Brak';
+  }
+
+  if (looksLikeIsoDate(normalizedValue)) {
+    return formatDate(normalizedValue);
+  }
+
+  if (looksLikeHtml(normalizedValue)) {
+    return stripHtml(normalizedValue) || 'Brak';
+  }
+
+  return normalizedValue.replace(/\s+/g, ' ');
+}
+
+function isRecordValueEmpty(value) {
+  if (value == null) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.length === 0 || value.every((entry) => isRecordValueEmpty(entry));
+  }
+
+  if (typeof value === 'string') {
+    return value.trim() === '';
+  }
+
+  return false;
+}
+
+function normalizeRecordLabel(label) {
+  return String(label || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function isMoneyLabel(label) {
+  const normalizedLabel = normalizeRecordLabel(label);
+  return normalizedLabel.includes('kwota') || normalizedLabel.includes('suma wplat');
+}
+
+function looksLikeIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}(t|\s|$)/i.test(value);
+}
+
+function looksLikeHtml(value) {
+  return /<\/?[a-z][\s\S]*>/i.test(value);
+}
+
+function stripHtml(value) {
+  const container = document.createElement('div');
+  container.innerHTML = value;
+  return (container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim();
+}
