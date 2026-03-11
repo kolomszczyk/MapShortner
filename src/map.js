@@ -142,6 +142,7 @@ let mapSearchRowHeight = MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let mapDateFilterRenderedCount = 0;
 let mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
 let hoveredPersonSourceRowId = null;
+let hoveredPersonMapRestoreState = null;
 let selectionExtraPointerState = {
   clientX: null,
   clientY: null,
@@ -1664,6 +1665,39 @@ function focusSelectionOnMap(person) {
   });
 }
 
+function rememberMapViewBeforeHoveredPersonPreview() {
+  if (hoveredPersonMapRestoreState || !mapInstance) {
+    return;
+  }
+
+  const center = mapInstance.getCenter?.();
+  const zoom = mapInstance.getZoom?.();
+  if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng) || !Number.isFinite(zoom)) {
+    return;
+  }
+
+  hoveredPersonMapRestoreState = {
+    center: [center.lat, center.lng],
+    zoom
+  };
+}
+
+function restoreMapViewAfterHoveredPersonPreview() {
+  if (!hoveredPersonMapRestoreState || !mapInstance) {
+    return;
+  }
+
+  const { center, zoom } = hoveredPersonMapRestoreState;
+  hoveredPersonMapRestoreState = null;
+  mapInstance.setView(center, zoom, {
+    animate: false
+  });
+}
+
+function discardHoveredPersonMapRestoreState() {
+  hoveredPersonMapRestoreState = null;
+}
+
 function attachLazyPopup(marker, buildHtml, onSelect) {
   let hoverPopupTimer = null;
 
@@ -1707,6 +1741,7 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
 }
 
 async function selectPersonPoint(person, marker, options = {}) {
+  clearHoveredPersonSourceRowId({ restoreMap: false });
   const key = buildPersonKey(person);
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
@@ -1741,7 +1776,7 @@ async function selectPersonPoint(person, marker, options = {}) {
 }
 
 function selectCustomPoint(point, marker, options = {}) {
-  clearHoveredPersonSourceRowId();
+  clearHoveredPersonSourceRowId({ restoreMap: false });
   selectionRequestToken += 1;
   setActiveSelection({
     key: buildCustomPointKey(point),
@@ -1755,11 +1790,11 @@ function selectCustomPoint(point, marker, options = {}) {
 }
 
 function setActiveSelection(nextSelection) {
-  if (activeSelection?.marker) {
-    resetMarkerSelection(activeSelection.marker, activeSelection.type);
-  }
-
+  const previousSelection = activeSelection;
   activeSelection = nextSelection;
+  if (previousSelection?.marker) {
+    resetMarkerSelection(previousSelection.marker, previousSelection.type);
+  }
   applyMarkerSelection(nextSelection.marker, nextSelection.type);
   syncSupplementalPeopleMarkers();
   overviewDefaultEls.forEach((element) => {
@@ -1777,12 +1812,11 @@ function setActiveSelection(nextSelection) {
 
 function clearActiveSelection(options = {}) {
   selectionRequestToken += 1;
-
-  if (activeSelection?.marker) {
-    resetMarkerSelection(activeSelection.marker, activeSelection.type);
-  }
-
+  const previousSelection = activeSelection;
   activeSelection = null;
+  if (previousSelection?.marker) {
+    resetMarkerSelection(previousSelection.marker, previousSelection.type);
+  }
   syncSupplementalPeopleMarkers();
 
   if (infoPanelMode === 'filter') {
@@ -1803,7 +1837,7 @@ function applyMarkerSelection(marker, type) {
     return;
   }
 
-  if (type === 'person' && typeof marker.setStyle === 'function') {
+  if (type === 'person') {
     syncPersonMarkerAppearance(marker, marker.__personSourceRowId);
     return;
   }
@@ -1818,7 +1852,7 @@ function resetMarkerSelection(marker, type) {
     return;
   }
 
-  if (type === 'person' && typeof marker.setStyle === 'function') {
+  if (type === 'person') {
     syncPersonMarkerAppearance(marker, marker.__personSourceRowId);
     return;
   }
@@ -2937,15 +2971,24 @@ function setHoveredPersonSourceRowId(sourceRowId) {
   const person = findPersonBySourceRowId(hoveredPersonSourceRowId);
   if (!person) {
     hoveredPersonSourceRowId = null;
+    restoreMapViewAfterHoveredPersonPreview();
     return;
   }
 
+  rememberMapViewBeforeHoveredPersonPreview();
+  focusSelectionOnMap(person);
   const marker = ensurePersonMarkerVisible(person);
   syncPersonMarkerAppearance(marker, hoveredPersonSourceRowId);
 }
 
-function clearHoveredPersonSourceRowId() {
+function clearHoveredPersonSourceRowId(options = {}) {
+  const shouldRestoreMap = options.restoreMap !== false;
   if (!hoveredPersonSourceRowId) {
+    if (shouldRestoreMap) {
+      restoreMapViewAfterHoveredPersonPreview();
+    } else {
+      discardHoveredPersonMapRestoreState();
+    }
     return;
   }
 
@@ -2954,6 +2997,12 @@ function clearHoveredPersonSourceRowId() {
   syncHoveredPersonListRows();
   syncSupplementalPeopleMarkers();
   syncPersonMarkerAppearanceBySourceRowId(previousSourceRowId);
+
+  if (shouldRestoreMap) {
+    restoreMapViewAfterHoveredPersonPreview();
+  } else {
+    discardHoveredPersonMapRestoreState();
+  }
 }
 
 function syncHoveredPersonListRows() {
