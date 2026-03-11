@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('appApi', {
   getPersonDetails: (sourceRowId) => ipcRenderer.invoke('people:getDetails', sourceRowId),
   getMapPoints: (payload) => ipcRenderer.invoke('map:getPoints', payload),
   getMapDateFilterOptions: () => ipcRenderer.invoke('map:getDateFilterOptions'),
+  getMapSelectionHistory: () => ipcRenderer.invoke('map:getSelectionHistory'),
+  setMapSelectionHistory: (payload) => ipcRenderer.invoke('map:setSelectionHistory', payload),
   buildRoute: (payload) => ipcRenderer.invoke('route:build', payload),
   addNote: (payload) => ipcRenderer.invoke('notes:add', payload),
   addCustomPoint: (payload) => ipcRenderer.invoke('customPoints:add', payload),

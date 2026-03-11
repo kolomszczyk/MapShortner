@@ -64,6 +64,7 @@ const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
+const MAX_PERSON_SELECTION_HISTORY_ENTRIES = 100;
 const PERSON_SELECTION_HISTORY_STATE_KIND = 'map-person-selection';
 const MAP_PERSON_SEARCH_LIMIT = 100;
 const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
@@ -333,7 +334,8 @@ bootstrap();
 async function bootstrap() {
   const [bootstrapData] = await Promise.all([
     window.appApi.getBootstrap(),
-    loadMapDateFilterOptions()
+    loadMapDateFilterOptions(),
+    hydratePersonSelectionHistory()
   ]);
   renderOverviewSummary(bootstrapData.summary);
   initDashboardPanel({
@@ -1209,6 +1211,31 @@ function resolveInitialSelectionFallback(people) {
   return people[0];
 }
 
+function normalizePersonSelectionHistory(input) {
+  const entries = Array.isArray(input?.entries)
+    ? input.entries
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    : [];
+  const trimmedEntries = entries.slice(-MAX_PERSON_SELECTION_HISTORY_ENTRIES);
+  const removedEntriesCount = entries.length - trimmedEntries.length;
+  const fallbackIndex = trimmedEntries.length > 0 ? trimmedEntries.length - 1 : -1;
+  const rawIndex = Number(input?.index);
+  const normalizedIndex = Number.isInteger(rawIndex) ? rawIndex - removedEntriesCount : fallbackIndex;
+
+  if (trimmedEntries.length === 0) {
+    return {
+      entries: [],
+      index: -1
+    };
+  }
+
+  return {
+    entries: trimmedEntries,
+    index: clampHistoryIndex(normalizedIndex, trimmedEntries.length)
+  };
+}
+
 function readPersonSelectionHistory() {
   try {
     const raw = window.localStorage.getItem(PERSON_SELECTION_HISTORY_STORAGE_KEY);
@@ -1216,33 +1243,60 @@ function readPersonSelectionHistory() {
       return null;
     }
 
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed?.entries)) {
-      return null;
-    }
-
-    return {
-      entries: parsed.entries.map((value) => String(value)),
-      index: Number(parsed.index)
-    };
+    return normalizePersonSelectionHistory(JSON.parse(raw));
   } catch (_error) {
     return null;
   }
 }
 
-function persistPersonSelectionHistory() {
+function writePersonSelectionHistoryCache(historyState) {
+  const normalizedHistory = normalizePersonSelectionHistory(historyState);
+
   try {
     window.localStorage.setItem(
       PERSON_SELECTION_HISTORY_STORAGE_KEY,
-      JSON.stringify(personSelectionHistory)
+      JSON.stringify(normalizedHistory)
     );
   } catch (_error) {
     // Ignore storage failures and keep the current session working.
   }
 
+  return normalizedHistory;
+}
+
+function persistPersonSelectionHistory() {
+  personSelectionHistory = writePersonSelectionHistoryCache(personSelectionHistory);
+  void window.appApi.setMapSelectionHistory(personSelectionHistory).catch(() => {});
+
   if (infoPanelMode === 'history') {
     paintHistorySelection();
   }
+}
+
+async function hydratePersonSelectionHistory() {
+  let persistedHistory = null;
+
+  try {
+    const storedHistory = await window.appApi.getMapSelectionHistory();
+    if (storedHistory) {
+      persistedHistory = normalizePersonSelectionHistory(storedHistory);
+    }
+  } catch (_error) {
+    persistedHistory = null;
+  }
+
+  if (persistedHistory) {
+    writePersonSelectionHistoryCache(persistedHistory);
+    return;
+  }
+
+  const cachedHistory = readPersonSelectionHistory();
+  if (!cachedHistory) {
+    return;
+  }
+
+  personSelectionHistory = cachedHistory;
+  persistPersonSelectionHistory();
 }
 
 function clampHistoryIndex(value, size) {

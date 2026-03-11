@@ -26,12 +26,22 @@ let devReloadInFlight = false;
 
 const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
 const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
+const WINDOW_STATE_SETTING_KEY = 'windowState';
+const MAP_SELECTION_HISTORY_SETTING_KEY = 'mapPersonSelectionHistory';
+const MAP_SELECTION_HISTORY_LIMIT = 100;
 const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
 const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
 const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
+const DEFAULT_WINDOW_BOUNDS = Object.freeze({
+  width: 1480,
+  height: 980
+});
+const WINDOW_MIN_WIDTH = 1120;
+const WINDOW_MIN_HEIGHT = 760;
 const isDevMode = process.argv.includes('--dev');
 let mapTileService = null;
+let persistWindowStateTimer = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -464,6 +474,123 @@ function removeDatabaseSidecars(dbPath) {
   }
 }
 
+function loadWindowState() {
+  if (!store) {
+    return {
+      ...DEFAULT_WINDOW_BOUNDS,
+      isMaximized: false
+    };
+  }
+
+  try {
+    const rawValue = store.getSetting(WINDOW_STATE_SETTING_KEY);
+    if (!rawValue) {
+      return {
+        ...DEFAULT_WINDOW_BOUNDS,
+        isMaximized: false
+      };
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    const width = Number(parsedValue?.width);
+    const height = Number(parsedValue?.height);
+    const x = Number(parsedValue?.x);
+    const y = Number(parsedValue?.y);
+
+    return {
+      width: Number.isFinite(width) ? Math.max(Math.round(width), WINDOW_MIN_WIDTH) : DEFAULT_WINDOW_BOUNDS.width,
+      height: Number.isFinite(height) ? Math.max(Math.round(height), WINDOW_MIN_HEIGHT) : DEFAULT_WINDOW_BOUNDS.height,
+      x: Number.isFinite(x) ? Math.round(x) : undefined,
+      y: Number.isFinite(y) ? Math.round(y) : undefined,
+      isMaximized: parsedValue?.isMaximized === true
+    };
+  } catch (error) {
+    log.warn('Failed to load window state', error);
+    return {
+      ...DEFAULT_WINDOW_BOUNDS,
+      isMaximized: false
+    };
+  }
+}
+
+function persistWindowState() {
+  if (!store || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  try {
+    const bounds = mainWindow.isMaximized() ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    store.setSetting(
+      WINDOW_STATE_SETTING_KEY,
+      JSON.stringify({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        isMaximized: mainWindow.isMaximized()
+      })
+    );
+  } catch (error) {
+    log.warn('Failed to persist window state', error);
+  }
+}
+
+function queueWindowStatePersist() {
+  if (persistWindowStateTimer) {
+    clearTimeout(persistWindowStateTimer);
+  }
+
+  persistWindowStateTimer = setTimeout(() => {
+    persistWindowStateTimer = null;
+    persistWindowState();
+  }, 200);
+}
+
+function normalizeMapSelectionHistory(payload) {
+  const entries = Array.isArray(payload?.entries)
+    ? payload.entries
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    : [];
+  const trimmedEntries = entries.slice(-MAP_SELECTION_HISTORY_LIMIT);
+  const removedEntriesCount = entries.length - trimmedEntries.length;
+  const fallbackIndex = trimmedEntries.length > 0 ? trimmedEntries.length - 1 : -1;
+  const rawIndex = Number(payload?.index);
+  const normalizedIndex = Number.isInteger(rawIndex) ? rawIndex - removedEntriesCount : fallbackIndex;
+
+  if (trimmedEntries.length === 0) {
+    return {
+      entries: [],
+      index: -1
+    };
+  }
+
+  return {
+    entries: trimmedEntries,
+    index: Math.min(Math.max(normalizedIndex, 0), trimmedEntries.length - 1)
+  };
+}
+
+function readMapSelectionHistory() {
+  try {
+    const rawValue = store.getSetting(MAP_SELECTION_HISTORY_SETTING_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    return normalizeMapSelectionHistory(JSON.parse(rawValue));
+  } catch (error) {
+    log.warn('Failed to load map selection history', error);
+    return null;
+  }
+}
+
+function saveMapSelectionHistory(payload) {
+  const normalizedHistory = normalizeMapSelectionHistory(payload);
+  store.setSetting(MAP_SELECTION_HISTORY_SETTING_KEY, JSON.stringify(normalizedHistory));
+  return normalizedHistory;
+}
+
 function closeDevReloadWatchers() {
   for (const watcher of devReloadWatchers) {
     try {
@@ -600,12 +727,15 @@ function createWindow() {
   const readyPromise = new Promise((resolve) => {
     resolveReady = resolve;
   });
+  const windowState = loadWindowState();
 
   mainWindow = new BrowserWindow({
-    width: 1480,
-    height: 980,
-    minWidth: 1120,
-    minHeight: 760,
+    width: windowState.width,
+    height: windowState.height,
+    x: windowState.x,
+    y: windowState.y,
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
     title: ' ',
     show: false,
     autoHideMenuBar: true,
@@ -623,11 +753,18 @@ function createWindow() {
     event.preventDefault();
     mainWindow.setTitle(' ');
   });
+  mainWindow.on('resize', queueWindowStatePersist);
+  mainWindow.on('move', queueWindowStatePersist);
+  mainWindow.on('maximize', queueWindowStatePersist);
+  mainWindow.on('unmaximize', queueWindowStatePersist);
+  mainWindow.on('close', persistWindowState);
   mainWindow.loadFile(path.join(__dirname, 'map.html'));
   mainWindow.once('ready-to-show', () => {
     mainWindow.setTitle(' ');
     mainWindow.show();
-    mainWindow.maximize();
+    if (windowState.isMaximized) {
+      mainWindow.maximize();
+    }
     resolveReady();
   });
 
@@ -989,6 +1126,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  persistWindowState();
   if (accessReimportInterval) {
     clearInterval(accessReimportInterval);
     accessReimportInterval = null;
@@ -1001,6 +1139,10 @@ app.on('before-quit', () => {
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
+  if (persistWindowStateTimer) {
+    clearTimeout(persistWindowStateTimer);
+    persistWindowStateTimer = null;
+  }
 });
 
 ipcMain.handle('app:getBootstrap', async () => ({
@@ -1188,6 +1330,8 @@ ipcMain.handle('people:list', (_event, input) => store.listPeople(input));
 ipcMain.handle('people:getDetails', (_event, sourceRowId) => store.getPersonDetails(sourceRowId));
 ipcMain.handle('map:getPoints', (_event, input) => store.listMapPoints(input));
 ipcMain.handle('map:getDateFilterOptions', () => store.listMapDateFilterOptions());
+ipcMain.handle('map:getSelectionHistory', () => readMapSelectionHistory());
+ipcMain.handle('map:setSelectionHistory', (_event, payload = {}) => saveMapSelectionHistory(payload));
 
 ipcMain.handle('route:build', async (_event, payload = {}) => {
   let originLat = payload.originLat;
