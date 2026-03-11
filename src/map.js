@@ -22,6 +22,7 @@ const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
 const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
+const colorsButtonEl = document.querySelector('[data-map-tool="colors"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
@@ -45,10 +46,10 @@ const DEFAULT_PERSON_MARKER_STYLE = {
 };
 const ACTIVE_PERSON_MARKER_STYLE = {
   radius: 9,
-  color: '#7f3512',
+  color: '#6e3cbc',
   opacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY,
   weight: 3,
-  fillColor: '#f1a167',
+  fillColor: '#bb86fc',
   fillOpacity: PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY
 };
 const HOVER_PERSON_MARKER_STYLE = {
@@ -94,21 +95,37 @@ const MAP_DATE_FILTER_BATCH_SIZE = 50;
 const MAP_DATE_FILTER_SCROLL_THRESHOLD_PX = 120;
 const MAP_DATE_FILTER_ROW_GAP_PX = 10;
 const MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX = 96;
+const MAP_TIME_CHART_PAST_PADDING_MONTHS = 1;
+const MAP_TIME_CHART_FUTURE_PADDING_MONTHS = 2;
+const MAP_TIME_CHART_ROW_HEIGHT_PX = 16;
+const MAP_TIME_CHART_ROW_GAP_PX = 10;
+const MAP_TIME_CHART_PLOT_GAP_PX = 12;
+const MAP_TIME_CHART_YEAR_LABEL_AREA_PX = 14;
+const MAP_TIME_CHART_YEAR_TICK_TOP_OVERFLOW_PX = 10;
+const MAP_TIME_CHART_MAX_VISIBLE_MONTH_TICKS = 60;
+const MAP_TIME_CHART_SNAP_DISTANCE_PX = 8;
+const MAP_TIME_CHART_EDGE_EXPAND_TRIGGER_PX = 18;
+const MAP_TIME_CHART_OPEN_ENDED_TRIGGER_PX = 120;
+const MAP_TIME_CHART_EDGE_EXPAND_DELAY_MS = 320;
+const MAP_TIME_CHART_EDGE_EXPAND_DURATION_MS = 2040;
+const MAP_TIME_CHART_EDGE_EXPAND_MAX_MONTHS = 12;
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
 const MAP_VIEWPORT_STORAGE_KEY = 'map:viewportState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
+const MAP_TIME_COLOR_RANGES_STORAGE_KEY = 'map:timeColorRanges';
 const RAW_FIELDS_EXPANDED_STORAGE_KEY = 'person:rawFieldsExpanded';
 const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
-const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter'];
+const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter', 'colors'];
 const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
 const EARLIEST_COMPARABLE_DATE = '0001-01-01';
 const LATEST_COMPARABLE_DATE = '9999-12-31';
 const restoredMapPanelState = readStoredMapPanelState();
 const restoredMapViewportState = readStoredMapViewportState();
 const restoredMapDateFilterState = readStoredMapDateFilterState();
+const restoredMapTimeColorRanges = readStoredMapTimeColorRanges();
 
 let mapInstance;
 let peopleLayer;
@@ -147,6 +164,7 @@ let mapDateFilter = mapDateFilterHasInvalidRange
   : normalizeMapDateFilter(restoredMapDateFilterState);
 let mapDateFilterOptions = [];
 let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, mapDateFilter);
+let mapTimeColorRanges = restoredMapTimeColorRanges;
 let mapDateFilterApplyTimer = null;
 let personSearchTimer = null;
 let personSearchRequestToken = 0;
@@ -176,6 +194,78 @@ let hoveredPersonPreviewTimer = 0;
 let hoveredPersonRestoreTimer = 0;
 let hoveredPersonMapAnimationFrame = 0;
 let historyPeopleLoadingSourceRowIds = new Set();
+let timeColorChartDragState = null;
+let timeColorChartViewportOverride = null;
+
+function endTimeColorChartDragState() {
+  timeColorChartDragState = null;
+  if (timeColorChartViewportOverride) {
+    timeColorChartViewportOverride = null;
+    if (infoPanelMode === 'colors') {
+      paintTimeColorPanel();
+    }
+  }
+  if (document.pointerLockElement === selectionExtraEl) {
+    document.exitPointerLock?.();
+  }
+}
+
+function getTimeColorChartDragClientX(event) {
+  if (!timeColorChartDragState) {
+    return null;
+  }
+
+  if (timeColorChartDragState.pointerLockActive && typeof event?.movementX === 'number') {
+    timeColorChartDragState.virtualClientX += event.movementX;
+    return timeColorChartDragState.virtualClientX;
+  }
+
+  if (typeof event?.clientX === 'number') {
+    timeColorChartDragState.virtualClientX = event.clientX;
+    return event.clientX;
+  }
+
+  return null;
+}
+
+function syncTimeColorChartDragAtClientX(clientX) {
+  if (!timeColorChartDragState || !Number.isFinite(clientX)) {
+    return;
+  }
+
+  timeColorChartViewportOverride = getMapTimeColorChartViewportOverride(clientX, timeColorChartDragState);
+  const nextRanges = applyTimeColorChartDrag(clientX, timeColorChartDragState);
+  if (!nextRanges) {
+    return;
+  }
+
+  mapTimeColorRanges = nextRanges;
+  persistMapTimeColorRanges();
+  paintTimeColorPanel();
+}
+
+function getMapTimeColorChartPointerPercent(clientX, dragState) {
+  if (!dragState || !Number.isFinite(dragState.trackLeft) || !Number.isFinite(dragState.trackWidth) || dragState.trackWidth <= 0) {
+    return 0;
+  }
+
+  const normalizedClientX = Number(clientX);
+  const leftBoundary = dragState.trackLeft + MAP_TIME_CHART_EDGE_EXPAND_TRIGGER_PX;
+  const rightBoundary = dragState.trackLeft + dragState.trackWidth - MAP_TIME_CHART_EDGE_EXPAND_TRIGGER_PX;
+
+  if (dragState.edgeExpandDirection === 'left' && normalizedClientX <= leftBoundary) {
+    return 0;
+  }
+
+  if (dragState.edgeExpandDirection === 'right' && normalizedClientX >= rightBoundary) {
+    return 1;
+  }
+
+  return Math.max(
+    0,
+    Math.min(1, (normalizedClientX - dragState.trackLeft) / dragState.trackWidth)
+  );
+}
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel(undefined, { historyEntry: 'push' });
@@ -197,6 +287,10 @@ historyButtonEl?.addEventListener('click', () => {
 
 filterButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('filter');
+});
+
+colorsButtonEl?.addEventListener('click', () => {
+  openInfoPanelMode('colors');
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
@@ -254,6 +348,35 @@ selectionExtraEl?.addEventListener('click', (event) => {
     return;
   }
 
+  const addTimeColorRangeButton = event.target.closest('[data-map-time-color-add]');
+  if (addTimeColorRangeButton && infoPanelMode === 'colors') {
+    mapTimeColorRanges = [...mapTimeColorRanges, buildDefaultMapTimeColorRange(mapTimeColorRanges.length)];
+    persistMapTimeColorRanges();
+    paintTimeColorPanel();
+    return;
+  }
+
+  const removeTimeColorRangeButton = event.target.closest('[data-map-time-color-remove]');
+  if (removeTimeColorRangeButton && infoPanelMode === 'colors') {
+    const rangeId = removeTimeColorRangeButton.getAttribute('data-map-time-color-remove');
+    if (mapTimeColorRanges.length <= 1) {
+      return;
+    }
+
+    mapTimeColorRanges = mapTimeColorRanges.filter((range) => range.id !== rangeId);
+    persistMapTimeColorRanges();
+    paintTimeColorPanel();
+    return;
+  }
+
+  const resetTimeColorRangesButton = event.target.closest('[data-map-time-color-reset]');
+  if (resetTimeColorRangesButton && infoPanelMode === 'colors') {
+    mapTimeColorRanges = createDefaultMapTimeColorRanges();
+    persistMapTimeColorRanges();
+    paintTimeColorPanel();
+    return;
+  }
+
   const historyRowButton = event.target.closest('[data-history-source-row-id]');
   if (historyRowButton && infoPanelMode === 'history') {
     const sourceRowId = historyRowButton.getAttribute('data-history-source-row-id');
@@ -288,6 +411,19 @@ selectionExtraEl?.addEventListener('click', (event) => {
 selectionExtraEl?.addEventListener('input', (event) => {
   const searchField = event.target.closest('[data-map-person-search-input]');
   if (!searchField || infoPanelMode !== 'search') {
+    const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] textarea');
+    if (!timeColorField || infoPanelMode !== 'colors') {
+      return;
+    }
+
+    const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
+    if (!timeColorForm) {
+      return;
+    }
+
+    mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
+    persistMapTimeColorRanges();
+    syncTimeColorPreview();
     return;
   }
 
@@ -295,6 +431,25 @@ selectionExtraEl?.addEventListener('input', (event) => {
 });
 
 selectionExtraEl?.addEventListener('change', (event) => {
+  const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] select');
+  if (timeColorField && infoPanelMode === 'colors') {
+    const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
+    if (!timeColorForm) {
+      return;
+    }
+
+    mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
+    persistMapTimeColorRanges();
+
+    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
+    if (timeColorFieldName === 'mode' || timeColorFieldName === 'daysFromOpen' || timeColorFieldName === 'daysToOpen') {
+      paintTimeColorPanel();
+    } else {
+      syncTimeColorPreview();
+    }
+    return;
+  }
+
   const filterField = event.target.closest('[data-map-date-filter-form] select');
   if (!filterField || infoPanelMode !== 'filter') {
     return;
@@ -318,6 +473,135 @@ selectionExtraEl?.addEventListener('change', (event) => {
   scheduleMapDateFilterApply();
 });
 
+selectionExtraEl?.addEventListener('pointerdown', (event) => {
+  const dragHandle = event.target.closest('[data-map-time-color-chart-handle]');
+  const dragBar = event.target.closest('[data-map-time-color-chart-bar-drag]');
+  const dragTarget = dragHandle || dragBar;
+  if (!dragTarget || infoPanelMode !== 'colors') {
+    return;
+  }
+
+  const rangeId = dragTarget.getAttribute('data-map-time-color-range-id');
+  if (!rangeId) {
+    return;
+  }
+
+  const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
+  if (!range || range.mode !== 'days') {
+    return;
+  }
+
+  const trackElement = dragTarget.closest('[data-map-time-color-chart-track]');
+  const chartElement = dragTarget.closest('[data-map-time-color-chart]');
+  if (!trackElement || !chartElement) {
+    return;
+  }
+
+  const trackRect = trackElement.getBoundingClientRect();
+  const oldestVisibleDays = Number(chartElement.dataset.oldestVisibleDays);
+  const newestVisibleDays = Number(chartElement.dataset.newestVisibleDays);
+  const chartMaxDays = Number(chartElement.dataset.chartMaxDays);
+  const newestRangeDays = Number(chartElement.dataset.newestRangeDays);
+  if (!Number.isFinite(trackRect.width) || trackRect.width <= 0 || !Number.isFinite(oldestVisibleDays) || !Number.isFinite(newestVisibleDays)) {
+    return;
+  }
+
+  const dragMode = dragHandle
+    ? dragHandle.getAttribute('data-map-time-color-chart-handle')
+    : 'range';
+  if (dragMode === 'range' && dragTarget.getAttribute('data-map-time-color-chart-bar-drag') !== 'true') {
+    return;
+  }
+  const initialDaysFrom = normalizeNonNegativeIntegerInputValue(range.daysFrom);
+  const initialDaysTo = normalizeNonNegativeIntegerInputValue(range.daysTo);
+  if (dragMode === 'range' && (!initialDaysFrom || !initialDaysTo)) {
+    return;
+  }
+
+  event.preventDefault();
+  timeColorChartViewportOverride = null;
+  timeColorChartDragState = {
+    pointerId: event.pointerId,
+    rangeId,
+    dragMode,
+    startClientX: event.clientX,
+    virtualClientX: event.clientX,
+    trackLeft: trackRect.left,
+    trackWidth: trackRect.width,
+    chartMaxDays: Number.isFinite(chartMaxDays) ? chartMaxDays : null,
+    newestRangeDays: Number.isFinite(newestRangeDays) ? newestRangeDays : 0,
+    oldestVisibleDays,
+    newestVisibleDays,
+    initialDaysFrom: initialDaysFrom === '' ? null : Number(initialDaysFrom),
+    initialDaysTo: initialDaysTo === '' ? null : Number(initialDaysTo),
+    edgeExpandDirection: '',
+    edgeExpandStartedAt: 0,
+    pointerLockActive: false
+  };
+
+  dragTarget.setPointerCapture?.(event.pointerId);
+  if (event.pointerType === 'mouse' && selectionExtraEl?.requestPointerLock) {
+    const lockResult = selectionExtraEl.requestPointerLock();
+    if (lockResult && typeof lockResult.catch === 'function') {
+      lockResult.catch(() => {});
+    }
+  }
+});
+
+window.addEventListener('pointermove', (event) => {
+  if (!timeColorChartDragState || event.pointerId !== timeColorChartDragState.pointerId) {
+    return;
+  }
+
+  if (timeColorChartDragState.pointerLockActive) {
+    return;
+  }
+
+  const clientX = getTimeColorChartDragClientX(event);
+  syncTimeColorChartDragAtClientX(clientX);
+});
+
+window.addEventListener('mousemove', (event) => {
+  if (!timeColorChartDragState || !timeColorChartDragState.pointerLockActive) {
+    return;
+  }
+
+  const clientX = getTimeColorChartDragClientX(event);
+  syncTimeColorChartDragAtClientX(clientX);
+});
+
+window.addEventListener('pointerup', (event) => {
+  if (!timeColorChartDragState || event.pointerId !== timeColorChartDragState.pointerId) {
+    return;
+  }
+
+  endTimeColorChartDragState();
+});
+
+window.addEventListener('pointercancel', (event) => {
+  if (!timeColorChartDragState || event.pointerId !== timeColorChartDragState.pointerId) {
+    return;
+  }
+
+  endTimeColorChartDragState();
+});
+
+window.addEventListener('mouseup', () => {
+  if (!timeColorChartDragState || !timeColorChartDragState.pointerLockActive) {
+    return;
+  }
+
+  endTimeColorChartDragState();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (!timeColorChartDragState) {
+    return;
+  }
+
+  timeColorChartDragState.pointerLockActive = document.pointerLockElement === selectionExtraEl;
+});
+
 selectionExtraEl?.addEventListener('submit', (event) => {
   const searchForm = event.target.closest('[data-map-person-search-form]');
   if (searchForm && infoPanelMode === 'search') {
@@ -329,6 +613,15 @@ selectionExtraEl?.addEventListener('submit', (event) => {
 
   const filterForm = event.target.closest('[data-map-date-filter-form]');
   if (!filterForm || infoPanelMode !== 'filter') {
+    const timeColorForm = event.target.closest('[data-map-time-color-form]');
+    if (!timeColorForm || infoPanelMode !== 'colors') {
+      return;
+    }
+
+    event.preventDefault();
+    mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
+    persistMapTimeColorRanges();
+    syncTimeColorPreview();
     return;
   }
 
@@ -759,6 +1052,109 @@ function normalizeDateInputValue(value) {
   }
 
   return parsedDate.toISOString().slice(0, 10);
+}
+
+function createDefaultMapTimeColorRanges() {
+  return [0, 1].map((index) => buildDefaultMapTimeColorRange(index));
+}
+
+function buildDefaultMapTimeColorRange(index = 0) {
+  const presets = [
+    {
+      label: 'Swieze wplaty',
+      color: '#4db06f',
+      mode: 'days',
+      daysFrom: '0',
+      daysTo: '50',
+      dateFrom: '',
+      dateTo: ''
+    },
+    {
+      label: 'Dawno bez wplaty',
+      color: '#d65f4a',
+      mode: 'days',
+      daysFrom: '300',
+      daysTo: '',
+      dateFrom: '',
+      dateTo: ''
+    },
+    {
+      label: 'Do sprawdzenia',
+      color: '#e3b341',
+      mode: 'days',
+      daysFrom: '200',
+      daysTo: '299',
+      dateFrom: '',
+      dateTo: ''
+    },
+    {
+      label: `Zakres ${index + 1}`,
+      color: ['#4d97d1', '#845ec2', '#1b9c85', '#c06c84'][Math.max(index - 3, 0) % 4],
+      mode: 'days',
+      daysFrom: '',
+      daysTo: '',
+      dateFrom: '',
+      dateTo: ''
+    }
+  ];
+
+  return normalizeMapTimeColorRange({
+    id: `range-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    ...(presets[index] || presets[presets.length - 1])
+  }, index);
+}
+
+function normalizeMapTimeColorRanges(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    return createDefaultMapTimeColorRanges();
+  }
+
+  return input
+    .map((entry, index) => normalizeMapTimeColorRange(entry, index))
+    .filter(Boolean);
+}
+
+function normalizeMapTimeColorRange(input = {}, index = 0) {
+  const normalizedId = typeof input?.id === 'string' && input.id.trim()
+    ? input.id.trim()
+    : `range-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const normalizedMode = input?.mode === 'dates' ? 'dates' : 'days';
+  const normalizedLabel = typeof input?.label === 'string' && input.label.trim()
+    ? input.label.trim()
+    : `Zakres ${index + 1}`;
+
+  return {
+    id: normalizedId,
+    label: normalizedLabel,
+    color: normalizeHexColorInputValue(input?.color),
+    mode: normalizedMode,
+    daysFrom: normalizeNonNegativeIntegerInputValue(input?.daysFrom),
+    daysTo: normalizeNonNegativeIntegerInputValue(input?.daysTo),
+    dateFrom: normalizeDateInputValue(input?.dateFrom),
+    dateTo: normalizeDateInputValue(input?.dateTo)
+  };
+}
+
+function normalizeNonNegativeIntegerInputValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return String(Math.trunc(value));
+  }
+
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? String(Number(trimmed)) : '';
+}
+
+function normalizeHexColorInputValue(value) {
+  if (typeof value !== 'string') {
+    return '#4db06f';
+  }
+
+  const trimmed = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : '#4db06f';
 }
 
 function normalizeMapDateFilterDraft(input = {}) {
@@ -1874,6 +2270,30 @@ function persistMapDateFilterState() {
   }
 }
 
+function readStoredMapTimeColorRanges() {
+  try {
+    const raw = window.localStorage.getItem(MAP_TIME_COLOR_RANGES_STORAGE_KEY);
+    if (!raw) {
+      return createDefaultMapTimeColorRanges();
+    }
+
+    return normalizeMapTimeColorRanges(JSON.parse(raw));
+  } catch (_error) {
+    return createDefaultMapTimeColorRanges();
+  }
+}
+
+function persistMapTimeColorRanges() {
+  try {
+    window.localStorage.setItem(
+      MAP_TIME_COLOR_RANGES_STORAGE_KEY,
+      JSON.stringify(normalizeMapTimeColorRanges(mapTimeColorRanges))
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
 function readLastSelectedPersonId() {
   try {
     return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
@@ -2596,6 +3016,11 @@ function renderCurrentInfoPanel() {
     return;
   }
 
+  if (infoPanelMode === 'colors') {
+    paintTimeColorPanel();
+    return;
+  }
+
   if (infoPanelMode === 'search') {
     paintSearchPanel({ shouldFocusInput: personSearchState.hasLoaded });
     if (!personSearchState.hasLoaded) {
@@ -2623,6 +3048,7 @@ function syncInfoToolButtons() {
   const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
   const isFilterMode =
     shouldHighlightInfoMode && (infoPanelMode === 'filter' || hasActiveMapDateFilter());
+  const isColorsMode = shouldHighlightInfoMode && infoPanelMode === 'colors';
 
   selectionButtonEl?.classList.toggle('is-active', isSelectionMode);
   selectionButtonEl?.setAttribute('aria-pressed', String(isSelectionMode));
@@ -2635,6 +3061,9 @@ function syncInfoToolButtons() {
 
   filterButtonEl?.classList.toggle('is-active', isFilterMode);
   filterButtonEl?.setAttribute('aria-pressed', String(isFilterMode));
+
+  colorsButtonEl?.classList.toggle('is-active', isColorsMode);
+  colorsButtonEl?.setAttribute('aria-pressed', String(isColorsMode));
 }
 
 function paintSelectionPanelState() {
@@ -2810,6 +3239,1088 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
       `;
     })
     .join('');
+}
+
+function paintTimeColorPanel() {
+  clearHoveredPersonSourceRowId();
+  syncOverviewSpacing(false, false, false, true);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  const normalizedRanges = normalizeMapTimeColorRanges(mapTimeColorRanges);
+  const sortedRanges = sortMapTimeColorRangesForDisplay(normalizedRanges);
+  mapTimeColorRanges = normalizedRanges;
+
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Paleta czasu';
+  selectionCopyEl.textContent = '';
+  selectionCopyEl.hidden = true;
+  selectionMetaEl.innerHTML = '';
+  selectionMetaEl.hidden = true;
+  selectionExtraEl.innerHTML = `
+    <form class="time-filter-panel time-color-tools" data-map-time-color-form>
+      <div class="time-color-legend">
+        <div class="time-color-legend-head">
+          <strong>Os czasu</strong>
+        </div>
+        <div class="time-color-legend-body">
+          <div class="time-color-legend-chart">
+            ${renderMapTimeColorChartMarkup(sortedRanges)}
+          </div>
+          <div class="time-color-legend-preview">
+            <div class="legend-swatches" data-map-time-color-preview>
+              ${renderMapTimeColorPreviewMarkup(sortedRanges)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="time-color-ranges" data-map-time-color-ranges>
+        ${sortedRanges.map((range, index) => renderMapTimeColorRangeRow(range, index, sortedRanges.length)).join('')}
+      </div>
+
+      <div class="action-row filter-action-row">
+        <span class="filter-action-count">${escapeHtml(formatMapTimeColorRangeCountLabel(sortedRanges.length))}</span>
+        <button type="button" class="button-strong" data-map-time-color-add>Dodaj zakres</button>
+        <button type="button" class="button-muted" data-map-time-color-reset>Przywroc 2 domyslne</button>
+      </div>
+    </form>
+  `;
+  selectionExtraEl.hidden = false;
+}
+
+function renderMapTimeColorRangeRow(range, index, totalCount) {
+  const removeDisabled = totalCount <= 1;
+  const rangeSummary = renderMapTimeColorRangeSummary(range);
+  const safeColor = escapeHtml(range.color);
+  return `
+    <article class="time-color-range-card" data-map-time-color-row-id="${escapeHtml(range.id)}">
+      <div class="time-color-range-head">
+        <div>
+          <strong>${escapeHtml(range.label || `Zakres ${index + 1}`)}</strong>
+          <p class="time-color-range-note">${escapeHtml(rangeSummary)}</p>
+        </div>
+        <button
+          type="button"
+          class="button-muted time-color-range-remove"
+          data-map-time-color-remove="${escapeHtml(range.id)}"
+          ${removeDisabled ? 'disabled' : ''}
+        >
+          Usun
+        </button>
+      </div>
+
+      <div class="time-color-range-grid">
+        <label class="field">
+          <span>Nazwa zakresu</span>
+          <input
+            type="text"
+            value="${escapeHtml(range.label)}"
+            placeholder="Np. Pilne"
+            data-map-time-color-field="label"
+          />
+        </label>
+
+        <label class="field">
+          <span>Kolor</span>
+          <div class="time-color-picker-wrap">
+            <input
+              class="time-color-picker"
+              type="color"
+              value="${safeColor}"
+              data-map-time-color-field="color"
+            />
+            <span class="time-color-picker-value">${safeColor}</span>
+          </div>
+        </label>
+
+        <label class="field">
+          <span>Tryb zakresu</span>
+          <select data-map-time-color-field="mode">
+            <option value="days"${range.mode === 'days' ? ' selected' : ''}>Dni od ostatniej wplaty</option>
+            <option value="dates"${range.mode === 'dates' ? ' selected' : ''}>Dokladne daty</option>
+          </select>
+        </label>
+
+        ${range.mode === 'dates'
+          ? `
+            <label class="field">
+              <span>Od daty</span>
+              <input type="date" value="${escapeHtml(range.dateFrom)}" data-map-time-color-field="dateFrom" />
+            </label>
+            <label class="field">
+              <span>Do daty</span>
+              <input type="date" value="${escapeHtml(range.dateTo)}" data-map-time-color-field="dateTo" />
+            </label>
+          `
+          : `
+            <label class="field">
+              <span>Od ilu dni</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value="${escapeHtml(range.daysFrom)}"
+                placeholder="Np. 200"
+                data-map-time-color-field="daysFrom"
+                ${range.daysFrom === '' ? 'disabled' : ''}
+              />
+            </label>
+            <label class="checkbox-field">
+              <input
+                type="checkbox"
+                data-map-time-color-field="daysFromOpen"
+                ${range.daysFrom === '' ? 'checked' : ''}
+              />
+              <span>Do konca osi</span>
+            </label>
+            <label class="field">
+              <span>Do ilu dni</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value="${escapeHtml(range.daysTo)}"
+                placeholder="Puste = bez limitu"
+                data-map-time-color-field="daysTo"
+                ${range.daysTo === '' ? 'disabled' : ''}
+              />
+            </label>
+            <label class="checkbox-field">
+              <input
+                type="checkbox"
+                data-map-time-color-field="daysToOpen"
+                ${range.daysTo === '' ? 'checked' : ''}
+              />
+              <span>Do poczatku osi</span>
+            </label>
+          `}
+      </div>
+    </article>
+  `;
+}
+
+function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
+  const normalizedRanges = sortMapTimeColorRangesForDisplay(normalizeMapTimeColorRanges(ranges)).reverse();
+  return normalizedRanges
+    .map((range) => `
+      <div
+        class="legend-chip"
+        style="--swatch-fill: ${escapeHtml(range.color)}; --swatch-border: ${escapeHtml(range.color)};"
+      >
+        <div class="legend-chip-data">
+          <div class="legend-value-box">
+            <strong>${escapeHtml(formatMapTimeColorRangeStart(range))}</strong>
+          </div>
+          <div class="legend-value-box">
+            <strong>${escapeHtml(formatMapTimeColorRangeEnd(range))}</strong>
+          </div>
+        </div>
+        <div class="legend-chip-swatch" aria-hidden="true">
+          <i aria-hidden="true"></i>
+        </div>
+      </div>
+    `)
+    .join('');
+}
+
+function renderMapTimeColorChartMarkup(ranges = mapTimeColorRanges) {
+  const chartModel = buildMapTimeColorChartModel(ranges);
+  if (!chartModel) {
+    return '<p class="time-color-chart-empty">Dodaj zakresy, aby zobaczyc wykres czasu.</p>';
+  }
+
+  if (chartModel.kind === 'mixed') {
+    return `
+      <p class="time-color-chart-empty">
+        Wykres obsluguje osobno zakresy w dniach albo osobno zakresy po datach.
+      </p>
+    `;
+  }
+
+  return `
+    <div
+      class="time-color-chart"
+      data-map-time-color-chart
+      data-oldest-visible-days="${escapeHtml(String(chartModel.oldestVisibleDays ?? ''))}"
+      data-newest-visible-days="${escapeHtml(String(chartModel.newestVisibleDays ?? ''))}"
+      data-chart-max-days="${escapeHtml(String(chartModel.chartMaxDays ?? ''))}"
+      data-newest-range-days="${escapeHtml(String(chartModel.newestRangeDays ?? ''))}"
+    >
+    <div class="time-color-chart-plot">
+      <div class="time-color-chart-years">
+        ${chartModel.yearLabels.map((year) => `
+          <span
+            class="time-color-chart-year-text"
+            style="left: ${escapeHtml(String(year.position))}%;"
+          >${escapeHtml(year.label)}</span>
+        `).join('')}
+      </div>
+      <div class="time-color-chart-rows">
+        ${chartModel.rows.map((row) => `
+          <div class="time-color-chart-row">
+            <div class="time-color-chart-track" data-map-time-color-chart-track>
+              <div
+                class="time-color-chart-bar time-color-chart-bar-interactive${row.isMovable ? ' is-draggable' : ''}${row.isOpenLeft ? ' is-open-left' : ''}${row.isOpenRight ? ' is-open-right' : ''}"
+                data-map-time-color-chart-bar-drag="${row.isMovable ? 'true' : 'false'}"
+                data-map-time-color-range-id="${escapeHtml(row.id)}"
+                style="left: ${escapeHtml(String(row.start))}%; width: ${escapeHtml(String(row.width))}%; --chart-fill: ${escapeHtml(row.color)};"
+              >
+                ${row.isInteractive
+                  ? `
+                    <span
+                      class="time-color-chart-handle time-color-chart-handle-start${row.isOpenLeft ? ' is-open-left-cap' : ''}"
+                      data-map-time-color-chart-handle="start"
+                      data-map-time-color-range-id="${escapeHtml(row.id)}"
+                      style="--chart-handle-fill: ${escapeHtml(row.color)};"
+                    ></span>
+                    <span
+                      class="time-color-chart-handle time-color-chart-handle-end${row.isOpenRight || row.touchesRightEdge ? ' is-open-right-cap' : ''}"
+                      data-map-time-color-chart-handle="end"
+                      data-map-time-color-range-id="${escapeHtml(row.id)}"
+                      style="--chart-handle-fill: ${escapeHtml(row.color)};"
+                    ></span>
+                  `
+                  : ''}
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div
+      class="time-color-chart-ruler"
+      style="--time-color-year-tick-height: ${escapeHtml(String(getMapTimeColorChartYearTickHeight(chartModel.rows.length)))}px;"
+    >
+      ${chartModel.monthTicks.map((tick) => `
+        <span
+          class="time-color-chart-tick-wrap${tick.isYearStart ? ' is-year-start' : ''}"
+          style="left: ${escapeHtml(String(tick.position))}%;"
+        >
+          <i
+            class="time-color-chart-tick${tick.isYearStart ? ' is-year-start' : ''}"
+            aria-hidden="true"
+          ></i>
+          ${tick.monthLabel ? `<span class="time-color-chart-month-label">${escapeHtml(tick.monthLabel)}</span>` : ''}
+        </span>
+      `).join('')}
+    </div>
+    </div>
+  `;
+}
+
+function formatMapTimeColorRangeStart(range) {
+  if (range.mode === 'dates') {
+    return range.dateFrom || 'brak';
+  }
+
+  return range.daysFrom ? range.daysFrom : 'brak';
+}
+
+function formatMapTimeColorRangeEnd(range) {
+  if (range.mode === 'dates') {
+    return range.dateTo || 'brak';
+  }
+
+  return range.daysTo ? range.daysTo : 'brak';
+}
+
+function buildMapTimeColorChartModel(ranges = mapTimeColorRanges) {
+  const normalizedRanges = sortMapTimeColorRangesForDisplay(normalizeMapTimeColorRanges(ranges));
+  if (normalizedRanges.length === 0) {
+    return null;
+  }
+
+  const hasDays = normalizedRanges.some((range) => range.mode === 'days');
+  const hasDates = normalizedRanges.some((range) => range.mode === 'dates');
+  if (hasDays && hasDates) {
+    return { kind: 'mixed' };
+  }
+
+  return hasDates
+    ? buildMapTimeColorDateChartModel(normalizedRanges)
+    : buildMapTimeColorDaysChartModel(normalizedRanges);
+}
+
+function buildMapTimeColorDaysChartModel(ranges) {
+  const numericRanges = ranges.map((range) => {
+    const start = range.daysFrom === '' ? 0 : Number(range.daysFrom);
+    const end = range.daysTo === '' ? null : Number(range.daysTo);
+    return {
+      id: range.id,
+      color: range.color,
+      isOpenLeft: range.daysTo === '',
+      isOpenRight: range.daysFrom === '',
+      start: Number.isFinite(start) ? start : 0,
+      end: Number.isFinite(end) ? end : null
+    };
+  });
+
+  const finiteValues = numericRanges.flatMap((range) => [range.start, range.end]).filter(Number.isFinite);
+  const maxValue = Math.max(365, ...finiteValues, 0);
+  const newestRangeDays = Math.max(0, Math.min(...numericRanges.map((range) => range.start)));
+  const chartMax = maxValue <= 365 ? 365 : maxValue;
+  const timelineBounds = buildRelativeDayTimelineBounds(chartMax, timeColorChartViewportOverride, newestRangeDays);
+
+  return {
+    kind: 'days',
+    chartMaxDays: chartMax,
+    newestRangeDays,
+    oldestVisibleDays: timelineBounds.oldestVisibleDays,
+    newestVisibleDays: timelineBounds.newestVisibleDays,
+    yearLabels: buildMapTimeColorDayYearLabels(timelineBounds),
+    monthTicks: buildMapTimeColorDayMonthTicks(timelineBounds),
+    rows: numericRanges.map((range) => {
+      const startValue = Math.max(0, Math.min(chartMax, range.start));
+      const endValue = range.end == null
+        ? chartMax
+        : Math.max(startValue, Math.min(chartMax, range.end));
+      const startPosition = range.isOpenLeft ? 0 : getRelativeDayChartPosition(endValue, timelineBounds);
+      const endPosition = range.isOpenRight ? 100 : getRelativeDayChartPosition(startValue, timelineBounds);
+      return {
+        id: range.id,
+        color: range.color,
+        start: startPosition,
+        end: endPosition,
+        width: Math.max(0, endPosition - startPosition),
+        sortValue: startValue,
+        isMovable: !range.isOpenLeft && !range.isOpenRight,
+        isInteractive: true,
+        isOpenLeft: range.isOpenLeft,
+        isOpenRight: range.isOpenRight,
+        touchesRightEdge: endPosition >= 99.95
+      };
+    })
+  };
+}
+
+function buildMapTimeColorDateChartModel(ranges) {
+  const dateRanges = ranges.map((range) => {
+    const start = getMapTimeColorRangeDateComparableValue(range.dateFrom);
+    const end = getMapTimeColorRangeDateComparableValue(range.dateTo);
+    return {
+      id: range.id,
+      color: range.color,
+      isOpenLeft: !Number.isFinite(start),
+      isOpenRight: !Number.isFinite(end),
+      start,
+      end
+    };
+  });
+
+  const finiteValues = dateRanges.flatMap((range) => [range.start, range.end]).filter(Number.isFinite);
+  if (finiteValues.length === 0) {
+    return { kind: 'mixed' };
+  }
+
+  const minValue = Math.min(...finiteValues);
+  const maxValue = Math.max(...finiteValues);
+  const chartMin = addUtcMonths(minValue, -MAP_TIME_CHART_PAST_PADDING_MONTHS);
+  const chartMax = addUtcMonths(maxValue, MAP_TIME_CHART_FUTURE_PADDING_MONTHS);
+  const visibleSpan = chartMax - chartMin;
+
+  return {
+    kind: 'dates',
+    chartMaxDays: null,
+    oldestVisibleDays: null,
+    newestVisibleDays: null,
+    yearLabels: buildMapTimeColorDateYearLabels(chartMin, chartMax),
+    monthTicks: buildMapTimeColorDateMonthTicks(chartMin, chartMax),
+    rows: dateRanges.map((range) => {
+      const startValue = Number.isFinite(range.start) ? range.start : chartMin;
+      const endValue = Number.isFinite(range.end) ? range.end : chartMax;
+      const normalizedStart = Math.min(startValue, endValue);
+      const normalizedEnd = Math.max(startValue, endValue);
+      const startPosition = range.isOpenLeft ? 0 : getRelativeChartPosition(normalizedStart, chartMin, chartMax);
+      const endPosition = range.isOpenRight ? 100 : getRelativeChartPosition(normalizedEnd, chartMin, chartMax);
+      return {
+        id: range.id,
+        color: range.color,
+        start: startPosition,
+        end: endPosition,
+        width: Math.max(0, endPosition - startPosition),
+        sortValue: -normalizedEnd,
+        isInteractive: false,
+        isMovable: false,
+        isOpenLeft: range.isOpenLeft,
+        isOpenRight: range.isOpenRight,
+        touchesRightEdge: endPosition >= 99.95
+      };
+    })
+  };
+}
+
+function applyTimeColorChartDrag(clientX, dragState) {
+  const rangeIndex = mapTimeColorRanges.findIndex((entry) => entry.id === dragState.rangeId);
+  if (rangeIndex < 0) {
+    return null;
+  }
+
+  const nextRanges = [...mapTimeColorRanges];
+  const range = nextRanges[rangeIndex];
+  if (!range || range.mode !== 'days') {
+    return null;
+  }
+
+  const visibleBounds = getMapTimeColorChartDragVisibleBounds(dragState);
+  const pointerPercent = getMapTimeColorChartPointerPercent(clientX, dragState);
+  const pointerDays = convertChartPercentToDaysAgo(
+    pointerPercent * 100,
+    visibleBounds.oldestVisibleDays,
+    visibleBounds.newestVisibleDays
+  );
+
+  const initialDaysFromFloor = Number.isFinite(dragState.initialDaysFrom) ? dragState.initialDaysFrom : 0;
+  let nextDaysFrom = dragState.initialDaysFrom;
+  let nextDaysTo = dragState.initialDaysTo;
+  const leftOverflowPx = dragState.trackLeft - clientX;
+  const rightOverflowPx = clientX - (dragState.trackLeft + dragState.trackWidth);
+
+  if (dragState.dragMode === 'start' && leftOverflowPx >= MAP_TIME_CHART_OPEN_ENDED_TRIGGER_PX) {
+    nextDaysTo = null;
+  } else if (dragState.dragMode === 'start') {
+    const rawDraggedDays = Math.max(0, Math.round(pointerDays));
+    const snappedDraggedDays = getSnappedMapTimeColorDayValue(rawDraggedDays, dragState, dragState.rangeId);
+    const draggedDays = Number.isFinite(snappedDraggedDays) ? snappedDraggedDays : rawDraggedDays;
+    if (draggedDays >= initialDaysFromFloor) {
+      nextDaysFrom = dragState.initialDaysFrom;
+      nextDaysTo = draggedDays;
+    } else {
+      nextDaysFrom = draggedDays;
+      nextDaysTo = initialDaysFromFloor;
+    }
+  } else if (dragState.dragMode === 'end') {
+    if (rightOverflowPx >= MAP_TIME_CHART_OPEN_ENDED_TRIGGER_PX) {
+      nextDaysFrom = null;
+    } else {
+    const rawDraggedDays = Math.max(0, Math.round(pointerDays));
+    const snappedDraggedDays = getSnappedMapTimeColorDayValue(rawDraggedDays, dragState, dragState.rangeId);
+    const draggedDays = Number.isFinite(snappedDraggedDays) ? snappedDraggedDays : rawDraggedDays;
+    if (Number.isFinite(dragState.initialDaysTo)) {
+      if (draggedDays <= dragState.initialDaysTo) {
+        nextDaysFrom = draggedDays;
+        nextDaysTo = dragState.initialDaysTo;
+      } else {
+        nextDaysFrom = dragState.initialDaysTo;
+        nextDaysTo = draggedDays;
+      }
+    } else {
+      nextDaysFrom = draggedDays;
+    }
+    }
+  } else if (dragState.dragMode === 'range' && Number.isFinite(dragState.initialDaysTo)) {
+    const currentPointerDays = convertChartPercentToDaysAgo(
+      getMapTimeColorChartPointerPercent(dragState.startClientX, dragState) * 100,
+      visibleBounds.oldestVisibleDays,
+      visibleBounds.newestVisibleDays
+    );
+    const deltaDays = Math.round(pointerDays - currentPointerDays);
+    const span = Math.max(0, dragState.initialDaysTo - dragState.initialDaysFrom);
+    nextDaysFrom = Math.max(0, dragState.initialDaysFrom + deltaDays);
+    nextDaysTo = nextDaysFrom + span;
+
+    const snapCandidates = [
+      {
+        snappedValue: getSnappedMapTimeColorDayValue(nextDaysFrom, dragState, dragState.rangeId),
+        sourceValue: nextDaysFrom
+      },
+      {
+        snappedValue: getSnappedMapTimeColorDayValue(nextDaysTo, dragState, dragState.rangeId),
+        sourceValue: nextDaysTo
+      }
+    ].filter((candidate) => Number.isFinite(candidate.snappedValue));
+
+    if (snapCandidates.length > 0) {
+      const bestCandidate = snapCandidates.reduce((best, candidate) => {
+        if (!best) {
+          return candidate;
+        }
+        return Math.abs(candidate.snappedValue - candidate.sourceValue) < Math.abs(best.snappedValue - best.sourceValue)
+          ? candidate
+          : best;
+      }, null);
+
+      if (bestCandidate) {
+        const snapDelta = bestCandidate.snappedValue - bestCandidate.sourceValue;
+        nextDaysFrom = Math.max(0, nextDaysFrom + snapDelta);
+        nextDaysTo = nextDaysFrom + span;
+      }
+    }
+  }
+
+  if (Number.isFinite(nextDaysTo) && Number.isFinite(nextDaysFrom)) {
+    nextDaysTo = Math.max(nextDaysFrom, nextDaysTo);
+  }
+
+  nextRanges[rangeIndex] = normalizeMapTimeColorRange({
+    ...range,
+    daysFrom: Number.isFinite(nextDaysFrom) ? String(Math.max(0, Math.round(nextDaysFrom))) : '',
+    daysTo: Number.isFinite(nextDaysTo) ? String(Math.round(nextDaysTo)) : ''
+  }, rangeIndex);
+
+  return nextRanges;
+}
+
+function convertChartPercentToDaysAgo(percent, oldestVisibleDays, newestVisibleDays) {
+  const normalizedPercent = Math.max(0, Math.min(100, Number(percent) || 0));
+  const span = oldestVisibleDays - newestVisibleDays;
+  if (!Number.isFinite(span) || span <= 0) {
+    return 0;
+  }
+
+  return oldestVisibleDays - ((normalizedPercent / 100) * span);
+}
+
+function getMapTimeColorChartDragVisibleBounds(dragState) {
+  if (Number.isFinite(dragState?.chartMaxDays)) {
+    const timelineBounds = buildRelativeDayTimelineBounds(
+      dragState.chartMaxDays,
+      timeColorChartViewportOverride,
+      dragState.newestRangeDays
+    );
+    return {
+      oldestVisibleDays: timelineBounds.oldestVisibleDays,
+      newestVisibleDays: timelineBounds.newestVisibleDays
+    };
+  }
+
+  return {
+    oldestVisibleDays: dragState?.oldestVisibleDays,
+    newestVisibleDays: dragState?.newestVisibleDays
+  };
+}
+
+function getMapTimeColorChartViewportOverride(clientX, dragState) {
+  if (!dragState || !Number.isFinite(dragState.trackLeft) || !Number.isFinite(dragState.trackWidth) || dragState.trackWidth <= 0) {
+    return null;
+  }
+
+  const leftBoundary = dragState.trackLeft + MAP_TIME_CHART_EDGE_EXPAND_TRIGGER_PX;
+  const rightBoundary = dragState.trackLeft + dragState.trackWidth - MAP_TIME_CHART_EDGE_EXPAND_TRIGGER_PX;
+  const nextDirection = clientX <= leftBoundary ? 'left' : clientX >= rightBoundary ? 'right' : '';
+
+  if (!nextDirection) {
+    dragState.edgeExpandDirection = '';
+    dragState.edgeExpandStartedAt = 0;
+    return null;
+  }
+
+  const now = Date.now();
+  if (dragState.edgeExpandDirection !== nextDirection) {
+    dragState.edgeExpandDirection = nextDirection;
+    dragState.edgeExpandStartedAt = now;
+  }
+
+  const elapsed = Math.max(0, now - (dragState.edgeExpandStartedAt || now));
+  const extraMonths = getMapTimeColorChartEdgeExpandMonths(elapsed);
+
+  if (!extraMonths) {
+    return null;
+  }
+
+  if (
+    nextDirection === 'right'
+    && Number.isFinite(dragState.chartMaxDays)
+    && hasMapTimeColorChartReachedRightBoundary(dragState)
+  ) {
+    return null;
+  }
+
+  return {
+    pastPaddingMonthsExtra: nextDirection === 'left' ? extraMonths : 0,
+    futurePaddingMonthsExtra: nextDirection === 'right' ? extraMonths : 0
+  };
+}
+
+function getMapTimeColorChartEdgeExpandMonths(elapsedMs) {
+  const normalizedElapsedMs = Math.max(0, Number(elapsedMs) || 0);
+  if (normalizedElapsedMs <= MAP_TIME_CHART_EDGE_EXPAND_DELAY_MS) {
+    return 0;
+  }
+
+  const progress = Math.min(
+    1,
+    (normalizedElapsedMs - MAP_TIME_CHART_EDGE_EXPAND_DELAY_MS) / MAP_TIME_CHART_EDGE_EXPAND_DURATION_MS
+  );
+
+  // Ease-in keeps the first movement gentler and avoids visible jumps.
+  return progress * progress * MAP_TIME_CHART_EDGE_EXPAND_MAX_MONTHS;
+}
+
+function getMapTimeColorChartSnapThresholdDays(trackWidth, oldestVisibleDays, newestVisibleDays) {
+  const normalizedTrackWidth = Number(trackWidth);
+  const visibleSpanDays = Number(oldestVisibleDays) - Number(newestVisibleDays);
+  if (!Number.isFinite(normalizedTrackWidth) || normalizedTrackWidth <= 0 || !Number.isFinite(visibleSpanDays) || visibleSpanDays <= 0) {
+    return 0;
+  }
+
+  return (visibleSpanDays * MAP_TIME_CHART_SNAP_DISTANCE_PX) / normalizedTrackWidth;
+}
+
+function getMapTimeColorRangeSnapPoints(excludedRangeId) {
+  const points = [];
+  mapTimeColorRanges.forEach((entry) => {
+    if (!entry || entry.id === excludedRangeId || entry.mode !== 'days') {
+      return;
+    }
+
+    const daysFrom = normalizeNonNegativeIntegerInputValue(entry.daysFrom || '0');
+    const daysTo = normalizeNonNegativeIntegerInputValue(entry.daysTo);
+    if (daysFrom !== '') {
+      points.push(Number(daysFrom));
+    }
+    if (daysTo !== '') {
+      points.push(Number(daysTo));
+    }
+  });
+  return points;
+}
+
+function getMapTimeColorMonthSnapPoints(oldestVisibleDays, newestVisibleDays) {
+  if (!Number.isFinite(oldestVisibleDays) || !Number.isFinite(newestVisibleDays)) {
+    return [];
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const visibleStartTimestamp = todayUtc - (oldestVisibleDays * 86400000);
+  const visibleEndTimestamp = todayUtc - (newestVisibleDays * 86400000);
+  const cursor = new Date(Date.UTC(
+    new Date(visibleStartTimestamp).getUTCFullYear(),
+    new Date(visibleStartTimestamp).getUTCMonth(),
+    1
+  ));
+  const points = [];
+
+  while (cursor.getTime() <= visibleEndTimestamp) {
+    const monthStartTimestamp = cursor.getTime();
+    if (monthStartTimestamp >= visibleStartTimestamp) {
+      points.push(Math.round((todayUtc - monthStartTimestamp) / 86400000));
+    }
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return points;
+}
+
+function getSnappedMapTimeColorDayValue(value, dragState, excludedRangeId) {
+  const normalizedValue = Number(value);
+  if (!Number.isFinite(normalizedValue)) {
+    return null;
+  }
+
+  const visibleBounds = getMapTimeColorChartDragVisibleBounds(dragState);
+  const snapThresholdDays = getMapTimeColorChartSnapThresholdDays(
+    dragState.trackWidth,
+    visibleBounds.oldestVisibleDays,
+    visibleBounds.newestVisibleDays
+  );
+  if (!Number.isFinite(snapThresholdDays) || snapThresholdDays <= 0) {
+    return null;
+  }
+
+  let closestPoint = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  [
+    ...getMapTimeColorRangeSnapPoints(excludedRangeId),
+    ...getMapTimeColorMonthSnapPoints(visibleBounds.oldestVisibleDays, visibleBounds.newestVisibleDays)
+  ].forEach((point) => {
+    const distance = Math.abs(point - normalizedValue);
+    if (distance <= snapThresholdDays && distance < closestDistance) {
+      closestPoint = point;
+      closestDistance = distance;
+    }
+  });
+
+  return closestPoint;
+}
+
+function getRelativeChartPosition(value, minValue, maxValue) {
+  const span = maxValue - minValue;
+  if (!Number.isFinite(span) || span <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, ((value - minValue) / span) * 100));
+}
+
+function buildRelativeDayTimelineBounds(chartMax, viewportOverride = null, newestRangeDays = 0) {
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const oldestRangeStart = todayUtc - (chartMax * 86400000);
+  const normalizedNewestRangeDays = Math.max(0, Number(newestRangeDays) || 0);
+  const newestRangeTimestamp = todayUtc - (normalizedNewestRangeDays * 86400000);
+  const pastPaddingMonths = MAP_TIME_CHART_PAST_PADDING_MONTHS + Math.max(0, Number(viewportOverride?.pastPaddingMonthsExtra) || 0);
+  const futurePaddingMonths = MAP_TIME_CHART_FUTURE_PADDING_MONTHS + Math.max(0, Number(viewportOverride?.futurePaddingMonthsExtra) || 0);
+  const timelineStart = addUtcMonths(oldestRangeStart, -pastPaddingMonths);
+  const timelineEndBase = normalizedNewestRangeDays > 0 ? newestRangeTimestamp : todayUtc;
+  const timelineEnd = Math.min(
+    addUtcMonths(timelineEndBase, futurePaddingMonths),
+    getMapTimeColorChartMaxTimelineEndTimestamp(todayUtc)
+  );
+  const oldestVisibleDays = Math.round((todayUtc - timelineStart) / 86400000);
+  const newestVisibleDays = Math.round((todayUtc - timelineEnd) / 86400000);
+  return {
+    chartMax,
+    oldestVisibleDays,
+    newestVisibleDays,
+    timelineStart,
+    timelineEnd
+  };
+}
+
+function getMapTimeColorChartMaxTimelineEndTimestamp(todayUtc = null) {
+  const normalizedTodayUtc = Number.isFinite(todayUtc)
+    ? todayUtc
+    : Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  return addUtcMonths(normalizedTodayUtc, MAP_TIME_CHART_FUTURE_PADDING_MONTHS);
+}
+
+function hasMapTimeColorChartReachedRightBoundary(dragState) {
+  if (!Number.isFinite(dragState?.chartMaxDays)) {
+    return false;
+  }
+
+  const timelineBounds = buildRelativeDayTimelineBounds(
+    dragState.chartMaxDays,
+    timeColorChartViewportOverride,
+    dragState.newestRangeDays
+  );
+  return timelineBounds.timelineEnd >= getMapTimeColorChartMaxTimelineEndTimestamp() - 86400000;
+}
+
+function buildMapTimeColorDayMonthTicks(timelineBounds) {
+  const ticks = [];
+  const startDate = new Date(timelineBounds.timelineStart);
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const cursor = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
+  const monthStep = getMapTimeColorChartMonthTickStep(timelineBounds.timelineStart, timelineBounds.timelineEnd);
+  let visibleMonthIndex = 0;
+  while (cursor.getTime() <= timelineBounds.timelineEnd) {
+    const timestamp = cursor.getTime();
+    if (timestamp >= timelineBounds.timelineStart) {
+      const isYearStart = cursor.getUTCMonth() === 0;
+      const shouldShowTick = isYearStart || (visibleMonthIndex % monthStep === 0);
+      if (shouldShowTick) {
+        const daysAgo = Math.round((todayUtc - timestamp) / 86400000);
+        ticks.push({
+          position: getRelativeDayChartPosition(daysAgo, timelineBounds),
+          isYearStart,
+          yearLabel: isYearStart ? String(cursor.getUTCFullYear()) : '',
+          monthLabel: formatMonthRoman(cursor.getUTCMonth() + 1)
+        });
+      }
+      visibleMonthIndex += 1;
+    }
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return ticks;
+}
+
+function buildMapTimeColorDayYearLabels(timelineBounds) {
+  const labels = [];
+  const startDate = new Date(timelineBounds.timelineStart);
+  const endDate = new Date(timelineBounds.timelineEnd);
+  const startYear = startDate.getUTCFullYear();
+  const endYear = endDate.getUTCFullYear();
+
+  for (let year = startYear; year <= endYear; year += 1) {
+    const yearStart = Date.UTC(year, 0, 1);
+    const yearEnd = Date.UTC(year + 1, 0, 1);
+    const visibleStart = Math.max(timelineBounds.timelineStart, yearStart);
+    const visibleEnd = Math.min(timelineBounds.timelineEnd, yearEnd);
+    if (visibleEnd <= visibleStart) {
+      continue;
+    }
+
+    const midpoint = visibleStart + ((visibleEnd - visibleStart) / 2);
+    const today = new Date();
+    const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    const daysAgo = Math.round((todayUtc - midpoint) / 86400000);
+    labels.push({
+      position: getRelativeDayChartPosition(daysAgo, timelineBounds),
+      label: String(year)
+    });
+  }
+
+  return labels;
+}
+
+function buildMapTimeColorDateMonthTicks(chartMin, chartMax) {
+  const ticks = [];
+  const startDate = new Date(chartMin);
+  const cursor = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
+  const monthStep = getMapTimeColorChartMonthTickStep(chartMin, chartMax);
+  let visibleMonthIndex = 0;
+  while (cursor.getTime() <= chartMax) {
+    const timestamp = cursor.getTime();
+    if (timestamp >= chartMin) {
+      const isYearStart = cursor.getUTCMonth() === 0;
+      const shouldShowTick = isYearStart || (visibleMonthIndex % monthStep === 0);
+      if (shouldShowTick) {
+        ticks.push({
+          position: getRelativeChartPosition(timestamp, chartMin, chartMax),
+          isYearStart,
+          yearLabel: isYearStart ? String(cursor.getUTCFullYear()) : '',
+          monthLabel: formatMonthRoman(cursor.getUTCMonth() + 1)
+        });
+      }
+      visibleMonthIndex += 1;
+    }
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return ticks;
+}
+
+function getMapTimeColorChartMonthTickStep(startTimestamp, endTimestamp) {
+  if (!Number.isFinite(startTimestamp) || !Number.isFinite(endTimestamp) || endTimestamp <= startTimestamp) {
+    return 1;
+  }
+
+  const startDate = new Date(startTimestamp);
+  const endDate = new Date(endTimestamp);
+  const totalMonths = Math.max(
+    1,
+    ((endDate.getUTCFullYear() - startDate.getUTCFullYear()) * 12)
+      + (endDate.getUTCMonth() - startDate.getUTCMonth())
+      + 1
+  );
+
+  const candidateSteps = [1, 2, 3, 4, 6, 12, 24, 36, 48, 60];
+  for (const step of candidateSteps) {
+    if (Math.ceil(totalMonths / step) <= MAP_TIME_CHART_MAX_VISIBLE_MONTH_TICKS) {
+      return step;
+    }
+  }
+
+  return Math.max(1, Math.ceil(totalMonths / MAP_TIME_CHART_MAX_VISIBLE_MONTH_TICKS));
+}
+
+function buildMapTimeColorDateYearLabels(chartMin, chartMax) {
+  const labels = [];
+  const startDate = new Date(chartMin);
+  const endDate = new Date(chartMax);
+  const startYear = startDate.getUTCFullYear();
+  const endYear = endDate.getUTCFullYear();
+
+  for (let year = startYear; year <= endYear; year += 1) {
+    const yearStart = Date.UTC(year, 0, 1);
+    const yearEnd = Date.UTC(year + 1, 0, 1);
+    const visibleStart = Math.max(chartMin, yearStart);
+    const visibleEnd = Math.min(chartMax, yearEnd);
+    if (visibleEnd <= visibleStart) {
+      continue;
+    }
+
+    const midpoint = visibleStart + ((visibleEnd - visibleStart) / 2);
+    labels.push({
+      position: getRelativeChartPosition(midpoint, chartMin, chartMax),
+      label: String(year)
+    });
+  }
+
+  return labels;
+}
+
+function formatMonthRoman(monthNumber) {
+  const numerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  return numerals[monthNumber - 1] || '';
+}
+
+function getMapTimeColorChartYearTickHeight(rowCount) {
+  const normalizedRowCount = Math.max(1, Number(rowCount) || 1);
+  const rowsHeight = normalizedRowCount * MAP_TIME_CHART_ROW_HEIGHT_PX;
+  const rowGaps = Math.max(0, normalizedRowCount - 1) * MAP_TIME_CHART_ROW_GAP_PX;
+  return MAP_TIME_CHART_YEAR_TICK_TOP_OVERFLOW_PX
+    + MAP_TIME_CHART_YEAR_LABEL_AREA_PX
+    + MAP_TIME_CHART_PLOT_GAP_PX
+    + rowsHeight
+    + rowGaps;
+}
+
+function getRelativeDayChartPosition(daysAgo, timelineBounds) {
+  const oldestVisibleDays = timelineBounds.oldestVisibleDays;
+  const newestVisibleDays = timelineBounds.newestVisibleDays;
+  const span = oldestVisibleDays - newestVisibleDays;
+  if (!Number.isFinite(span) || span <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, ((oldestVisibleDays - daysAgo) / span) * 100));
+}
+
+function addUtcMonths(timestamp, months) {
+  const date = new Date(timestamp);
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth() + months,
+    date.getUTCDate()
+  );
+}
+
+function renderMapTimeColorRangeSummary(range) {
+  if (range.mode === 'dates') {
+    if (range.dateFrom && range.dateTo) {
+      return `${range.dateFrom} do ${range.dateTo}`;
+    }
+
+    if (range.dateFrom) {
+      return `od ${range.dateFrom}`;
+    }
+
+    if (range.dateTo) {
+      return `do ${range.dateTo}`;
+    }
+
+    return 'zakres dat do ustawienia';
+  }
+
+  if (range.daysFrom && range.daysTo) {
+    return `${range.daysFrom}-${range.daysTo} dni`;
+  }
+
+  if (range.daysFrom) {
+    return `${range.daysFrom}+ dni`;
+  }
+
+  if (range.daysTo) {
+    return `do ${range.daysTo} dni`;
+  }
+
+  return 'prog dni do ustawienia';
+}
+
+function formatMapTimeColorRangeCountLabel(count) {
+  if (count === 1) {
+    return '1 zakres';
+  }
+
+  return `${formatNumber(count)} zakresy`;
+}
+
+function readMapTimeColorRangesFromForm(formElement) {
+  const rowElements = Array.from(formElement.querySelectorAll('[data-map-time-color-row-id]'));
+  if (rowElements.length === 0) {
+    return createDefaultMapTimeColorRanges();
+  }
+
+  return normalizeMapTimeColorRanges(
+    rowElements.map((rowElement, index) => ({
+      id: rowElement.getAttribute('data-map-time-color-row-id') || `range-${index + 1}`,
+      label: rowElement.querySelector('[data-map-time-color-field="label"]')?.value || '',
+      color: rowElement.querySelector('[data-map-time-color-field="color"]')?.value || '',
+      mode: rowElement.querySelector('[data-map-time-color-field="mode"]')?.value || 'days',
+      daysFrom: rowElement.querySelector('[data-map-time-color-field="daysFromOpen"]')?.checked
+        ? ''
+        : (rowElement.querySelector('[data-map-time-color-field="daysFrom"]')?.value || ''),
+      daysTo: rowElement.querySelector('[data-map-time-color-field="daysToOpen"]')?.checked
+        ? ''
+        : (rowElement.querySelector('[data-map-time-color-field="daysTo"]')?.value || ''),
+      dateFrom: rowElement.querySelector('[data-map-time-color-field="dateFrom"]')?.value || '',
+      dateTo: rowElement.querySelector('[data-map-time-color-field="dateTo"]')?.value || ''
+    }))
+  );
+}
+
+function sortMapTimeColorRangesForDisplay(ranges) {
+  return [...normalizeMapTimeColorRanges(ranges)].sort((left, right) => {
+    const leftScore = getMapTimeColorRangeSortScore(left);
+    const rightScore = getMapTimeColorRangeSortScore(right);
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+
+    return (left.label || '').localeCompare(right.label || '', 'pl');
+  });
+}
+
+function getMapTimeColorRangeSortScore(range) {
+  if (range.mode === 'dates') {
+    const from = getMapTimeColorRangeDateComparableValue(range.dateFrom);
+    const to = getMapTimeColorRangeDateComparableValue(range.dateTo);
+    if (Number.isFinite(from) && Number.isFinite(to)) {
+      return (from + to) / 2;
+    }
+
+    if (Number.isFinite(from)) {
+      return from;
+    }
+
+    if (Number.isFinite(to)) {
+      return to;
+    }
+
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const from = range.daysFrom === '' ? null : Number(range.daysFrom);
+  const to = range.daysTo === '' ? null : Number(range.daysTo);
+  if (Number.isFinite(from) && Number.isFinite(to)) {
+    return (from + to) / 2;
+  }
+
+  if (Number.isFinite(from)) {
+    return from;
+  }
+
+  if (Number.isFinite(to)) {
+    return to;
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function getMapTimeColorRangeDateComparableValue(value) {
+  const normalized = normalizeDateInputValue(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const timestamp = Date.parse(`${normalized}T00:00:00Z`);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function syncTimeColorPreview() {
+  if (infoPanelMode !== 'colors') {
+    return;
+  }
+
+  const chartEl = selectionExtraEl?.querySelector('[data-map-time-color-chart]');
+  if (chartEl) {
+    chartEl.innerHTML = renderMapTimeColorChartMarkup(mapTimeColorRanges);
+  }
+
+  const previewEl = selectionExtraEl?.querySelector('[data-map-time-color-preview]');
+  if (previewEl) {
+    previewEl.innerHTML = renderMapTimeColorPreviewMarkup(mapTimeColorRanges);
+  }
+
+  selectionExtraEl?.querySelectorAll('[data-map-time-color-row-id]').forEach((rowElement) => {
+    const rangeId = rowElement.getAttribute('data-map-time-color-row-id');
+    const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
+    if (!range) {
+      return;
+    }
+
+    const heading = rowElement.querySelector('.time-color-range-head strong');
+    if (heading) {
+      heading.textContent = range.label || 'Zakres';
+    }
+
+    const note = rowElement.querySelector('.time-color-range-note');
+    if (note) {
+      note.textContent = renderMapTimeColorRangeSummary(range);
+    }
+
+    const colorValueEl = rowElement.querySelector('.time-color-picker-value');
+    if (colorValueEl) {
+      colorValueEl.textContent = range.color;
+    }
+  });
 }
 
 function paintFilterPanel() {
@@ -3117,13 +4628,15 @@ function paintHistorySelection() {
   selectionExtraEl.hidden = false;
 }
 
-function syncOverviewSpacing(isHistoryMode, isFilterMode = false, isSearchMode = false) {
+function syncOverviewSpacing(isHistoryMode, isFilterMode = false, isSearchMode = false, isColorsMode = false) {
   overviewViewEl?.classList.toggle('map-info-view-history', Boolean(isHistoryMode));
   overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
   overviewViewEl?.classList.toggle('map-info-view-search', Boolean(isSearchMode));
+  overviewViewEl?.classList.toggle('map-info-view-colors', Boolean(isColorsMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-history', Boolean(isHistoryMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-filter', Boolean(isFilterMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-search', Boolean(isSearchMode));
+  selectionExtraEl?.classList.toggle('map-selection-cards-colors', Boolean(isColorsMode));
 }
 
 function bindHoverTrackingToRenderedPersonLists() {
