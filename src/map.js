@@ -109,6 +109,15 @@ const MAP_TIME_CHART_OPEN_ENDED_TRIGGER_PX = 120;
 const MAP_TIME_CHART_EDGE_EXPAND_DELAY_MS = 320;
 const MAP_TIME_CHART_EDGE_EXPAND_DURATION_MS = 2040;
 const MAP_TIME_CHART_EDGE_EXPAND_MAX_MONTHS = 12;
+const MAP_TIME_COLOR_MENU_PRESETS = [
+  { label: 'Czarny', value: '#1f1f1f' },
+  { label: 'Ciemnoczerwony', value: '#7a1f1f' },
+  { label: 'Czerwony', value: '#d64b4b' },
+  { label: 'Pomaranczowy', value: '#e28a30' },
+  { label: 'Zolty', value: '#e7cb39' },
+  { label: 'Zolto-zielony', value: '#9ebd33' },
+  { label: 'Zielony', value: '#4db06f' }
+];
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
 const MAP_VIEWPORT_STORAGE_KEY = 'map:viewportState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
@@ -196,6 +205,7 @@ let hoveredPersonMapAnimationFrame = 0;
 let historyPeopleLoadingSourceRowIds = new Set();
 let timeColorChartDragState = null;
 let timeColorChartViewportOverride = null;
+let timeColorConfirmState = null;
 
 function endTimeColorChartDragState() {
   timeColorChartDragState = null;
@@ -363,8 +373,49 @@ selectionExtraEl?.addEventListener('click', (event) => {
       return;
     }
 
-    mapTimeColorRanges = mapTimeColorRanges.filter((range) => range.id !== rangeId);
-    persistMapTimeColorRanges();
+    timeColorConfirmState = {
+      kind: 'remove-range',
+      rangeId
+    };
+    paintTimeColorPanel();
+    return;
+  }
+
+  const previewRemoveTimeColorRangeButton = event.target.closest('[data-map-time-color-preview-remove]');
+  if (previewRemoveTimeColorRangeButton && infoPanelMode === 'colors') {
+    const rangeId = previewRemoveTimeColorRangeButton.getAttribute('data-map-time-color-preview-remove');
+    if (mapTimeColorRanges.length <= 1) {
+      return;
+    }
+
+    timeColorConfirmState = {
+      kind: 'remove-range',
+      rangeId
+    };
+    paintTimeColorPanel();
+    return;
+  }
+
+  const confirmTimeColorDialogButton = event.target.closest('[data-map-time-color-confirm]');
+  if (confirmTimeColorDialogButton && infoPanelMode === 'colors') {
+    if (timeColorConfirmState?.kind === 'remove-range' && mapTimeColorRanges.length > 1) {
+      mapTimeColorRanges = mapTimeColorRanges.filter((range) => range.id !== timeColorConfirmState.rangeId);
+      persistMapTimeColorRanges();
+    }
+    timeColorConfirmState = null;
+    paintTimeColorPanel();
+    return;
+  }
+
+  if (event.target instanceof Element && event.target.matches('.time-color-confirm-overlay') && infoPanelMode === 'colors') {
+    timeColorConfirmState = null;
+    paintTimeColorPanel();
+    return;
+  }
+
+  const cancelTimeColorDialogButton = event.target.closest('[data-map-time-color-confirm-cancel]');
+  if (cancelTimeColorDialogButton && infoPanelMode === 'colors') {
+    timeColorConfirmState = null;
     paintTimeColorPanel();
     return;
   }
@@ -374,6 +425,16 @@ selectionExtraEl?.addEventListener('click', (event) => {
     mapTimeColorRanges = createDefaultMapTimeColorRanges();
     persistMapTimeColorRanges();
     paintTimeColorPanel();
+    return;
+  }
+
+  const timeColorPresetButton = event.target.closest('[data-map-time-color-menu-preset]');
+  if (timeColorPresetButton && infoPanelMode === 'colors') {
+    event.preventDefault();
+    applyMapTimeColorMenuValue(
+      timeColorPresetButton.closest('.time-color-menu'),
+      timeColorPresetButton.getAttribute('data-map-time-color-menu-preset')
+    );
     return;
   }
 
@@ -459,6 +520,7 @@ selectionExtraEl?.addEventListener('change', (event) => {
       previewField.getAttribute('data-map-time-color-preview-field'),
       previewField.value
     );
+    previewField.closest('.time-color-menu')?.removeAttribute('open');
     return;
   }
 
@@ -477,6 +539,9 @@ selectionExtraEl?.addEventListener('change', (event) => {
       paintTimeColorPanel();
     } else {
       syncTimeColorPreview();
+    }
+    if (timeColorFieldName === 'color') {
+      timeColorField.closest('.time-color-menu')?.removeAttribute('open');
     }
     return;
   }
@@ -3293,6 +3358,12 @@ function paintTimeColorPanel() {
 
   const normalizedRanges = normalizeMapTimeColorRanges(mapTimeColorRanges);
   const sortedRanges = sortMapTimeColorRangesForDisplay(normalizedRanges);
+  if (timeColorConfirmState?.kind === 'remove-range') {
+    const hasPendingRange = normalizedRanges.some((range) => range.id === timeColorConfirmState.rangeId);
+    if (!hasPendingRange) {
+      timeColorConfirmState = null;
+    }
+  }
   mapTimeColorRanges = normalizedRanges;
 
   selectionHeaderEl.hidden = false;
@@ -3301,6 +3372,7 @@ function paintTimeColorPanel() {
   selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;
+  selectionExtraEl.hidden = false;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel time-color-tools" data-map-time-color-form>
       <div class="time-color-legend">
@@ -3319,18 +3391,55 @@ function paintTimeColorPanel() {
         </div>
       </div>
 
+      <div class="action-row filter-action-row">
+        <button type="button" class="button-strong" data-map-time-color-add>Dodaj zakres</button>
+        <button type="button" class="button-muted" data-map-time-color-reset>Przywroc domyslne</button>
+      </div>
+
       <div class="time-color-ranges" data-map-time-color-ranges>
         ${sortedRanges.map((range, index) => renderMapTimeColorRangeRow(range, index, sortedRanges.length)).join('')}
       </div>
 
-      <div class="action-row filter-action-row">
-        <span class="filter-action-count">${escapeHtml(formatMapTimeColorRangeCountLabel(sortedRanges.length))}</span>
-        <button type="button" class="button-strong" data-map-time-color-add>Dodaj zakres</button>
-        <button type="button" class="button-muted" data-map-time-color-reset>Przywroc 2 domyslne</button>
-      </div>
+      ${renderMapTimeColorConfirmDialog(sortedRanges)}
     </form>
   `;
-  selectionExtraEl.hidden = false;
+}
+
+function renderMapTimeColorConfirmDialog(ranges = mapTimeColorRanges) {
+  if (timeColorConfirmState?.kind !== 'remove-range') {
+    return '';
+  }
+
+  const range = ranges.find((entry) => entry.id === timeColorConfirmState.rangeId);
+  if (!range) {
+    return '';
+  }
+
+  const overlayStyle = getMapTimeColorConfirmOverlayStyle();
+
+  return `
+    <div class="time-color-confirm-overlay"${overlayStyle ? ` style="${escapeHtml(overlayStyle)}"` : ''}>
+      <div class="time-color-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="time-color-confirm-title">
+        <strong id="time-color-confirm-title">Usunac zakres?</strong>
+        <p>Czy na pewno usunac zakres <strong>${escapeHtml(range.label || 'Zakres')}</strong>?</p>
+        <div class="time-color-confirm-actions">
+          <button type="button" class="button-muted" data-map-time-color-confirm-cancel>Anuluj</button>
+          <button type="button" class="button-strong" data-map-time-color-confirm>Usun</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function getMapTimeColorConfirmOverlayStyle() {
+  const panelRect = mapInfoPanelEl?.getBoundingClientRect?.();
+  const panelWidth = mapInfoPanelEl?.clientWidth || 0;
+  const panelHeight = mapInfoPanelEl?.clientHeight || 0;
+  if (!panelRect || panelWidth <= 0 || panelHeight <= 0) {
+    return '';
+  }
+
+  return `top:${Math.round(panelRect.top)}px;left:${Math.round(panelRect.left)}px;width:${Math.round(panelWidth)}px;height:${Math.round(panelHeight)}px;`;
 }
 
 function renderMapTimeColorRangeRow(range, index, totalCount) {
@@ -3368,12 +3477,12 @@ function renderMapTimeColorRangeRow(range, index, totalCount) {
         <label class="field">
           <span>Kolor</span>
           <div class="time-color-picker-wrap">
-            <input
-              class="time-color-picker"
-              type="color"
-              value="${safeColor}"
-              data-map-time-color-field="color"
-            />
+            ${renderMapTimeColorMenu({
+              color: range.color,
+              fieldAttributes: `data-map-time-color-field="color"`,
+              ariaLabel: `Kolor zakresu ${range.label || `Zakres ${index + 1}`}`,
+              className: 'is-form'
+            })}
             <span class="time-color-picker-value">${safeColor}</span>
           </div>
         </label>
@@ -3457,26 +3566,80 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
             ${renderMapTimeColorPreviewField(range, 'left')}
           </div>
           <div class="legend-chip-swatch">
-            <i class="legend-chip-swatch-fill" aria-hidden="true"></i>
-            <input
-              class="legend-chip-color-input"
-              type="color"
-              value="${escapeHtml(range.color)}"
-              data-map-time-color-preview-field="color"
-              data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
-              aria-label="Kolor zakresu ${escapeHtml(range.label || '')}"
-            />
-            <span class="legend-chip-swatch-edit" aria-hidden="true">
-              <i class="fa-solid fa-pen"></i>
-            </span>
+            ${renderMapTimeColorMenu({
+              color: range.color,
+              fieldAttributes: `data-map-time-color-preview-field="color" data-map-time-color-preview-range-id="${escapeHtml(range.id)}"`,
+              ariaLabel: `Kolor zakresu ${range.label || ''}`,
+              className: 'is-preview'
+            })}
           </div>
           <div class="legend-value-box">
             ${renderMapTimeColorPreviewField(range, 'right')}
           </div>
+          <button
+            type="button"
+            class="legend-chip-remove button-muted"
+            data-map-time-color-preview-remove="${escapeHtml(range.id)}"
+            aria-label="Usun zakres"
+            title="Usun zakres"
+            ${normalizedRanges.length <= 1 ? 'disabled' : ''}
+          >
+            <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+          </button>
         </div>
       </div>
     `)
     .join('');
+}
+
+function renderMapTimeColorMenu(options = {}) {
+  const safeColor = normalizeHexColorInputValue(options.color);
+  const fieldAttributes = typeof options.fieldAttributes === 'string' ? options.fieldAttributes.trim() : '';
+  const className = typeof options.className === 'string' ? options.className.trim() : '';
+  const ariaLabel = typeof options.ariaLabel === 'string' && options.ariaLabel.trim()
+    ? options.ariaLabel.trim()
+    : 'Kolor zakresu';
+  return `
+    <details
+      class="time-color-menu ${escapeHtml(className)}"
+      style="--swatch-fill: ${escapeHtml(safeColor)}; --swatch-border: ${escapeHtml(safeColor)};"
+    >
+      <summary class="time-color-menu-trigger" aria-label="${escapeHtml(ariaLabel)}">
+        <i class="time-color-menu-fill" aria-hidden="true"></i>
+        <span class="time-color-menu-edit" aria-hidden="true">
+          <i class="fa-solid fa-pen"></i>
+        </span>
+      </summary>
+      <div class="time-color-menu-popover">
+        ${MAP_TIME_COLOR_MENU_PRESETS.map((preset) => `
+          <button
+            type="button"
+            class="time-color-menu-option${preset.value.toLowerCase() === safeColor.toLowerCase() ? ' is-active' : ''}"
+            style="--menu-option-fill: ${escapeHtml(preset.value)};"
+            data-map-time-color-menu-preset="${escapeHtml(preset.value)}"
+            title="${escapeHtml(preset.label)}"
+            aria-label="${escapeHtml(preset.label)}"
+          ></button>
+        `).join('')}
+        <label
+          class="time-color-menu-option time-color-menu-option-more"
+          title="Wiecej kolorow"
+          aria-label="Wiecej kolorow"
+        >
+          <span class="time-color-menu-option-more-icon" aria-hidden="true">
+            <i class="fa-solid fa-eyedropper"></i>
+          </span>
+          <input
+            class="time-color-menu-custom-input"
+            type="color"
+            value="${escapeHtml(safeColor)}"
+            ${fieldAttributes}
+            aria-label="${escapeHtml(ariaLabel)}"
+          />
+        </label>
+      </div>
+    </details>
+  `;
 }
 
 function renderMapTimeColorPreviewField(range, side) {
@@ -4305,6 +4468,67 @@ function formatMapTimeColorRangeCountLabel(count) {
   return `${formatNumber(count)} zakresy`;
 }
 
+function applyMapTimeColorMenuValue(menuElement, nextColor) {
+  if (!menuElement) {
+    return;
+  }
+
+  const normalizedColor = normalizeHexColorInputValue(nextColor);
+  if (!normalizedColor) {
+    return;
+  }
+
+  syncMapTimeColorMenuElement(menuElement, normalizedColor);
+
+  const previewInput = menuElement.querySelector('[data-map-time-color-preview-field="color"]');
+  if (previewInput) {
+    previewInput.value = normalizedColor;
+    updateMapTimeColorRangeFromPreviewField(
+      previewInput.getAttribute('data-map-time-color-preview-range-id'),
+      'color',
+      normalizedColor
+    );
+    menuElement.removeAttribute('open');
+    return;
+  }
+
+  const formInput = menuElement.querySelector('[data-map-time-color-field="color"]');
+  if (!formInput) {
+    return;
+  }
+
+  formInput.value = normalizedColor;
+  const timeColorForm = formInput.closest('[data-map-time-color-form]');
+  if (!timeColorForm) {
+    return;
+  }
+
+  mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
+  persistMapTimeColorRanges();
+  syncTimeColorPreview();
+  menuElement.removeAttribute('open');
+}
+
+function syncMapTimeColorMenuElement(menuElement, colorValue) {
+  if (!menuElement) {
+    return;
+  }
+
+  const normalizedColor = normalizeHexColorInputValue(colorValue);
+  if (!normalizedColor) {
+    return;
+  }
+
+  menuElement.style.setProperty('--swatch-fill', normalizedColor);
+  menuElement.style.setProperty('--swatch-border', normalizedColor);
+  menuElement.querySelectorAll('[data-map-time-color-menu-preset]').forEach((presetButton) => {
+    presetButton.classList.toggle(
+      'is-active',
+      (presetButton.getAttribute('data-map-time-color-menu-preset') || '').toLowerCase() === normalizedColor.toLowerCase()
+    );
+  });
+}
+
 function readMapTimeColorRangesFromForm(formElement) {
   const rowElements = Array.from(formElement.querySelectorAll('[data-map-time-color-row-id]'));
   if (rowElements.length === 0) {
@@ -4460,6 +4684,9 @@ function syncTimeColorPreview(options = {}) {
     }
 
     inputElement.value = typeof range[fieldName] === 'string' ? range[fieldName] : '';
+    if (fieldName === 'color') {
+      syncMapTimeColorMenuElement(inputElement.closest('.time-color-menu'), range.color);
+    }
   });
   syncMapTimeColorPreviewFieldWidths(previewEl);
 
@@ -4488,6 +4715,7 @@ function syncTimeColorPreview(options = {}) {
     const colorInputEl = rowElement.querySelector('[data-map-time-color-field="color"]');
     if (colorInputEl) {
       colorInputEl.value = range.color;
+      syncMapTimeColorMenuElement(colorInputEl.closest('.time-color-menu'), range.color);
     }
 
     const daysFromInputEl = rowElement.querySelector('[data-map-time-color-field="daysFrom"]');
