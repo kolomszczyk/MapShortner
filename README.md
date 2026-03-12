@@ -79,11 +79,15 @@ npm run dev
 2. Otworz dashboard i przejdz do sekcji `Aktualizacje aplikacji`.
 3. Uzyj przyciskow:
    - `Symuluj sprawdzanie`
+   - `Test popupu wersji`
+   - `Test popupu z tekstem`
    - `Symuluj pobieranie`
    - `Symuluj pobrano`
    - `Symuluj blad`
    - `Reset testu`
 4. `Symuluj pobieranie` pokazuje ten sam ekran/status, ktory uzywany jest dla prawdziwego flow aktualizacji.
+5. `Test popupu wersji` otwiera sam popup nowej wersji bez dodatkowego tekstu.
+6. `Test popupu z tekstem` otwiera popup ze specjalna wiadomoscia, tak jak dla release z opisem.
 
 ### Test end-to-end z prawdziwym release
 

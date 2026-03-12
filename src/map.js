@@ -6656,7 +6656,7 @@ function paintFilterPanel() {
   const hasDraftValue = hasMapDateFilterDraftValue();
 
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = 'Filtr dat';
+  selectionTitleEl.textContent = 'Widoczność wględem daty';
   selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;

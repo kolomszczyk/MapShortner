@@ -95,6 +95,12 @@ export function initDashboardPanel({
       if (Number.isFinite(progressPercent)) {
         payload.progressPercent = progressPercent;
       }
+      if (button.dataset.updaterTitle) {
+        payload.title = button.dataset.updaterTitle;
+      }
+      if (button.dataset.updaterMessage) {
+        payload.announcementMessage = button.dataset.updaterMessage;
+      }
 
       setButtonBusy(button, true, 'Symulacja...');
       try {
