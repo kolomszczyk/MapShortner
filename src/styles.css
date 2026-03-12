@@ -1295,32 +1295,240 @@ textarea {
   background: rgba(255, 255, 255, 0.8);
 }
 
+.time-color-range-top,
+.time-color-range-middle,
+.time-color-range-bottom {
+  display: grid;
+  gap: 12px;
+}
+
+.time-color-range-top {
+  background: transparent;
+}
+
+.time-color-range-middle {
+  background: transparent;
+  gap: 0;
+  min-height: 20px;
+}
+
+.time-color-range-middle-group {
+  display: grid;
+  gap: 10px;
+  padding: 10px 0;
+  border-radius: 12px;
+  border: 0;
+  background: rgba(244, 248, 241, 0.88);
+}
+
+.time-color-range-middle-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.time-color-range-middle-title {
+  color: rgba(48, 67, 54, 0.82);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.time-color-range-middle-side-title {
+  padding-left: 16px;
+  color: rgba(48, 67, 54, 0.72);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.time-color-range-middle-split {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.time-color-range-middle-side {
+  display: grid;
+  position: relative;
+  place-items: center;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 0;
+  color: rgba(48, 67, 54, 0.8);
+  font-size: 0.92rem;
+  background: transparent;
+  text-align: center;
+}
+
+.time-color-range-middle-side.is-left {
+  align-content: start;
+  place-items: stretch;
+  z-index: 1;
+  background: transparent;
+  text-align: left;
+}
+
+.time-color-range-middle-side.is-right {
+  align-content: start;
+  place-items: start end;
+  padding-left: 16px;
+  background: transparent;
+  text-align: right;
+}
+
+.time-color-range-middle-date-box {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  pointer-events: auto;
+}
+
+.time-color-range-middle-date-box .select-wrap,
+.time-color-range-middle-date-box select {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.time-color-range-middle-days-input {
+  width: min(100%, 190px);
+  min-width: 0;
+  justify-self: end;
+  text-align: right;
+}
+
+.time-color-range-bottom {
+  background: transparent;
+}
+
 .time-color-range-head {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.time-color-range-head strong {
-  display: block;
+.time-color-range-title-group {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(244, 248, 241, 0.88);
 }
 
-.time-color-range-note {
-  margin: 6px 0 0;
+.time-color-range-title-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.time-color-range-title-input {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.time-color-range-title-input:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
+.time-color-range-icon-button {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 0.92rem;
+  box-shadow: none;
+  justify-self: start;
 }
 
-.time-color-range-grid {
+.time-color-range-icon-button:hover:not(:disabled) {
+  transform: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.time-color-range-icon-button:focus-visible {
+  outline: 2px solid rgba(178, 87, 44, 0.28);
+  outline-offset: 4px;
+}
+
+.time-color-range-split,
+.time-color-range-meta-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.time-color-range-side {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.time-color-range-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.time-color-range-side-head span,
+.time-color-range-side-label {
+  color: var(--muted);
+  font-size: 0.93rem;
+  overflow-wrap: anywhere;
+}
+
+.time-color-range-mode-wrap {
+  flex: 0 1 168px;
+  min-width: 0;
+}
+
+.time-color-range-mode-select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.time-color-range-side > input,
+.time-color-range-date-box,
+.time-color-range-date-box .filter-date-box-grid,
+.time-color-range-date-box .select-wrap,
+.time-color-range-date-box select {
+  width: 100%;
+}
+
+.time-color-range-helper {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .time-color-range-remove {
   padding-inline: 14px;
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .time-color-picker-wrap {
@@ -1632,6 +1840,11 @@ textarea {
   cursor: ew-resize;
 }
 
+.time-color-chart-handle.is-static {
+  cursor: default;
+  pointer-events: none;
+}
+
 .time-color-chart-handle-start {
   left: 0;
 }
@@ -1761,6 +1974,30 @@ textarea {
   background: rgba(48, 67, 54, 0.14);
   border-color: rgba(48, 67, 54, 0.32);
   box-shadow: inset 0 0 0 1px rgba(48, 67, 54, 0.14);
+}
+
+.legend-date-box-grid {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(86px, 1fr);
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.legend-date-select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 26px 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.legend-value-box .select-wrap::after {
+  right: 11px;
+  width: 7px;
+  height: 7px;
 }
 
 .legend-value-input {
@@ -2243,13 +2480,8 @@ body.map-page .service-map {
     width: auto;
   }
 
-  .time-color-range-head {
-    flex-direction: column;
-  }
-
   .time-color-range-remove {
     width: auto;
-    align-self: flex-start;
   }
 
   .hero-stats,
@@ -2261,7 +2493,9 @@ body.map-page .service-map {
   .time-filter-grid,
   .map-mini-stats,
   .time-color-hint-grid,
-  .time-color-range-grid {
+  .time-color-range-middle-split,
+  .time-color-range-split,
+  .time-color-range-meta-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2271,6 +2505,25 @@ body.map-page .service-map {
 
   .legend-chip {
     width: 100%;
+  }
+
+  .legend-date-box-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .time-color-range-side-head {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .time-color-range-mode-wrap {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .time-color-range-mode-select {
+    width: 100%;
+    min-width: 0;
   }
 
   .legend-chip-data {

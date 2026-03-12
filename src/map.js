@@ -175,6 +175,8 @@ let mapDateFilterOptions = [];
 let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, mapDateFilter);
 let mapTimeColorRanges = restoredMapTimeColorRanges;
 let mapDateFilterApplyTimer = null;
+let mapPointsRequestToken = 0;
+let isMapPointsLoading = false;
 let personSearchTimer = null;
 let personSearchRequestToken = 0;
 let areMapRawFieldsExpanded = readStoredMapRawFieldsExpanded();
@@ -207,8 +209,12 @@ let timeColorChartDragState = null;
 let timeColorChartViewportOverride = null;
 let timeColorConfirmState = null;
 
-function endTimeColorChartDragState() {
+function endTimeColorChartDragState(options = {}) {
+  const shouldCommit = Boolean(options?.commit);
   timeColorChartDragState = null;
+  if (shouldCommit) {
+    persistMapTimeColorRanges();
+  }
   if (timeColorChartViewportOverride) {
     timeColorChartViewportOverride = null;
     if (infoPanelMode === 'colors') {
@@ -250,7 +256,6 @@ function syncTimeColorChartDragAtClientX(clientX) {
   }
 
   mapTimeColorRanges = nextRanges;
-  persistMapTimeColorRanges();
   paintTimeColorPanel();
 }
 
@@ -275,6 +280,39 @@ function getMapTimeColorChartPointerPercent(clientX, dragState) {
     0,
     Math.min(1, (normalizedClientX - dragState.trackLeft) / dragState.trackWidth)
   );
+}
+
+function closeMapTimeColorMenus(exceptMenu = null) {
+  if (infoPanelMode !== 'colors') {
+    return;
+  }
+
+  selectionExtraEl?.querySelectorAll('.time-color-menu[open]').forEach((menuElement) => {
+    if (exceptMenu && menuElement === exceptMenu) {
+      return;
+    }
+
+    menuElement.removeAttribute('open');
+  });
+}
+
+function focusMapTimeColorLabelInput(rangeId, options = {}) {
+  const labelInput = selectionExtraEl?.querySelector(
+    `[data-map-time-color-row-id="${CSS.escape(rangeId || '')}"] [data-map-time-color-field="label"]`
+  );
+  if (!labelInput) {
+    return;
+  }
+
+  labelInput.focus();
+  if (options.selectAll) {
+    const valueLength = typeof labelInput.value === 'string' ? labelInput.value.length : 0;
+    labelInput.setSelectionRange?.(0, valueLength);
+    return;
+  }
+
+  const valueLength = typeof labelInput.value === 'string' ? labelInput.value.length : 0;
+  labelInput.setSelectionRange?.(valueLength, valueLength);
 }
 
 settingsButtonEl?.addEventListener('click', () => {
@@ -304,6 +342,13 @@ colorsButtonEl?.addEventListener('click', () => {
 });
 
 selectionExtraEl?.addEventListener('click', (event) => {
+  if (infoPanelMode === 'colors') {
+    const clickedMenu = event.target.closest('.time-color-menu');
+    window.setTimeout(() => {
+      closeMapTimeColorMenus(clickedMenu || null);
+    }, 0);
+  }
+
   const rawFieldsToggleButton = event.target.closest('[data-map-toggle-raw-fields]');
   if (rawFieldsToggleButton && infoPanelMode === 'selection' && selectionPanelState.kind === 'person') {
     areMapRawFieldsExpanded = !areMapRawFieldsExpanded;
@@ -369,9 +414,6 @@ selectionExtraEl?.addEventListener('click', (event) => {
   const removeTimeColorRangeButton = event.target.closest('[data-map-time-color-remove]');
   if (removeTimeColorRangeButton && infoPanelMode === 'colors') {
     const rangeId = removeTimeColorRangeButton.getAttribute('data-map-time-color-remove');
-    if (mapTimeColorRanges.length <= 1) {
-      return;
-    }
 
     timeColorConfirmState = {
       kind: 'remove-range',
@@ -384,9 +426,6 @@ selectionExtraEl?.addEventListener('click', (event) => {
   const previewRemoveTimeColorRangeButton = event.target.closest('[data-map-time-color-preview-remove]');
   if (previewRemoveTimeColorRangeButton && infoPanelMode === 'colors') {
     const rangeId = previewRemoveTimeColorRangeButton.getAttribute('data-map-time-color-preview-remove');
-    if (mapTimeColorRanges.length <= 1) {
-      return;
-    }
 
     timeColorConfirmState = {
       kind: 'remove-range',
@@ -398,7 +437,7 @@ selectionExtraEl?.addEventListener('click', (event) => {
 
   const confirmTimeColorDialogButton = event.target.closest('[data-map-time-color-confirm]');
   if (confirmTimeColorDialogButton && infoPanelMode === 'colors') {
-    if (timeColorConfirmState?.kind === 'remove-range' && mapTimeColorRanges.length > 1) {
+    if (timeColorConfirmState?.kind === 'remove-range') {
       mapTimeColorRanges = mapTimeColorRanges.filter((range) => range.id !== timeColorConfirmState.rangeId);
       persistMapTimeColorRanges();
     }
@@ -435,6 +474,13 @@ selectionExtraEl?.addEventListener('click', (event) => {
       timeColorPresetButton.closest('.time-color-menu'),
       timeColorPresetButton.getAttribute('data-map-time-color-menu-preset')
     );
+    return;
+  }
+
+  const focusTimeColorLabelButton = event.target.closest('[data-map-time-color-focus-label]');
+  if (focusTimeColorLabelButton && infoPanelMode === 'colors') {
+    const rangeId = focusTimeColorLabelButton.getAttribute('data-map-time-color-focus-label');
+    focusMapTimeColorLabelInput(rangeId);
     return;
   }
 
@@ -480,6 +526,24 @@ selectionExtraEl?.addEventListener('click', (event) => {
   }
 });
 
+selectionExtraEl?.addEventListener('dblclick', (event) => {
+  if (infoPanelMode !== 'colors') {
+    return;
+  }
+
+  const titleGroup = event.target.closest('[data-map-time-color-title-group]');
+  if (!titleGroup) {
+    return;
+  }
+
+  const rangeId = titleGroup.getAttribute('data-map-time-color-title-group');
+  if (!rangeId) {
+    return;
+  }
+
+  focusMapTimeColorLabelInput(rangeId, { selectAll: true });
+});
+
 selectionExtraEl?.addEventListener('input', (event) => {
   const searchField = event.target.closest('[data-map-person-search-input]');
   if (!searchField || infoPanelMode !== 'search') {
@@ -501,6 +565,12 @@ selectionExtraEl?.addEventListener('input', (event) => {
     const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
     if (!timeColorForm) {
       return;
+    }
+
+    const timeColorRow = timeColorField.closest('[data-map-time-color-row-id]');
+    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
+    if (timeColorRow && timeColorFieldName) {
+      syncMapTimeColorMiddleRowFields(timeColorRow, { changedFieldName: timeColorFieldName });
     }
 
     mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
@@ -531,11 +601,22 @@ selectionExtraEl?.addEventListener('change', (event) => {
       return;
     }
 
+    const timeColorRow = timeColorField.closest('[data-map-time-color-row-id]');
+    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
+    if (timeColorRow && timeColorFieldName) {
+      syncMapTimeColorMiddleRowFields(timeColorRow, { changedFieldName: timeColorFieldName });
+    }
+
     mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
     persistMapTimeColorRanges();
 
-    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
-    if (timeColorFieldName === 'mode' || timeColorFieldName === 'daysFromOpen' || timeColorFieldName === 'daysToOpen') {
+    if (
+      timeColorFieldName === 'mode'
+      || timeColorFieldName === 'dateFromYear'
+      || timeColorFieldName === 'dateFromMonth'
+      || timeColorFieldName === 'dateToYear'
+      || timeColorFieldName === 'dateToMonth'
+    ) {
       paintTimeColorPanel();
     } else {
       syncTimeColorPreview();
@@ -683,7 +764,7 @@ window.addEventListener('pointerup', (event) => {
     return;
   }
 
-  endTimeColorChartDragState();
+  endTimeColorChartDragState({ commit: true });
 });
 
 window.addEventListener('pointercancel', (event) => {
@@ -699,7 +780,7 @@ window.addEventListener('mouseup', () => {
     return;
   }
 
-  endTimeColorChartDragState();
+  endTimeColorChartDragState({ commit: true });
 });
 
 document.addEventListener('pointerlockchange', () => {
@@ -983,9 +1064,33 @@ async function loadPoints() {
     return;
   }
 
+  const requestToken = ++mapPointsRequestToken;
+  isMapPointsLoading = true;
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
+
   const preserveViewport = shouldRestoreMapViewportOnNextLoad;
   clearHoveredPersonSourceRowId();
-  const payload = await window.appApi.getMapPoints(buildMapPointsRequest());
+  let payload;
+
+  try {
+    payload = await window.appApi.getMapPoints(buildMapPointsRequest());
+  } catch (error) {
+    if (requestToken === mapPointsRequestToken) {
+      isMapPointsLoading = false;
+      if (infoPanelMode === 'filter') {
+        paintFilterPanel();
+      }
+    }
+    throw error;
+  }
+
+  if (requestToken !== mapPointsRequestToken) {
+    return;
+  }
+
+  isMapPointsLoading = false;
   const shouldAutoSelectPerson = infoPanelMode !== 'filter';
 
   allPeople = payload.people || [];
@@ -1089,15 +1194,15 @@ async function applyMapDateFilter(nextFilter) {
 
   mapDateFilter = normalizedFilter;
   syncInfoToolButtons();
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+  }
 
   if (!didChange) {
-    if (infoPanelMode === 'filter') {
-      paintFilterPanel();
-    }
     return;
   }
 
-  await loadPoints();
+  void loadPoints();
 }
 
 function normalizeMapDateFilter(input = {}) {
@@ -1172,8 +1277,11 @@ function buildDefaultMapTimeColorRange(index = 0) {
       label: 'Swieze wplaty',
       color: '#4db06f',
       mode: 'days',
+      dateField: 'lastPaymentAt',
       daysFrom: '0',
       daysTo: '50',
+      dateFromMonthDraft: '',
+      dateToMonthDraft: '',
       dateFrom: '',
       dateTo: ''
     },
@@ -1181,8 +1289,11 @@ function buildDefaultMapTimeColorRange(index = 0) {
       label: 'Dawno bez wplaty',
       color: '#d65f4a',
       mode: 'days',
+      dateField: 'lastPaymentAt',
       daysFrom: '300',
       daysTo: '',
+      dateFromMonthDraft: '',
+      dateToMonthDraft: '',
       dateFrom: '',
       dateTo: ''
     },
@@ -1190,8 +1301,11 @@ function buildDefaultMapTimeColorRange(index = 0) {
       label: 'Do sprawdzenia',
       color: '#e3b341',
       mode: 'days',
+      dateField: 'lastPaymentAt',
       daysFrom: '200',
       daysTo: '299',
+      dateFromMonthDraft: '',
+      dateToMonthDraft: '',
       dateFrom: '',
       dateTo: ''
     },
@@ -1199,8 +1313,11 @@ function buildDefaultMapTimeColorRange(index = 0) {
       label: `Zakres ${index + 1}`,
       color: ['#4d97d1', '#845ec2', '#1b9c85', '#c06c84'][Math.max(index - 3, 0) % 4],
       mode: 'days',
+      dateField: 'lastPaymentAt',
       daysFrom: '',
       daysTo: '',
+      dateFromMonthDraft: '',
+      dateToMonthDraft: '',
       dateFrom: '',
       dateTo: ''
     }
@@ -1212,14 +1329,21 @@ function buildDefaultMapTimeColorRange(index = 0) {
   }, index);
 }
 
-function normalizeMapTimeColorRanges(input) {
-  if (!Array.isArray(input) || input.length === 0) {
+function normalizeMapTimeColorRanges(input, options = {}) {
+  const allowEmpty = Boolean(options?.allowEmpty);
+  if (!Array.isArray(input)) {
+    return allowEmpty ? [] : createDefaultMapTimeColorRanges();
+  }
+
+  const normalizedRanges = input
+    .map((entry, index) => normalizeMapTimeColorRange(entry, index))
+    .filter(Boolean);
+
+  if (normalizedRanges.length === 0 && !allowEmpty) {
     return createDefaultMapTimeColorRanges();
   }
 
-  return input
-    .map((entry, index) => normalizeMapTimeColorRange(entry, index))
-    .filter(Boolean);
+  return normalizedRanges;
 }
 
 function normalizeMapTimeColorRange(input = {}, index = 0) {
@@ -1230,17 +1354,396 @@ function normalizeMapTimeColorRange(input = {}, index = 0) {
   const normalizedLabel = typeof input?.label === 'string' && input.label.trim()
     ? input.label.trim()
     : `Zakres ${index + 1}`;
+  const hasDateFromMonthDraft = Object.prototype.hasOwnProperty.call(input || {}, 'dateFromMonthDraft');
+  const hasDateToMonthDraft = Object.prototype.hasOwnProperty.call(input || {}, 'dateToMonthDraft');
 
   return {
     id: normalizedId,
     label: normalizedLabel,
     color: normalizeHexColorInputValue(input?.color),
     mode: normalizedMode,
+    dateField: normalizeMapTimeColorDateField(input?.dateField),
     daysFrom: normalizeNonNegativeIntegerInputValue(input?.daysFrom),
     daysTo: normalizeNonNegativeIntegerInputValue(input?.daysTo),
+    dateFromMonthDraft: hasDateFromMonthDraft
+      ? normalizeMonthNumberInputValue(input?.dateFromMonthDraft)
+      : extractMonthNumberValue(input?.dateFrom),
+    dateToMonthDraft: hasDateToMonthDraft
+      ? normalizeMonthNumberInputValue(input?.dateToMonthDraft)
+      : extractMonthNumberValue(input?.dateTo),
     dateFrom: normalizeDateInputValue(input?.dateFrom),
     dateTo: normalizeDateInputValue(input?.dateTo)
   };
+}
+
+function normalizeMapTimeColorDateField(value) {
+  return value === 'lastVisitAt' ? 'lastVisitAt' : 'lastPaymentAt';
+}
+
+function formatMapTimeColorDateFieldLabel(value, options = {}) {
+  const normalizedValue = normalizeMapTimeColorDateField(value);
+  const short = Boolean(options?.short);
+
+  if (normalizedValue === 'lastVisitAt') {
+    return short ? 'Wizyta' : 'Data ostatniej wizyty';
+  }
+
+  return short ? 'Wplata' : 'Data wplaty';
+}
+
+function buildMapTimeColorRangeDateDraft(range = {}) {
+  return buildMapDateFilterDraft({
+    dateFrom: range.dateFrom,
+    dateTo: range.dateTo,
+    fromMonth: range.mode === 'dates' && typeof range.dateFromMonthDraft === 'string'
+      ? range.dateFromMonthDraft
+      : undefined,
+    toMonth: range.mode === 'dates' && typeof range.dateToMonthDraft === 'string'
+      ? range.dateToMonthDraft
+      : undefined
+  });
+}
+
+function normalizeMapTimeColorMiddleDateDraft(input = {}) {
+  return normalizeMapDateFilterDraft(input);
+}
+
+function getSortedMapTimeColorMiddleMonthValues() {
+  return Array.from(
+    new Set(
+      mapDateFilterOptions
+        .map((monthValue) => normalizeMonthInputValue(monthValue))
+        .filter(Boolean)
+    )
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+function getMapTimeColorMiddleBoundaryDefaults(boundary = 'start', yearValue = '') {
+  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
+  const normalizedYear = normalizeYearInputValue(yearValue);
+  const availableMonths = getSortedMapTimeColorMiddleMonthValues();
+  const scopedMonths = normalizedYear
+    ? availableMonths.filter((monthValue) => monthValue.startsWith(`${normalizedYear}-`))
+    : availableMonths;
+  const boundaryMonthValue = scopedMonths.length
+    ? (normalizedBoundary === 'start' ? scopedMonths[0] : scopedMonths[scopedMonths.length - 1])
+    : '';
+
+  if (boundaryMonthValue) {
+    return {
+      year: extractYearValue(boundaryMonthValue),
+      month: extractMonthNumberValue(boundaryMonthValue)
+    };
+  }
+
+  if (normalizedYear) {
+    return {
+      year: normalizedYear,
+      month: normalizedBoundary === 'start' ? '01' : '12'
+    };
+  }
+
+  const today = new Date();
+  return {
+    year: String(today.getUTCFullYear()),
+    month: normalizedBoundary === 'start'
+      ? '01'
+      : String(today.getUTCMonth() + 1).padStart(2, '0')
+  };
+}
+
+function resolveMapTimeColorMiddleDateDraft(input = {}, options = {}) {
+  const draft = normalizeMapTimeColorMiddleDateDraft(input);
+  if (options?.mode !== 'dates') {
+    return draft;
+  }
+
+  return {
+    fromYear: draft.fromYear,
+    fromMonth: draft.fromYear ? draft.fromMonth : '',
+    toYear: draft.toYear,
+    toMonth: draft.toYear ? draft.toMonth : ''
+  };
+}
+
+function buildMapTimeColorMiddleDateDraft(range = {}) {
+  return resolveMapTimeColorMiddleDateDraft(
+    buildMapTimeColorRangeDateDraft(range),
+    { mode: range?.mode }
+  );
+}
+
+function buildMapTimeColorEffectiveDateRange(range = {}) {
+  return buildMapTimeColorRangeDatesFromDraft(buildMapTimeColorMiddleDateDraft(range));
+}
+
+function convertMapTimeColorDateToDaysAgo(dateValue) {
+  const comparableValue = getMapTimeColorRangeDateComparableValue(dateValue);
+  if (!Number.isFinite(comparableValue)) {
+    return '';
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  return String(Math.max(0, Math.round((todayUtc - comparableValue) / 86400000)));
+}
+
+function buildMapTimeColorDateFromDaysAgo(daysValue) {
+  const normalizedDays = normalizeNonNegativeIntegerInputValue(daysValue);
+  if (!normalizedDays) {
+    return '';
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const targetDate = new Date(todayUtc - (Number(normalizedDays) * 86400000));
+  return targetDate.toISOString().slice(0, 10);
+}
+
+function buildMapTimeColorPreviewDaysValues(range = {}) {
+  if (range?.mode === 'dates') {
+    const effectiveDateRange = buildMapTimeColorEffectiveDateRange(range);
+    return {
+      daysFrom: convertMapTimeColorDateToDaysAgo(effectiveDateRange.dateFrom),
+      daysTo: convertMapTimeColorDateToDaysAgo(effectiveDateRange.dateTo)
+    };
+  }
+
+  return {
+    daysFrom: typeof range?.daysFrom === 'string' ? range.daysFrom : '',
+    daysTo: typeof range?.daysTo === 'string' ? range.daysTo : ''
+  };
+}
+
+function getMapTimeColorBoundaryExactDate(range = {}, boundary = 'start') {
+  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
+  if (range?.mode === 'dates') {
+    const effectiveDateRange = buildMapTimeColorEffectiveDateRange(range);
+    return normalizedBoundary === 'end'
+      ? effectiveDateRange.dateTo || ''
+      : effectiveDateRange.dateFrom || '';
+  }
+
+  const previewDaysValues = buildMapTimeColorPreviewDaysValues(range);
+  const boundaryDaysValue = normalizedBoundary === 'end'
+    ? previewDaysValues.daysFrom
+    : previewDaysValues.daysTo;
+  return buildMapTimeColorDateFromDaysAgo(boundaryDaysValue);
+}
+
+function resolveMapTimeColorMiddleBoundarySelection(boundary = 'start', input = {}) {
+  const rawYear = normalizeYearInputValue(input?.year);
+  const rawMonth = normalizeMonthNumberInputValue(input?.month);
+
+  return {
+    year: rawYear,
+    month: rawYear ? rawMonth : ''
+  };
+}
+
+function buildMapTimeColorMiddleBoundaryDate(boundary = 'start', input = {}) {
+  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
+  const resolved = resolveMapTimeColorMiddleBoundarySelection(normalizedBoundary, input);
+  if (!resolved.year) {
+    return '';
+  }
+
+  if (normalizedBoundary === 'end') {
+    return resolved.month
+      ? getMonthEndDate(`${resolved.year}-${resolved.month}`)
+      : `${resolved.year}-12-31`;
+  }
+
+  return `${resolved.year}-${resolved.month || '01'}-01`;
+}
+
+function buildMapTimeColorMiddleBoundaryState(range = {}, boundary = 'start') {
+  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
+  const isEnd = normalizedBoundary === 'end';
+  const dayValues = buildMapTimeColorPreviewDaysValues(range);
+  const daysValue = isEnd ? dayValues.daysFrom : dayValues.daysTo;
+  const exactDate = getMapTimeColorBoundaryExactDate(range, normalizedBoundary) || '';
+  const dateDraft = buildMapTimeColorRangeDateDraft(range);
+  const draftYearValue = isEnd ? dateDraft.toYear : dateDraft.fromYear;
+  const draftMonthValue = isEnd ? dateDraft.toMonth : dateDraft.fromMonth;
+  const resolvedExactDate = range?.mode === 'dates' && draftYearValue
+    ? (exactDate || buildMapTimeColorMiddleBoundaryDate(normalizedBoundary, {
+      year: draftYearValue,
+      month: draftMonthValue
+    }))
+    : exactDate;
+
+  return {
+    exactDate: resolvedExactDate,
+    yearValue: range?.mode === 'dates'
+      ? draftYearValue
+      : extractYearValue(resolvedExactDate),
+    monthValue: range?.mode === 'dates'
+      ? (draftYearValue ? draftMonthValue : '')
+      : extractMonthNumberValue(resolvedExactDate),
+    daysValue: range?.mode === 'dates'
+      ? convertMapTimeColorDateToDaysAgo(resolvedExactDate)
+      : daysValue
+  };
+}
+
+function buildMapTimeColorRangeDatesFromDaysValues(input = {}) {
+  const normalizedDaysFrom = normalizeNonNegativeIntegerInputValue(input?.daysFrom);
+  const normalizedDaysTo = normalizeNonNegativeIntegerInputValue(input?.daysTo);
+
+  return {
+    dateFrom: buildMapTimeColorDateFromDaysAgo(normalizedDaysTo),
+    dateTo: buildMapTimeColorDateFromDaysAgo(normalizedDaysFrom)
+  };
+}
+
+function hasInvalidMapTimeColorMiddleDateRange(input = {}) {
+  return hasInvalidMapDateRangeDraft(normalizeMapTimeColorMiddleDateDraft(input));
+}
+
+function buildMapTimeColorMiddleYearOptionsMarkup(selectedValue) {
+  return buildYearOptionsMarkup(selectedValue);
+}
+
+function buildMapTimeColorMiddleMonthOptionsMarkup(selectedValue) {
+  return buildMonthNumberOptionsMarkup(selectedValue);
+}
+
+function renderMapTimeColorMiddleDateFields(options = {}) {
+  const yearFieldName = options.yearFieldName || '';
+  const monthFieldName = options.monthFieldName || '';
+  const yearValue = options.yearValue || '';
+  const monthValue = options.monthValue || '';
+  const hasMonthOptions = Boolean(options.hasMonthOptions);
+  const hasInvalidDateRange = Boolean(options.hasInvalidDateRange);
+  const isMonthExplicit = hasMonthOptions && Boolean(yearValue) && Boolean(monthValue);
+
+  return `
+    <div class="field filter-date-box time-color-range-middle-date-box">
+      <div class="filter-date-box-grid">
+        <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
+          <select data-map-time-color-field="${escapeHtml(yearFieldName)}"${hasMonthOptions ? '' : ' disabled'}>
+            ${buildMapTimeColorMiddleYearOptionsMarkup(yearValue)}
+          </select>
+        </div>
+        <div class="select-wrap${isMonthExplicit ? '' : ' is-dimmed'}${hasInvalidDateRange ? ' is-invalid' : ''}">
+          <select data-map-time-color-field="${escapeHtml(monthFieldName)}"${hasMonthOptions ? '' : ' disabled'}>
+            ${buildMapTimeColorMiddleMonthOptionsMarkup(monthValue)}
+          </select>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMapTimeColorMiddleDaysField(options = {}) {
+  const fieldName = options.fieldName || '';
+  const fieldValue = options.fieldValue || '';
+
+  return `
+    <input
+      class="time-color-range-middle-days-input"
+      type="number"
+      min="0"
+      step="1"
+      value="${escapeHtml(fieldValue)}"
+      placeholder="Ilosc dni"
+      data-map-time-color-field="${escapeHtml(fieldName)}"
+    />
+  `;
+}
+
+function syncMapTimeColorMiddleRowInvalidState(rowElement) {
+  if (!rowElement) {
+    return false;
+  }
+
+  const hasInvalidDateRange = hasInvalidMapTimeColorMiddleDateRange({
+    fromYear: rowElement.querySelector('[data-map-time-color-field="dateFromYear"]')?.value || '',
+    fromMonth: rowElement.querySelector('[data-map-time-color-field="dateFromMonth"]')?.value || '',
+    toYear: rowElement.querySelector('[data-map-time-color-field="dateToYear"]')?.value || '',
+    toMonth: rowElement.querySelector('[data-map-time-color-field="dateToMonth"]')?.value || ''
+  });
+
+  rowElement.querySelectorAll('.time-color-range-middle-date-box .select-wrap').forEach((wrapElement) => {
+    wrapElement.classList.toggle('is-invalid', hasInvalidDateRange);
+  });
+
+  return hasInvalidDateRange;
+}
+
+function swapMapTimeColorMiddleBoundaryValues(rowElement) {
+  if (!rowElement) {
+    return false;
+  }
+
+  const fieldPairs = [
+    ['dateFromYear', 'dateToYear'],
+    ['dateFromMonth', 'dateToMonth'],
+    ['daysTo', 'daysFrom'],
+    ['dateFrom', 'dateTo']
+  ];
+
+  fieldPairs.forEach(([leftFieldName, rightFieldName]) => {
+    const leftInput = rowElement.querySelector(`[data-map-time-color-field="${leftFieldName}"]`);
+    const rightInput = rowElement.querySelector(`[data-map-time-color-field="${rightFieldName}"]`);
+    if (!leftInput || !rightInput) {
+      return;
+    }
+
+    const leftValue = leftInput.value;
+    leftInput.value = rightInput.value;
+    rightInput.value = leftValue;
+  });
+
+  return true;
+}
+
+function syncMapTimeColorMiddleRowBoundaryOrder(rowElement) {
+  if (!rowElement) {
+    return false;
+  }
+
+  const dateFromValue = normalizeDateInputValue(
+    rowElement.querySelector('[data-map-time-color-field="dateFrom"]')?.value || ''
+  );
+  const dateToValue = normalizeDateInputValue(
+    rowElement.querySelector('[data-map-time-color-field="dateTo"]')?.value || ''
+  );
+  const comparableDateFrom = getMapTimeColorRangeDateComparableValue(dateFromValue);
+  const comparableDateTo = getMapTimeColorRangeDateComparableValue(dateToValue);
+
+  if (!Number.isFinite(comparableDateFrom) || !Number.isFinite(comparableDateTo) || comparableDateFrom <= comparableDateTo) {
+    return false;
+  }
+
+  return swapMapTimeColorMiddleBoundaryValues(rowElement);
+}
+
+function buildMapTimeColorRangeDatesFromDraft(input = {}) {
+  const draft = normalizeMapDateFilterDraft(input);
+  return {
+    dateFrom: draft.fromYear
+      ? `${draft.fromYear}-${draft.fromMonth || '01'}-01`
+      : '',
+    dateTo: draft.toYear
+      ? (draft.toMonth ? getMonthEndDate(`${draft.toYear}-${draft.toMonth}`) : `${draft.toYear}-12-31`)
+      : ''
+  };
+}
+
+function formatMapTimeColorDraftBoundaryLabel(yearValue, monthValue) {
+  const normalizedYear = normalizeYearInputValue(yearValue);
+  const normalizedMonth = normalizeMonthNumberInputValue(monthValue);
+  if (!normalizedYear) {
+    return 'brak';
+  }
+
+  if (!normalizedMonth) {
+    return normalizedYear;
+  }
+
+  return formatMonthYear(`${normalizedYear}-${normalizedMonth}`);
 }
 
 function normalizeNonNegativeIntegerInputValue(value) {
@@ -1441,6 +1944,11 @@ async function loadMapDateFilterOptions() {
 
   if (infoPanelMode === 'filter') {
     paintFilterPanel();
+    return;
+  }
+
+  if (infoPanelMode === 'colors') {
+    paintTimeColorPanel();
   }
 }
 
@@ -1675,7 +2183,7 @@ function renderMarkerBatch(state) {
     }
 
     const marker = L.circleMarker([person.lat, person.lng], {
-      ...DEFAULT_PERSON_MARKER_STYLE,
+      ...buildDefaultPersonMarkerStyle(person),
       renderer: personRenderer
     });
     marker.__personSourceRowId = person.sourceRowId;
@@ -2385,7 +2893,7 @@ function readStoredMapTimeColorRanges() {
       return createDefaultMapTimeColorRanges();
     }
 
-    return normalizeMapTimeColorRanges(JSON.parse(raw));
+    return normalizeMapTimeColorRanges(JSON.parse(raw), { allowEmpty: true });
   } catch (_error) {
     return createDefaultMapTimeColorRanges();
   }
@@ -2395,11 +2903,13 @@ function persistMapTimeColorRanges() {
   try {
     window.localStorage.setItem(
       MAP_TIME_COLOR_RANGES_STORAGE_KEY,
-      JSON.stringify(normalizeMapTimeColorRanges(mapTimeColorRanges))
+      JSON.stringify(normalizeMapTimeColorRanges(mapTimeColorRanges, { allowEmpty: true }))
     );
   } catch (_error) {
     // Ignore storage failures and keep the current session working.
   }
+
+  refreshAllPersonMarkerAppearances();
 }
 
 function readLastSelectedPersonId() {
@@ -3043,6 +3553,89 @@ function buildCustomPointPopupHtml(point) {
   return `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(point.addressText || 'Punkt lokalny')}`;
 }
 
+function getMapTimeColorRangeForPerson(person, ranges = mapTimeColorRanges) {
+  if (!person) {
+    return null;
+  }
+
+  return sortMapTimeColorRangesForDisplay(ranges).find((range) => {
+    const comparableValue = getMapTimeColorComparableValueForPerson(person, range);
+    return doesMapTimeColorRangeMatchComparableValue(range, comparableValue);
+  }) || null;
+}
+
+function getMapTimeColorComparableValueForPerson(person, range) {
+  if (!person || !range) {
+    return null;
+  }
+
+  const normalizedPersonDate = normalizeDateInputValue(person[range.dateField]);
+  if (!normalizedPersonDate) {
+    return null;
+  }
+
+  const timestamp = Date.parse(`${normalizedPersonDate}T00:00:00Z`);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  if (range.mode === 'dates') {
+    return timestamp;
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  return Math.max(0, Math.round((todayUtc - timestamp) / 86400000));
+}
+
+function doesMapTimeColorRangeMatchComparableValue(range, comparableValue) {
+  if (!range || !Number.isFinite(comparableValue)) {
+    return false;
+  }
+
+  if (range.mode === 'dates') {
+    const effectiveDateRange = buildMapTimeColorEffectiveDateRange(range);
+    const rangeStart = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateFrom);
+    const rangeEnd = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateTo);
+    if (!Number.isFinite(rangeStart) && !Number.isFinite(rangeEnd)) {
+      return true;
+    }
+    if (Number.isFinite(rangeStart) && comparableValue < rangeStart) {
+      return false;
+    }
+    if (Number.isFinite(rangeEnd) && comparableValue > rangeEnd) {
+      return false;
+    }
+    return Number.isFinite(rangeStart) || Number.isFinite(rangeEnd);
+  }
+
+  const rangeStart = range.daysFrom === '' ? null : Number(range.daysFrom);
+  const rangeEnd = range.daysTo === '' ? null : Number(range.daysTo);
+  if (!Number.isFinite(rangeStart) && !Number.isFinite(rangeEnd)) {
+    return true;
+  }
+  if (Number.isFinite(rangeStart) && comparableValue < rangeStart) {
+    return false;
+  }
+  if (Number.isFinite(rangeEnd) && comparableValue > rangeEnd) {
+    return false;
+  }
+  return Number.isFinite(rangeStart) || Number.isFinite(rangeEnd);
+}
+
+function buildDefaultPersonMarkerStyle(person) {
+  const matchedRange = getMapTimeColorRangeForPerson(person);
+  if (!matchedRange) {
+    return DEFAULT_PERSON_MARKER_STYLE;
+  }
+
+  return {
+    ...DEFAULT_PERSON_MARKER_STYLE,
+    color: matchedRange.color,
+    fillColor: matchedRange.color
+  };
+}
+
 function openInfoPanelMode(mode) {
   const nextMode = normalizeInfoPanelMode(mode);
   if (!isSettingsOpen && infoPanelMode === nextMode) {
@@ -3356,8 +3949,7 @@ function paintTimeColorPanel() {
     element.hidden = true;
   });
 
-  const normalizedRanges = normalizeMapTimeColorRanges(mapTimeColorRanges);
-  const sortedRanges = sortMapTimeColorRangesForDisplay(normalizedRanges);
+  const normalizedRanges = normalizeMapTimeColorRanges(mapTimeColorRanges, { allowEmpty: true });
   if (timeColorConfirmState?.kind === 'remove-range') {
     const hasPendingRange = normalizedRanges.some((range) => range.id === timeColorConfirmState.rangeId);
     if (!hasPendingRange) {
@@ -3381,11 +3973,11 @@ function paintTimeColorPanel() {
         </div>
         <div class="time-color-legend-body">
           <div class="time-color-legend-chart">
-            ${renderMapTimeColorChartMarkup(sortedRanges)}
+            ${renderMapTimeColorChartMarkup(normalizedRanges)}
           </div>
           <div class="time-color-legend-preview">
             <div class="legend-swatches" data-map-time-color-preview>
-              ${renderMapTimeColorPreviewMarkup(sortedRanges)}
+              ${renderMapTimeColorPreviewMarkup(normalizedRanges)}
             </div>
           </div>
         </div>
@@ -3397,10 +3989,10 @@ function paintTimeColorPanel() {
       </div>
 
       <div class="time-color-ranges" data-map-time-color-ranges>
-        ${sortedRanges.map((range, index) => renderMapTimeColorRangeRow(range, index, sortedRanges.length)).join('')}
+        ${normalizedRanges.map((range, index) => renderMapTimeColorRangeRow(range, index, normalizedRanges.length)).join('')}
       </div>
 
-      ${renderMapTimeColorConfirmDialog(sortedRanges)}
+      ${renderMapTimeColorConfirmDialog(normalizedRanges)}
     </form>
   `;
 }
@@ -3443,118 +4035,135 @@ function getMapTimeColorConfirmOverlayStyle() {
 }
 
 function renderMapTimeColorRangeRow(range, index, totalCount) {
-  const removeDisabled = totalCount <= 1;
-  const rangeSummary = renderMapTimeColorRangeSummary(range);
   const safeColor = escapeHtml(range.color);
+  const fromBoundary = buildMapTimeColorMiddleBoundaryState(range, 'start');
+  const toBoundary = buildMapTimeColorMiddleBoundaryState(range, 'end');
+  const hasInvalidDateRange = hasInvalidMapTimeColorMiddleDateRange({
+    fromYear: fromBoundary.yearValue,
+    fromMonth: fromBoundary.monthValue,
+    toYear: toBoundary.yearValue,
+    toMonth: toBoundary.monthValue
+  });
+  const hasMonthOptions = mapDateFilterOptions.length > 0;
   return `
     <article class="time-color-range-card" data-map-time-color-row-id="${escapeHtml(range.id)}">
-      <div class="time-color-range-head">
-        <div>
-          <strong>${escapeHtml(range.label || `Zakres ${index + 1}`)}</strong>
-          <p class="time-color-range-note">${escapeHtml(rangeSummary)}</p>
+      <div class="time-color-range-top">
+        <div class="time-color-range-head">
+          <div class="time-color-range-title-group" data-map-time-color-title-group="${escapeHtml(range.id)}">
+            <button
+              type="button"
+              class="time-color-range-icon-button"
+              data-map-time-color-focus-label="${escapeHtml(range.id)}"
+              aria-label="Edytuj tytul zakresu"
+              title="Edytuj tytul"
+            >
+              <i class="fa-solid fa-pen" aria-hidden="true"></i>
+            </button>
+            <label class="time-color-range-title-wrap">
+              <input
+                class="time-color-range-title-input"
+                type="text"
+                value="${escapeHtml(range.label)}"
+                placeholder="Np. Pilne"
+                aria-label="Tytul zakresu"
+                data-map-time-color-field="label"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            class="button-muted time-color-range-remove"
+            data-map-time-color-remove="${escapeHtml(range.id)}"
+          >
+            Usun
+          </button>
         </div>
-        <button
-          type="button"
-          class="button-muted time-color-range-remove"
-          data-map-time-color-remove="${escapeHtml(range.id)}"
-          ${removeDisabled ? 'disabled' : ''}
-        >
-          Usun
-        </button>
       </div>
 
-      <div class="time-color-range-grid">
-        <label class="field">
-          <span>Nazwa zakresu</span>
-          <input
-            type="text"
-            value="${escapeHtml(range.label)}"
-            placeholder="Np. Pilne"
-            data-map-time-color-field="label"
-          />
-        </label>
-
-        <label class="field">
-          <span>Kolor</span>
-          <div class="time-color-picker-wrap">
-            ${renderMapTimeColorMenu({
-              color: range.color,
-              fieldAttributes: `data-map-time-color-field="color"`,
-              ariaLabel: `Kolor zakresu ${range.label || `Zakres ${index + 1}`}`,
-              className: 'is-form'
-            })}
-            <span class="time-color-picker-value">${safeColor}</span>
+      <div class="time-color-range-middle">
+        <div class="time-color-range-middle-group">
+          <div class="time-color-range-middle-head">
+            <div class="time-color-range-middle-title">Najstarsza data</div>
+            <div class="time-color-range-middle-side-title">Ilosc dni</div>
           </div>
-        </label>
+          <div class="time-color-range-middle-split">
+            <div class="time-color-range-middle-side is-left">
+              ${renderMapTimeColorMiddleDateFields({
+                yearFieldName: 'dateFromYear',
+                monthFieldName: 'dateFromMonth',
+                yearValue: fromBoundary.yearValue,
+                monthValue: fromBoundary.monthValue,
+                hasMonthOptions,
+                hasInvalidDateRange
+              })}
+            </div>
+            <div class="time-color-range-middle-side is-right">
+              ${renderMapTimeColorMiddleDaysField({
+                fieldName: 'daysTo',
+                fieldValue: fromBoundary.daysValue
+              })}
+            </div>
+          </div>
+        </div>
+        <div class="time-color-range-middle-group">
+          <div class="time-color-range-middle-head">
+            <div class="time-color-range-middle-title">Najnowsza data</div>
+            <div class="time-color-range-middle-side-title">Ilosc dni</div>
+          </div>
+          <div class="time-color-range-middle-split">
+            <div class="time-color-range-middle-side is-left">
+              ${renderMapTimeColorMiddleDateFields({
+                yearFieldName: 'dateToYear',
+                monthFieldName: 'dateToMonth',
+                yearValue: toBoundary.yearValue,
+                monthValue: toBoundary.monthValue,
+                hasMonthOptions,
+                hasInvalidDateRange
+              })}
+            </div>
+            <div class="time-color-range-middle-side is-right">
+              ${renderMapTimeColorMiddleDaysField({
+                fieldName: 'daysFrom',
+                fieldValue: toBoundary.daysValue
+              })}
+            </div>
+          </div>
+        </div>
+        <input type="hidden" value="${escapeHtml(range.mode)}" data-map-time-color-field="mode" />
+        <input type="hidden" value="${escapeHtml(fromBoundary.exactDate)}" data-map-time-color-field="dateFrom" />
+        <input type="hidden" value="${escapeHtml(toBoundary.exactDate)}" data-map-time-color-field="dateTo" />
+      </div>
 
-        <label class="field">
-          <span>Tryb zakresu</span>
-          <select data-map-time-color-field="mode">
-            <option value="days"${range.mode === 'days' ? ' selected' : ''}>Dni od ostatniej wplaty</option>
-            <option value="dates"${range.mode === 'dates' ? ' selected' : ''}>Dokladne daty</option>
-          </select>
-        </label>
+      <div class="time-color-range-bottom">
+        <div class="time-color-range-meta-grid">
+          <label class="field">
+            <span>Sortowanie</span>
+            <select data-map-time-color-field="dateField">
+              <option value="lastPaymentAt"${range.dateField === 'lastPaymentAt' ? ' selected' : ''}>Data wplaty</option>
+              <option value="lastVisitAt"${range.dateField === 'lastVisitAt' ? ' selected' : ''}>Data ostatniej wizyty</option>
+            </select>
+          </label>
 
-        ${range.mode === 'dates'
-          ? `
-            <label class="field">
-              <span>Od daty</span>
-              <input type="date" value="${escapeHtml(range.dateFrom)}" data-map-time-color-field="dateFrom" />
-            </label>
-            <label class="field">
-              <span>Do daty</span>
-              <input type="date" value="${escapeHtml(range.dateTo)}" data-map-time-color-field="dateTo" />
-            </label>
-          `
-          : `
-            <label class="field">
-              <span>Od ilu dni</span>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value="${escapeHtml(range.daysFrom)}"
-                placeholder="Np. 200"
-                data-map-time-color-field="daysFrom"
-                ${range.daysFrom === '' ? 'disabled' : ''}
-              />
-            </label>
-            <label class="checkbox-field">
-              <input
-                type="checkbox"
-                data-map-time-color-field="daysFromOpen"
-                ${range.daysFrom === '' ? 'checked' : ''}
-              />
-              <span>Do konca osi</span>
-            </label>
-            <label class="field">
-              <span>Do ilu dni</span>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value="${escapeHtml(range.daysTo)}"
-                placeholder="Puste = bez limitu"
-                data-map-time-color-field="daysTo"
-                ${range.daysTo === '' ? 'disabled' : ''}
-              />
-            </label>
-            <label class="checkbox-field">
-              <input
-                type="checkbox"
-                data-map-time-color-field="daysToOpen"
-                ${range.daysTo === '' ? 'checked' : ''}
-              />
-              <span>Do poczatku osi</span>
-            </label>
-          `}
+          <label class="field">
+            <span>Kolor</span>
+            <div class="time-color-picker-wrap">
+              ${renderMapTimeColorMenu({
+                color: range.color,
+                fieldAttributes: `data-map-time-color-field="color"`,
+                ariaLabel: `Kolor zakresu ${range.label || `Zakres ${index + 1}`}`,
+                className: 'is-form'
+              })}
+              <span class="time-color-picker-value">${safeColor}</span>
+            </div>
+          </label>
+        </div>
       </div>
     </article>
   `;
 }
 
 function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
-  const normalizedRanges = sortMapTimeColorRangesForDisplay(normalizeMapTimeColorRanges(ranges)).reverse();
+  const normalizedRanges = normalizeMapTimeColorRanges(ranges, { allowEmpty: true });
   return normalizedRanges
     .map((range) => `
       <div
@@ -3582,7 +4191,6 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
             data-map-time-color-preview-remove="${escapeHtml(range.id)}"
             aria-label="Usun zakres"
             title="Usun zakres"
-            ${normalizedRanges.length <= 1 ? 'disabled' : ''}
           >
             <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
           </button>
@@ -3644,32 +4252,9 @@ function renderMapTimeColorMenu(options = {}) {
 
 function renderMapTimeColorPreviewField(range, side) {
   const isLeft = side === 'left';
-  if (range.mode === 'dates') {
-    const fieldName = isLeft ? 'dateTo' : 'dateFrom';
-    const fieldValue = isLeft ? range.dateTo : range.dateFrom;
-    const fieldSize = Math.max(4, String(fieldValue || '').length || 0);
-    return `
-      <input
-        class="legend-value-input"
-        type="text"
-        value="${escapeHtml(fieldValue || '')}"
-        size="${escapeHtml(String(fieldSize))}"
-        inputmode="numeric"
-        pattern="[0-9-]*"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="brak"
-        data-map-time-color-preview-field="${fieldName}"
-        data-map-time-color-preview-range-id="${escapeHtml(range.id)}"
-      />
-      <span class="legend-value-edit-icon" aria-hidden="true">
-        <i class="fa-solid fa-pen"></i>
-      </span>
-    `;
-  }
-
+  const previewDaysValues = buildMapTimeColorPreviewDaysValues(range);
   const fieldName = isLeft ? 'daysTo' : 'daysFrom';
-  const fieldValue = isLeft ? range.daysTo : range.daysFrom;
+  const fieldValue = isLeft ? previewDaysValues.daysTo : previewDaysValues.daysFrom;
   const fieldSize = Math.max(4, String(fieldValue || '').length || 0);
   return `
     <input
@@ -3727,29 +4312,39 @@ function renderMapTimeColorChartMarkup(ranges = mapTimeColorRanges) {
         ${chartModel.rows.map((row) => `
           <div class="time-color-chart-row">
             <div class="time-color-chart-track" data-map-time-color-chart-track>
-              <div
-                class="time-color-chart-bar time-color-chart-bar-interactive${row.isMovable ? ' is-draggable' : ''}${row.isOpenLeft ? ' is-open-left' : ''}${row.isOpenRight ? ' is-open-right' : ''}"
-                data-map-time-color-chart-bar-drag="${row.isMovable ? 'true' : 'false'}"
-                data-map-time-color-range-id="${escapeHtml(row.id)}"
-                style="left: ${escapeHtml(String(row.start))}%; width: ${escapeHtml(String(row.width))}%; --chart-fill: ${escapeHtml(row.color)};"
-              >
-                ${row.isInteractive
-                  ? `
-                    <span
-                      class="time-color-chart-handle time-color-chart-handle-start${row.isOpenLeft ? ' is-open-left-cap' : ''}"
-                      data-map-time-color-chart-handle="start"
-                      data-map-time-color-range-id="${escapeHtml(row.id)}"
-                      style="--chart-handle-fill: ${escapeHtml(row.color)};"
-                    ></span>
-                    <span
-                      class="time-color-chart-handle time-color-chart-handle-end${row.isOpenRight || row.touchesRightEdge ? ' is-open-right-cap' : ''}"
-                      data-map-time-color-chart-handle="end"
-                      data-map-time-color-range-id="${escapeHtml(row.id)}"
-                      style="--chart-handle-fill: ${escapeHtml(row.color)};"
-                    ></span>
-                  `
-                  : ''}
-              </div>
+              ${row.isHidden
+                ? ''
+                : `
+                  <div
+                    class="time-color-chart-bar${row.isInteractive ? ' time-color-chart-bar-interactive' : ''}${row.isMovable ? ' is-draggable' : ''}${row.isOpenLeft ? ' is-open-left' : ''}${row.isOpenRight ? ' is-open-right' : ''}"
+                    data-map-time-color-chart-bar-drag="${row.isMovable ? 'true' : 'false'}"
+                    data-map-time-color-range-id="${escapeHtml(row.id)}"
+                    style="left: ${escapeHtml(String(row.start))}%; width: ${escapeHtml(String(row.width))}%; --chart-fill: ${escapeHtml(row.color)};"
+                  >
+                    ${row.isInteractive || row.isOpenLeft || row.isOpenRight || row.touchesRightEdge
+                      ? `
+                        ${row.isInteractive || row.isOpenLeft
+                          ? `
+                            <span
+                              class="time-color-chart-handle time-color-chart-handle-start${row.isOpenLeft ? ' is-open-left-cap' : ''}${row.isInteractive ? '' : ' is-static'}"
+                              ${row.isInteractive ? `data-map-time-color-chart-handle="start" data-map-time-color-range-id="${escapeHtml(row.id)}"` : ''}
+                              style="--chart-handle-fill: ${escapeHtml(row.color)};"
+                            ></span>
+                          `
+                          : ''}
+                        ${row.isInteractive || row.isOpenRight || row.touchesRightEdge
+                          ? `
+                            <span
+                              class="time-color-chart-handle time-color-chart-handle-end${row.isOpenRight || row.touchesRightEdge ? ' is-open-right-cap' : ''}${row.isInteractive ? '' : ' is-static'}"
+                              ${row.isInteractive ? `data-map-time-color-chart-handle="end" data-map-time-color-range-id="${escapeHtml(row.id)}"` : ''}
+                              style="--chart-handle-fill: ${escapeHtml(row.color)};"
+                            ></span>
+                          `
+                          : ''}
+                      `
+                      : ''}
+                  </div>
+                `}
             </div>
           </div>
         `).join('')}
@@ -3778,7 +4373,7 @@ function renderMapTimeColorChartMarkup(ranges = mapTimeColorRanges) {
 
 function formatMapTimeColorRangeStart(range) {
   if (range.mode === 'dates') {
-    return range.dateFrom || 'brak';
+    return buildMapTimeColorEffectiveDateRange(range).dateFrom || 'brak';
   }
 
   return range.daysFrom ? range.daysFrom : 'brak';
@@ -3786,16 +4381,16 @@ function formatMapTimeColorRangeStart(range) {
 
 function formatMapTimeColorRangeEnd(range) {
   if (range.mode === 'dates') {
-    return range.dateTo || 'brak';
+    return buildMapTimeColorEffectiveDateRange(range).dateTo || 'brak';
   }
 
   return range.daysTo ? range.daysTo : 'brak';
 }
 
 function buildMapTimeColorChartModel(ranges = mapTimeColorRanges) {
-  const normalizedRanges = sortMapTimeColorRangesForDisplay(normalizeMapTimeColorRanges(ranges));
+  const normalizedRanges = sortMapTimeColorRangesForDisplay(ranges);
   if (normalizedRanges.length === 0) {
-    return null;
+    return buildEmptyMapTimeColorDateChartModel();
   }
 
   const hasDays = normalizedRanges.some((range) => range.mode === 'days');
@@ -3807,6 +4402,28 @@ function buildMapTimeColorChartModel(ranges = mapTimeColorRanges) {
   return hasDates
     ? buildMapTimeColorDateChartModel(normalizedRanges)
     : buildMapTimeColorDaysChartModel(normalizedRanges);
+}
+
+function buildEmptyMapTimeColorDateChartModel() {
+  const { chartMin, chartMax } = getDefaultMapTimeColorDateChartBounds();
+
+  return {
+    kind: 'dates',
+    chartMaxDays: null,
+    oldestVisibleDays: null,
+    newestVisibleDays: null,
+    yearLabels: buildMapTimeColorDateYearLabels(chartMin, chartMax),
+    monthTicks: buildMapTimeColorDateMonthTicks(chartMin, chartMax),
+    rows: []
+  };
+}
+
+function getDefaultMapTimeColorDateChartBounds() {
+  const today = new Date();
+  return {
+    chartMin: Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 3, 1),
+    chartMax: Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)
+  };
 }
 
 function buildMapTimeColorDaysChartModel(ranges) {
@@ -3863,28 +4480,36 @@ function buildMapTimeColorDaysChartModel(ranges) {
 
 function buildMapTimeColorDateChartModel(ranges) {
   const dateRanges = ranges.map((range) => {
-    const start = getMapTimeColorRangeDateComparableValue(range.dateFrom);
-    const end = getMapTimeColorRangeDateComparableValue(range.dateTo);
+    const effectiveDateRange = buildMapTimeColorEffectiveDateRange(range);
+    const start = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateFrom);
+    const end = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateTo);
+    const hasYearOnlyStart = Boolean(normalizeDateInputValue(range.dateFrom)) && !normalizeMonthNumberInputValue(range.dateFromMonthDraft);
+    const hasYearOnlyEnd = Boolean(normalizeDateInputValue(range.dateTo)) && !normalizeMonthNumberInputValue(range.dateToMonthDraft);
+    const isInvalid = Number.isFinite(start) && Number.isFinite(end) && start > end;
     return {
       id: range.id,
       color: range.color,
-      isOpenLeft: !Number.isFinite(start),
-      isOpenRight: !Number.isFinite(end),
+      isInvalid,
+      isOpenLeft: !Number.isFinite(start) || hasYearOnlyStart,
+      isOpenRight: !Number.isFinite(end) || hasYearOnlyEnd,
       start,
       end
     };
   });
 
-  const finiteValues = dateRanges.flatMap((range) => [range.start, range.end]).filter(Number.isFinite);
-  if (finiteValues.length === 0) {
-    return { kind: 'mixed' };
-  }
-
-  const minValue = Math.min(...finiteValues);
-  const maxValue = Math.max(...finiteValues);
-  const chartMin = addUtcMonths(minValue, -MAP_TIME_CHART_PAST_PADDING_MONTHS);
-  const chartMax = addUtcMonths(maxValue, MAP_TIME_CHART_FUTURE_PADDING_MONTHS);
-  const visibleSpan = chartMax - chartMin;
+  const finiteValues = dateRanges
+    .filter((range) => !range.isInvalid)
+    .flatMap((range) => [range.start, range.end])
+    .filter(Number.isFinite);
+  const defaultChartBounds = getDefaultMapTimeColorDateChartBounds();
+  const minValue = finiteValues.length ? Math.min(...finiteValues) : defaultChartBounds.chartMin;
+  const maxValue = finiteValues.length ? Math.max(...finiteValues) : defaultChartBounds.chartMax;
+  const chartMin = finiteValues.length
+    ? addUtcMonths(minValue, -MAP_TIME_CHART_PAST_PADDING_MONTHS)
+    : defaultChartBounds.chartMin;
+  const chartMax = finiteValues.length
+    ? addUtcMonths(maxValue, MAP_TIME_CHART_FUTURE_PADDING_MONTHS)
+    : defaultChartBounds.chartMax;
 
   return {
     kind: 'dates',
@@ -3894,6 +4519,23 @@ function buildMapTimeColorDateChartModel(ranges) {
     yearLabels: buildMapTimeColorDateYearLabels(chartMin, chartMax),
     monthTicks: buildMapTimeColorDateMonthTicks(chartMin, chartMax),
     rows: dateRanges.map((range) => {
+      if (range.isInvalid) {
+        return {
+          id: range.id,
+          color: range.color,
+          start: 0,
+          end: 0,
+          width: 0,
+          sortValue: Number.POSITIVE_INFINITY,
+          isInteractive: false,
+          isMovable: false,
+          isOpenLeft: false,
+          isOpenRight: false,
+          touchesRightEdge: false,
+          isHidden: true
+        };
+      }
+
       const startValue = Number.isFinite(range.start) ? range.start : chartMin;
       const endValue = Number.isFinite(range.end) ? range.end : chartMax;
       const normalizedStart = Math.min(startValue, endValue);
@@ -3911,7 +4553,8 @@ function buildMapTimeColorDateChartModel(ranges) {
         isMovable: false,
         isOpenLeft: range.isOpenLeft,
         isOpenRight: range.isOpenRight,
-        touchesRightEdge: endPosition >= 99.95
+        touchesRightEdge: endPosition >= 99.95,
+        isHidden: false
       };
     })
   };
@@ -4429,35 +5072,40 @@ function addUtcMonths(timestamp, months) {
 }
 
 function renderMapTimeColorRangeSummary(range) {
+  const subjectLabel = formatMapTimeColorDateFieldLabel(range.dateField, { short: true });
   if (range.mode === 'dates') {
-    if (range.dateFrom && range.dateTo) {
-      return `${range.dateFrom} do ${range.dateTo}`;
+    const dateDraft = buildMapTimeColorRangeDateDraft(range);
+    const fromLabel = formatMapTimeColorDraftBoundaryLabel(dateDraft.fromYear, dateDraft.fromMonth);
+    const toLabel = formatMapTimeColorDraftBoundaryLabel(dateDraft.toYear, dateDraft.toMonth);
+
+    if (dateDraft.fromYear && dateDraft.toYear) {
+      return `${subjectLabel}: ${fromLabel} do ${toLabel}`;
     }
 
-    if (range.dateFrom) {
-      return `od ${range.dateFrom}`;
+    if (dateDraft.fromYear) {
+      return `${subjectLabel}: od ${fromLabel}`;
     }
 
-    if (range.dateTo) {
-      return `do ${range.dateTo}`;
+    if (dateDraft.toYear) {
+      return `${subjectLabel}: do ${toLabel}`;
     }
 
-    return 'zakres dat do ustawienia';
+    return `${subjectLabel}: zakres dat do ustawienia`;
   }
 
   if (range.daysFrom && range.daysTo) {
-    return `${range.daysFrom}-${range.daysTo} dni`;
+    return `${subjectLabel}: ${range.daysFrom}-${range.daysTo} dni`;
   }
 
   if (range.daysFrom) {
-    return `${range.daysFrom}+ dni`;
+    return `${subjectLabel}: ${range.daysFrom}+ dni`;
   }
 
   if (range.daysTo) {
-    return `do ${range.daysTo} dni`;
+    return `${subjectLabel}: do ${range.daysTo} dni`;
   }
 
-  return 'prog dni do ustawienia';
+  return `${subjectLabel}: prog dni do ustawienia`;
 }
 
 function formatMapTimeColorRangeCountLabel(count) {
@@ -4529,32 +5177,161 @@ function syncMapTimeColorMenuElement(menuElement, colorValue) {
   });
 }
 
+function syncMapTimeColorMiddleBoundaryFields(rowElement, boundary = 'start', options = {}) {
+  if (!rowElement) {
+    return;
+  }
+
+  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
+  const changedFieldName = typeof options?.changedFieldName === 'string' ? options.changedFieldName : '';
+  const isEnd = normalizedBoundary === 'end';
+  const yearFieldName = isEnd ? 'dateToYear' : 'dateFromYear';
+  const monthFieldName = isEnd ? 'dateToMonth' : 'dateFromMonth';
+  const daysFieldName = isEnd ? 'daysFrom' : 'daysTo';
+  const exactDateFieldName = isEnd ? 'dateTo' : 'dateFrom';
+  const yearInput = rowElement.querySelector(`[data-map-time-color-field="${yearFieldName}"]`);
+  const monthInput = rowElement.querySelector(`[data-map-time-color-field="${monthFieldName}"]`);
+  const daysInput = rowElement.querySelector(`[data-map-time-color-field="${daysFieldName}"]`);
+  const exactDateInput = rowElement.querySelector(`[data-map-time-color-field="${exactDateFieldName}"]`);
+  const modeInput = rowElement.querySelector('[data-map-time-color-field="mode"]');
+
+  if (changedFieldName === daysFieldName) {
+    const normalizedDaysValue = normalizeNonNegativeIntegerInputValue(daysInput?.value);
+    if (daysInput) {
+      daysInput.value = normalizedDaysValue;
+    }
+
+    if (modeInput) {
+      modeInput.value = 'days';
+    }
+
+    if (!normalizedDaysValue) {
+      if (exactDateInput) {
+        exactDateInput.value = '';
+      }
+      return;
+    }
+
+    const exactDate = buildMapTimeColorDateFromDaysAgo(normalizedDaysValue);
+    if (exactDateInput) {
+      exactDateInput.value = exactDate;
+    }
+    if (yearInput) {
+      yearInput.value = extractYearValue(exactDate);
+    }
+    if (monthInput) {
+      monthInput.value = extractMonthNumberValue(exactDate);
+    }
+    return;
+  }
+
+  if (changedFieldName === yearFieldName || changedFieldName === monthFieldName) {
+    const resolvedSelection = resolveMapTimeColorMiddleBoundarySelection(normalizedBoundary, {
+      year: yearInput?.value,
+      month: monthInput?.value
+    });
+    const exactDate = buildMapTimeColorMiddleBoundaryDate(normalizedBoundary, resolvedSelection);
+
+    if (modeInput) {
+      modeInput.value = 'dates';
+    }
+
+    if (exactDateInput) {
+      exactDateInput.value = exactDate;
+    }
+    if (yearInput) {
+      yearInput.value = resolvedSelection.year;
+    }
+    if (monthInput) {
+      monthInput.value = resolvedSelection.month;
+    }
+    if (daysInput) {
+      daysInput.value = convertMapTimeColorDateToDaysAgo(exactDate);
+    }
+  }
+}
+
+function syncMapTimeColorMiddleRowFields(rowElement, options = {}) {
+  const changedFieldName = typeof options?.changedFieldName === 'string' ? options.changedFieldName : '';
+  if (!changedFieldName) {
+    return;
+  }
+
+  if (changedFieldName === 'dateFromYear' || changedFieldName === 'dateFromMonth' || changedFieldName === 'daysTo') {
+    syncMapTimeColorMiddleBoundaryFields(rowElement, 'start', { changedFieldName });
+  }
+
+  if (changedFieldName === 'dateToYear' || changedFieldName === 'dateToMonth' || changedFieldName === 'daysFrom') {
+    syncMapTimeColorMiddleBoundaryFields(rowElement, 'end', { changedFieldName });
+  }
+
+  syncMapTimeColorMiddleRowBoundaryOrder(rowElement);
+  syncMapTimeColorMiddleRowInvalidState(rowElement);
+}
+
 function readMapTimeColorRangesFromForm(formElement) {
   const rowElements = Array.from(formElement.querySelectorAll('[data-map-time-color-row-id]'));
   if (rowElements.length === 0) {
-    return createDefaultMapTimeColorRanges();
+    return [];
   }
 
   return normalizeMapTimeColorRanges(
-    rowElements.map((rowElement, index) => ({
-      id: rowElement.getAttribute('data-map-time-color-row-id') || `range-${index + 1}`,
-      label: rowElement.querySelector('[data-map-time-color-field="label"]')?.value || '',
-      color: rowElement.querySelector('[data-map-time-color-field="color"]')?.value || '',
-      mode: rowElement.querySelector('[data-map-time-color-field="mode"]')?.value || 'days',
-      daysFrom: rowElement.querySelector('[data-map-time-color-field="daysFromOpen"]')?.checked
-        ? ''
-        : (rowElement.querySelector('[data-map-time-color-field="daysFrom"]')?.value || ''),
-      daysTo: rowElement.querySelector('[data-map-time-color-field="daysToOpen"]')?.checked
-        ? ''
-        : (rowElement.querySelector('[data-map-time-color-field="daysTo"]')?.value || ''),
-      dateFrom: rowElement.querySelector('[data-map-time-color-field="dateFrom"]')?.value || '',
-      dateTo: rowElement.querySelector('[data-map-time-color-field="dateTo"]')?.value || ''
-    }))
+    rowElements.map((rowElement, index) => {
+      const rowId = rowElement.getAttribute('data-map-time-color-row-id') || `range-${index + 1}`;
+      const currentRange = mapTimeColorRanges.find((entry) => entry.id === rowId) || {};
+      const nextMode = rowElement.querySelector('[data-map-time-color-field="mode"]')?.value || currentRange.mode || 'days';
+      const daysFromValue = rowElement.querySelector('[data-map-time-color-field="daysFrom"]')?.value ?? currentRange.daysFrom ?? '';
+      const daysToValue = rowElement.querySelector('[data-map-time-color-field="daysTo"]')?.value ?? currentRange.daysTo ?? '';
+      const exactDateFromValue = rowElement.querySelector('[data-map-time-color-field="dateFrom"]')?.value || '';
+      const exactDateToValue = rowElement.querySelector('[data-map-time-color-field="dateTo"]')?.value || '';
+      const dateFromYearDraft = normalizeYearInputValue(
+        rowElement.querySelector('[data-map-time-color-field="dateFromYear"]')?.value || ''
+      );
+      const dateToYearDraft = normalizeYearInputValue(
+        rowElement.querySelector('[data-map-time-color-field="dateToYear"]')?.value || ''
+      );
+      const dateFromMonthDraft = dateFromYearDraft
+        ? normalizeMonthNumberInputValue(
+          rowElement.querySelector('[data-map-time-color-field="dateFromMonth"]')?.value || ''
+        )
+        : '';
+      const dateToMonthDraft = dateToYearDraft
+        ? normalizeMonthNumberInputValue(
+          rowElement.querySelector('[data-map-time-color-field="dateToMonth"]')?.value || ''
+        )
+        : '';
+
+      return {
+        id: rowId,
+        label: rowElement.querySelector('[data-map-time-color-field="label"]')?.value || '',
+        color: rowElement.querySelector('[data-map-time-color-field="color"]')?.value || currentRange.color || '',
+        mode: nextMode,
+        dateField: rowElement.querySelector('[data-map-time-color-field="dateField"]')?.value || currentRange.dateField || 'lastPaymentAt',
+        daysFrom: daysFromValue,
+        daysTo: daysToValue,
+        ...(nextMode === 'dates'
+          ? {
+            dateFromMonthDraft,
+            dateToMonthDraft,
+            dateFrom: normalizeDateInputValue(exactDateFromValue),
+            dateTo: normalizeDateInputValue(exactDateToValue)
+          }
+          : {
+            dateFromMonthDraft: '',
+            dateToMonthDraft: '',
+            ...buildMapTimeColorRangeDatesFromDaysValues({
+              daysFrom: daysFromValue,
+              daysTo: daysToValue
+            })
+          })
+      };
+    }),
+    { allowEmpty: true }
   );
 }
 
 function sortMapTimeColorRangesForDisplay(ranges) {
-  return [...normalizeMapTimeColorRanges(ranges)].sort((left, right) => {
+  return [...normalizeMapTimeColorRanges(ranges, { allowEmpty: true })].sort((left, right) => {
     const leftScore = getMapTimeColorRangeSortScore(left);
     const rightScore = getMapTimeColorRangeSortScore(right);
     if (leftScore !== rightScore) {
@@ -4567,8 +5344,9 @@ function sortMapTimeColorRangesForDisplay(ranges) {
 
 function getMapTimeColorRangeSortScore(range) {
   if (range.mode === 'dates') {
-    const from = getMapTimeColorRangeDateComparableValue(range.dateFrom);
-    const to = getMapTimeColorRangeDateComparableValue(range.dateTo);
+    const effectiveDateRange = buildMapTimeColorEffectiveDateRange(range);
+    const from = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateFrom);
+    const to = getMapTimeColorRangeDateComparableValue(effectiveDateRange.dateTo);
     if (Number.isFinite(from) && Number.isFinite(to)) {
       return (from + to) / 2;
     }
@@ -4623,16 +5401,61 @@ function updateMapTimeColorRangeFromPreviewField(rangeId, fieldName, fieldValue)
 
   const currentRange = mapTimeColorRanges[rangeIndex];
   const sanitizedFieldValue = sanitizeMapTimeColorPreviewFieldValue(fieldName, fieldValue);
-  const nextRange = normalizeMapTimeColorRange({
-    ...currentRange,
-    [fieldName]: sanitizedFieldValue
-  }, rangeIndex);
+  const nextRange = normalizeMapTimeColorRange(
+    buildNextMapTimeColorRangeFromPreviewField(currentRange, fieldName, sanitizedFieldValue),
+    rangeIndex
+  );
 
   mapTimeColorRanges = mapTimeColorRanges.map((entry, index) => {
     return index === rangeIndex ? nextRange : entry;
   });
   persistMapTimeColorRanges();
   syncTimeColorPreview({ skipPreviewRerender: true });
+}
+
+function buildNextMapTimeColorRangeFromPreviewField(range, fieldName, fieldValue) {
+  if (fieldName === 'daysFrom' || fieldName === 'daysTo') {
+    const previewDaysValues = buildMapTimeColorPreviewDaysValues(range);
+    const nextDaysFrom = fieldName === 'daysFrom' ? fieldValue : previewDaysValues.daysFrom;
+    const nextDaysTo = fieldName === 'daysTo' ? fieldValue : previewDaysValues.daysTo;
+
+    return {
+      ...range,
+      mode: 'days',
+      daysFrom: nextDaysFrom,
+      daysTo: nextDaysTo,
+      ...buildMapTimeColorRangeDatesFromDaysValues({
+        daysFrom: nextDaysFrom,
+        daysTo: nextDaysTo
+      })
+    };
+  }
+
+  if (
+    fieldName === 'dateFromYear'
+    || fieldName === 'dateFromMonth'
+    || fieldName === 'dateToYear'
+    || fieldName === 'dateToMonth'
+  ) {
+    const dateDraft = buildMapTimeColorRangeDateDraft(range);
+    const nextDraft = {
+      ...dateDraft,
+      ...(fieldName === 'dateFromYear' ? { fromYear: fieldValue } : {}),
+      ...(fieldName === 'dateFromMonth' ? { fromMonth: fieldValue } : {}),
+      ...(fieldName === 'dateToYear' ? { toYear: fieldValue } : {}),
+      ...(fieldName === 'dateToMonth' ? { toMonth: fieldValue } : {})
+    };
+
+    return {
+      ...range,
+      ...buildMapTimeColorRangeDatesFromDraft(nextDraft)
+    };
+  }
+
+  return {
+    ...range,
+    [fieldName]: fieldValue
+  };
 }
 
 function sanitizeMapTimeColorPreviewFieldValue(fieldName, fieldValue) {
@@ -4647,7 +5470,47 @@ function sanitizeMapTimeColorPreviewFieldValue(fieldName, fieldValue) {
     return normalizedFieldValue.replace(/[^0-9-]+/g, '').slice(0, 10);
   }
 
+  if (normalizedFieldName === 'dateFromYear' || normalizedFieldName === 'dateToYear') {
+    return normalizeYearInputValue(normalizedFieldValue);
+  }
+
+  if (normalizedFieldName === 'dateFromMonth' || normalizedFieldName === 'dateToMonth') {
+    return normalizeMonthNumberInputValue(normalizedFieldValue);
+  }
+
   return normalizedFieldValue;
+}
+
+function getMapTimeColorPreviewFieldValue(range, fieldName) {
+  if (!range || !fieldName) {
+    return '';
+  }
+
+  if (fieldName === 'daysFrom' || fieldName === 'daysTo') {
+    const previewDaysValues = buildMapTimeColorPreviewDaysValues(range);
+    return fieldName === 'daysFrom' ? previewDaysValues.daysFrom : previewDaysValues.daysTo;
+  }
+
+  if (
+    fieldName === 'dateFromYear'
+    || fieldName === 'dateFromMonth'
+    || fieldName === 'dateToYear'
+    || fieldName === 'dateToMonth'
+  ) {
+    const dateDraft = buildMapTimeColorRangeDateDraft(range);
+    if (fieldName === 'dateFromYear') {
+      return dateDraft.fromYear;
+    }
+    if (fieldName === 'dateFromMonth') {
+      return dateDraft.fromMonth;
+    }
+    if (fieldName === 'dateToYear') {
+      return dateDraft.toYear;
+    }
+    return dateDraft.toMonth;
+  }
+
+  return typeof range[fieldName] === 'string' ? range[fieldName] : '';
 }
 
 function syncMapTimeColorPreviewFieldWidths(rootElement = selectionExtraEl) {
@@ -4683,7 +5546,7 @@ function syncTimeColorPreview(options = {}) {
       return;
     }
 
-    inputElement.value = typeof range[fieldName] === 'string' ? range[fieldName] : '';
+    inputElement.value = getMapTimeColorPreviewFieldValue(range, fieldName);
     if (fieldName === 'color') {
       syncMapTimeColorMenuElement(inputElement.closest('.time-color-menu'), range.color);
     }
@@ -4697,14 +5560,14 @@ function syncTimeColorPreview(options = {}) {
       return;
     }
 
-    const heading = rowElement.querySelector('.time-color-range-head strong');
-    if (heading) {
-      heading.textContent = range.label || 'Zakres';
+    const labelInputEl = rowElement.querySelector('[data-map-time-color-field="label"]');
+    if (labelInputEl && labelInputEl !== document.activeElement) {
+      labelInputEl.value = range.label;
     }
 
-    const note = rowElement.querySelector('.time-color-range-note');
-    if (note) {
-      note.textContent = renderMapTimeColorRangeSummary(range);
+    const dateFieldSelectEl = rowElement.querySelector('[data-map-time-color-field="dateField"]');
+    if (dateFieldSelectEl) {
+      dateFieldSelectEl.value = range.dateField;
     }
 
     const colorValueEl = rowElement.querySelector('.time-color-picker-value');
@@ -4720,24 +5583,12 @@ function syncTimeColorPreview(options = {}) {
 
     const daysFromInputEl = rowElement.querySelector('[data-map-time-color-field="daysFrom"]');
     if (daysFromInputEl) {
-      daysFromInputEl.value = range.daysFrom;
-      daysFromInputEl.disabled = range.daysFrom === '';
+      daysFromInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'end').daysValue;
     }
 
     const daysToInputEl = rowElement.querySelector('[data-map-time-color-field="daysTo"]');
     if (daysToInputEl) {
-      daysToInputEl.value = range.daysTo;
-      daysToInputEl.disabled = range.daysTo === '';
-    }
-
-    const daysFromOpenEl = rowElement.querySelector('[data-map-time-color-field="daysFromOpen"]');
-    if (daysFromOpenEl) {
-      daysFromOpenEl.checked = range.daysFrom === '';
-    }
-
-    const daysToOpenEl = rowElement.querySelector('[data-map-time-color-field="daysToOpen"]');
-    if (daysToOpenEl) {
-      daysToOpenEl.checked = range.daysTo === '';
+      daysToInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'start').daysValue;
     }
 
     const dateFromInputEl = rowElement.querySelector('[data-map-time-color-field="dateFrom"]');
@@ -4749,6 +5600,33 @@ function syncTimeColorPreview(options = {}) {
     if (dateToInputEl) {
       dateToInputEl.value = range.dateTo;
     }
+
+    const dateFromYearInputEl = rowElement.querySelector('[data-map-time-color-field="dateFromYear"]');
+    if (dateFromYearInputEl) {
+      dateFromYearInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'start').yearValue;
+    }
+
+    const dateFromMonthInputEl = rowElement.querySelector('[data-map-time-color-field="dateFromMonth"]');
+    if (dateFromMonthInputEl) {
+      dateFromMonthInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'start').monthValue;
+    }
+
+    const dateToYearInputEl = rowElement.querySelector('[data-map-time-color-field="dateToYear"]');
+    if (dateToYearInputEl) {
+      dateToYearInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'end').yearValue;
+    }
+
+    const dateToMonthInputEl = rowElement.querySelector('[data-map-time-color-field="dateToMonth"]');
+    if (dateToMonthInputEl) {
+      dateToMonthInputEl.value = buildMapTimeColorMiddleBoundaryState(range, 'end').monthValue;
+    }
+
+    const modeInputEl = rowElement.querySelector('[data-map-time-color-field="mode"]');
+    if (modeInputEl) {
+      modeInputEl.value = range.mode;
+    }
+
+    syncMapTimeColorMiddleRowInvalidState(rowElement);
   });
 }
 
@@ -4766,7 +5644,9 @@ function paintFilterPanel() {
   const toMonth = mapDateFilterDraft.toMonth;
   const toYear = mapDateFilterDraft.toYear;
   const hasMonthOptions = mapDateFilterOptions.length > 0;
-  const filteredPeopleLabel = allPeople.length === 1 ? '1 osoba' : `${formatNumber(allPeople.length)} osob`;
+  const filteredPeopleLabel = isMapPointsLoading
+    ? 'Odswiezanie...'
+    : (allPeople.length === 1 ? '1 osoba' : `${formatNumber(allPeople.length)} osob`);
   const isFromMonthActive = hasMonthOptions && Boolean(fromYear);
   const isToMonthActive = hasMonthOptions && Boolean(toYear);
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
@@ -4834,6 +5714,10 @@ function paintFilterPanel() {
 }
 
 function renderMapDateFilterResults() {
+  if (isMapPointsLoading) {
+    return '<p class="empty-state">Trwa odswiezanie wynikow filtra dat.</p>';
+  }
+
   if (allPeople.length === 0) {
     return hasActiveMapDateFilter()
       ? '<p class="empty-state">Brak osob pasujacych do wybranego zakresu dat.</p>'
@@ -5654,7 +6538,7 @@ function syncPersonMarkerAppearanceBySourceRowId(sourceRowId) {
   syncPersonMarkerAppearance(getPersonMarkerBySourceRowId(sourceRowId), sourceRowId);
 }
 
-function syncPersonMarkerAppearance(marker, sourceRowId) {
+function syncPersonMarkerAppearance(marker, sourceRowId, options = {}) {
   if (!marker || !sourceRowId) {
     return;
   }
@@ -5662,13 +6546,14 @@ function syncPersonMarkerAppearance(marker, sourceRowId) {
   const personKey = buildPersonKeyFromSourceRowId(sourceRowId);
   const isActivePerson = activeSelection?.type === 'person' && activeSelection.key === personKey;
   const isHoveredPerson = hoveredPersonSourceRowId === sourceRowId;
+  const person = findPersonBySourceRowId(sourceRowId);
 
   if (typeof marker.setStyle === 'function') {
     const nextStyle = isHoveredPerson
         ? HOVER_PERSON_MARKER_STYLE
       : isActivePerson
         ? ACTIVE_PERSON_MARKER_STYLE
-        : DEFAULT_PERSON_MARKER_STYLE;
+        : buildDefaultPersonMarkerStyle(person);
     marker.setStyle(nextStyle);
   }
 
@@ -5679,7 +6564,9 @@ function syncPersonMarkerAppearance(marker, sourceRowId) {
     });
   }
 
-  syncHighlightedPersonMarkerOrder();
+  if (!options.skipHighlightedOrder) {
+    syncHighlightedPersonMarkerOrder();
+  }
 }
 
 function syncSupplementalPersonMarkerIcon(marker, sourceRowId, state) {
@@ -5689,14 +6576,28 @@ function syncSupplementalPersonMarkerIcon(marker, sourceRowId, state) {
   }
 }
 
+function refreshAllPersonMarkerAppearances() {
+  for (const marker of visiblePeopleMarkers.values()) {
+    syncPersonMarkerAppearance(marker, marker.__personSourceRowId, { skipHighlightedOrder: true });
+  }
+
+  for (const marker of supplementalPeopleMarkers.values()) {
+    syncPersonMarkerAppearance(marker, marker.__personSourceRowId, { skipHighlightedOrder: true });
+  }
+
+  syncHighlightedPersonMarkerOrder();
+}
+
 function buildSupplementalPersonIcon(sourceRowId) {
   const size = SUPPLEMENTAL_PERSON_ICON_SIZE;
   const center = size / 2;
   const radius = SUPPLEMENTAL_PERSON_ICON_RADIUS;
-  const baseFill = '#79b7ff';
+  const person = findPersonBySourceRowId(sourceRowId);
+  const matchedRange = getMapTimeColorRangeForPerson(person);
+  const baseFill = matchedRange?.color || DEFAULT_PERSON_MARKER_STYLE.fillColor;
   const strokeColor = HOVER_PERSON_MARKER_STYLE.color;
   const innerStrokeColor = '#d2efff';
-  const hatchColor = '#c2e7fb';
+  const hatchColor = 'rgba(255,255,255,0.38)';
   const patternId = `supplemental-pattern-${String(sourceRowId || 'person').replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
   return L.divIcon({
