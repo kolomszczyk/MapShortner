@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld('appApi', {
   importAccessDatabase: (payload) => ipcRenderer.invoke('access:import', payload),
   runGeocoding: (payload) => ipcRenderer.invoke('geocode:run', payload),
   getDashboardSummary: () => ipcRenderer.invoke('dashboard:getSummary'),
+  getTileDownloadState: () => ipcRenderer.invoke('tiles:getState'),
+  saveTileDownloadSettings: (payload) => ipcRenderer.invoke('tiles:saveSettings', payload),
+  startTileDownload: () => ipcRenderer.invoke('tiles:startDownload'),
+  pauseTileDownload: () => ipcRenderer.invoke('tiles:pauseDownload'),
+  queueViewportTilePrefetch: (payload) => ipcRenderer.invoke('tiles:queueViewportPrefetch', payload),
+  queueHoverTilePrefetch: (payload) => ipcRenderer.invoke('tiles:queueHoverPrefetch', payload),
   getImportTables: () => ipcRenderer.invoke('data:getTables'),
   getTableRows: (payload) => ipcRenderer.invoke('data:getTableRows', payload),
   listPeople: (payload) => ipcRenderer.invoke('people:list', payload),
@@ -38,5 +44,8 @@ contextBridge.exposeInMainWorld('appApi', {
   },
   onOperationStatus: (callback) => {
     ipcRenderer.on('app:operationStatus', (_event, payload) => callback(payload));
+  },
+  onTileDownloadState: (callback) => {
+    ipcRenderer.on('tiles:state', (_event, payload) => callback(payload));
   }
 });

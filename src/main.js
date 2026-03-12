@@ -161,6 +161,10 @@ function sendOperationStatus(payload) {
   sendToRenderer('app:operationStatus', payload);
 }
 
+function sendTileDownloadState(payload) {
+  sendToRenderer('tiles:state', payload);
+}
+
 function clearStartupUpdateResolutionTimer() {
   if (startupUpdateResolutionTimer) {
     clearTimeout(startupUpdateResolutionTimer);
@@ -1327,7 +1331,14 @@ async function runFirstLaunchSetup() {
 
 app.whenReady().then(async () => {
   store = createDataStore(app);
-  mapTileService = createMapTileService({ app, log, protocol });
+  mapTileService = createMapTileService({
+    app,
+    log,
+    protocol,
+    store,
+    sendTileDownloadState,
+    sendOperationStatus
+  });
   await mapTileService.registerProtocol();
   const windowReady = createWindow();
   if (!isDevMode) {
@@ -1580,6 +1591,12 @@ ipcMain.handle('geocode:run', async (_event, payload = {}) => {
 });
 
 ipcMain.handle('dashboard:getSummary', () => store.getDashboardSummary());
+ipcMain.handle('tiles:getState', async () => mapTileService.refreshOfflineDownloadState());
+ipcMain.handle('tiles:saveSettings', async (_event, payload = {}) => mapTileService.saveOfflineDownloadSettings(payload));
+ipcMain.handle('tiles:startDownload', async () => mapTileService.startOfflineDownload());
+ipcMain.handle('tiles:pauseDownload', async () => mapTileService.pauseOfflineDownload());
+ipcMain.handle('tiles:queueViewportPrefetch', async (_event, payload = {}) => mapTileService.queueViewportPrefetch(payload));
+ipcMain.handle('tiles:queueHoverPrefetch', async (_event, payload = {}) => mapTileService.queueHoverPrefetch(payload));
 ipcMain.handle('data:getTables', () => store.getImportTables());
 ipcMain.handle('data:getTableRows', (_event, input) => store.getTableRows(input));
 ipcMain.handle('people:list', (_event, input) => store.searchPeople(input));

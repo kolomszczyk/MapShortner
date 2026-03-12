@@ -17,6 +17,7 @@ const mapEl = document.getElementById('service-map');
 const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
+const mapDevHudEl = document.querySelector('[data-map-dev-hud]');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
@@ -33,6 +34,7 @@ const selectionTitleEl = document.querySelector('[data-map-selection-title]');
 const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
 const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
+const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
 
 const PERSON_LOCATION_MARKER_OPACITY = 0.5;
 const PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY = 1;
@@ -87,6 +89,7 @@ const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
 const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
+const MAP_HOVER_PREFETCH_DEBOUNCE_MS = 360;
 const HOVERED_PERSON_PREVIEW_DELAY_MS = 320;
 const HOVERED_PERSON_RESTORE_DELAY_MS = 160;
 const HOVERED_PERSON_PREVIEW_PAN_DURATION_MS = 560;
@@ -240,6 +243,8 @@ let timeColorChartDragState = null;
 let timeColorChartViewportOverride = null;
 let timeColorConfirmState = null;
 let mapTimeColorAsyncPersistFrame = 0;
+let hoverTilePrefetchTimer = 0;
+let lastQueuedHoverTilePrefetchKey = '';
 
 function endTimeColorChartDragState(options = {}) {
   const shouldCommit = Boolean(options?.commit);
@@ -1315,19 +1320,117 @@ function buildMap() {
     updateWhenIdle: false,
     crossOrigin: false
   }).addTo(mapInstance);
+  L.control.scale({
+    position: 'bottomleft',
+    metric: true,
+    imperial: false,
+    maxWidth: 160
+  }).addTo(mapInstance);
 
   applyInitialMapViewport();
+  updateMapDevHud();
   peopleLayer = L.layerGroup().addTo(mapInstance);
   supplementalPeopleLayer = L.layerGroup().addTo(mapInstance);
   customLayer = L.layerGroup().addTo(mapInstance);
   mapInstance.on('moveend zoomend', () => {
     persistMapViewportState();
     scheduleVisibleMarkerSync();
+    updateMapDevHud();
+    void queueViewportTilePrefetch();
+  });
+  mapInstance.on('mousemove', (event) => {
+    scheduleHoverTilePrefetch(event?.latlng);
+  });
+  mapInstance.on('mouseout', () => {
+    clearScheduledHoverTilePrefetch();
   });
 
   requestAnimationFrame(() => {
     mapInstance.invalidateSize();
   });
+  void queueViewportTilePrefetch();
+}
+
+function updateMapDevHud() {
+  if (!isDevMode || !mapDevHudEl) {
+    return;
+  }
+
+  if (!mapInstance) {
+    mapDevHudEl.hidden = true;
+    return;
+  }
+
+  mapDevHudEl.hidden = false;
+  mapDevHudEl.textContent = `Zoom z${Number(mapInstance.getZoom() || 0).toFixed(2)}`;
+}
+
+function clearScheduledHoverTilePrefetch() {
+  if (!hoverTilePrefetchTimer) {
+    return;
+  }
+
+  window.clearTimeout(hoverTilePrefetchTimer);
+  hoverTilePrefetchTimer = 0;
+}
+
+function scheduleHoverTilePrefetch(latlng) {
+  if (!mapInstance || !latlng) {
+    return;
+  }
+
+  clearScheduledHoverTilePrefetch();
+  hoverTilePrefetchTimer = window.setTimeout(() => {
+    hoverTilePrefetchTimer = 0;
+    void queueHoverTilePrefetch(latlng);
+  }, MAP_HOVER_PREFETCH_DEBOUNCE_MS);
+}
+
+async function queueViewportTilePrefetch() {
+  if (!mapInstance || !window.appApi?.queueViewportTilePrefetch) {
+    return;
+  }
+
+  const bounds = mapInstance.getBounds();
+  if (!bounds) {
+    return;
+  }
+
+  try {
+    await window.appApi.queueViewportTilePrefetch({
+      currentZoom: mapInstance.getZoom(),
+      bounds: {
+        south: bounds.getSouth(),
+        west: bounds.getWest(),
+        north: bounds.getNorth(),
+        east: bounds.getEast()
+      }
+    });
+  } catch (_error) {
+    // Ignore background prefetch errors in renderer; interactive tile loading still works.
+  }
+}
+
+async function queueHoverTilePrefetch(latlng) {
+  if (!mapInstance || !window.appApi?.queueHoverTilePrefetch || !latlng) {
+    return;
+  }
+
+  const hoverKey = `${latlng.lat.toFixed(4)},${latlng.lng.toFixed(4)},${Math.round(mapInstance.getZoom())}`;
+  if (hoverKey === lastQueuedHoverTilePrefetchKey) {
+    return;
+  }
+  lastQueuedHoverTilePrefetchKey = hoverKey;
+
+  try {
+    await window.appApi.queueHoverTilePrefetch({
+      lat: latlng.lat,
+      lng: latlng.lng,
+      currentZoom: mapInstance.getZoom()
+    });
+  } catch (_error) {
+    // Ignore background prefetch errors in renderer; interactive tile loading still works.
+  }
 }
 
 window.addEventListener('resize', () => {
@@ -4570,6 +4673,9 @@ function setInfoPanelMode(mode, options = {}) {
   persistMapPanelState();
   renderCurrentInfoPanel();
   syncNavigationHistoryState(options.historyEntry);
+  requestAnimationFrame(() => {
+    mapInstance?.invalidateSize();
+  });
   return true;
 }
 
@@ -6923,8 +7029,6 @@ function paintFilterPanel() {
     element.hidden = true;
   });
 
-  syncMapDateFilterRenderedCount();
-
   const fromMonth = mapDateFilterDraft.fromMonth;
   const fromYear = mapDateFilterDraft.fromYear;
   const toMonth = mapDateFilterDraft.toMonth;
@@ -6992,6 +7096,13 @@ function paintFilterPanel() {
         </div>
       </div>
     </form>
+    <div class="filter-placeholder-stage">
+      <img
+        class="filter-placeholder-image"
+        src="../image copy.png"
+        alt="Praca w toku. Kot wie co robi."
+      />
+    </div>
   `;
   selectionExtraEl.hidden = false;
 }

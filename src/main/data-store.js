@@ -65,6 +65,10 @@ function createDataStore(app) {
     finalizeStagedImport: (sourcePath) => finalizeStagedImport(db, sourcePath),
     promoteStagedImport: (input) => promoteStagedImport(db, input),
     getDashboardSummary: () => getDashboardSummary(db),
+    getOfflineTileSettings: () => getOfflineTileSettings(db),
+    saveOfflineTileSettings: (input) => saveOfflineTileSettings(db, input),
+    getOfflineTileDownloadState: () => getOfflineTileDownloadState(db),
+    saveOfflineTileDownloadState: (input) => saveOfflineTileDownloadState(db, input),
     getImportTables: () => getImportTables(db),
     getTableRows: (input) => getTableRows(db, input),
     listPeople: (input) => listPeople(db, input),
@@ -82,6 +86,27 @@ function createDataStore(app) {
     getExportReports: () => getExportReports(db)
   };
 }
+
+const DEFAULT_OFFLINE_TILE_SETTINGS = Object.freeze({
+  z12RadiusKm: 10,
+  z14RadiusKm: 0.5,
+  z16RadiusMeters: 200,
+  concurrency: 4
+});
+
+const DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE = Object.freeze({
+  phase: 'idle',
+  totalTiles: 0,
+  downloadedTiles: 0,
+  failedTiles: 0,
+  bytesDownloaded: 0,
+  speedBps: 0,
+  startedAt: null,
+  updatedAt: null,
+  completedAt: null,
+  lastError: null,
+  planSummary: null
+});
 
 function closeStore(db) {
   db.close();
@@ -123,7 +148,200 @@ function initSchema(db) {
       lng REAL NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS offline_tile_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      z12_radius_km REAL NOT NULL DEFAULT 10,
+      z14_radius_km REAL NOT NULL DEFAULT 0.5,
+      z16_radius_meters REAL NOT NULL DEFAULT 200,
+      concurrency INTEGER NOT NULL DEFAULT 4,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS offline_tile_download_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      phase TEXT NOT NULL DEFAULT 'idle',
+      total_tiles INTEGER NOT NULL DEFAULT 0,
+      downloaded_tiles INTEGER NOT NULL DEFAULT 0,
+      failed_tiles INTEGER NOT NULL DEFAULT 0,
+      bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+      speed_bps REAL NOT NULL DEFAULT 0,
+      started_at TEXT,
+      updated_at TEXT,
+      completed_at TEXT,
+      last_error TEXT,
+      plan_summary_json TEXT
+    );
   `);
+}
+
+function normalizeOfflineTileSettings(input = {}) {
+  const z12RadiusKm = Number(input.z12RadiusKm);
+  const z14RadiusKm = Number(input.z14RadiusKm);
+  const z16RadiusMeters = Number(input.z16RadiusMeters);
+  const concurrency = Number(input.concurrency);
+
+  return {
+    z12RadiusKm: Number.isFinite(z12RadiusKm) ? Math.max(0, z12RadiusKm) : DEFAULT_OFFLINE_TILE_SETTINGS.z12RadiusKm,
+    z14RadiusKm: Number.isFinite(z14RadiusKm) ? Math.max(0, z14RadiusKm) : DEFAULT_OFFLINE_TILE_SETTINGS.z14RadiusKm,
+    z16RadiusMeters: Number.isFinite(z16RadiusMeters)
+      ? Math.max(0, z16RadiusMeters)
+      : DEFAULT_OFFLINE_TILE_SETTINGS.z16RadiusMeters,
+    concurrency: Number.isFinite(concurrency)
+      ? Math.min(12, Math.max(1, Math.round(concurrency)))
+      : DEFAULT_OFFLINE_TILE_SETTINGS.concurrency
+  };
+}
+
+function getOfflineTileSettings(db) {
+  const row = db.prepare(`
+    SELECT
+      z12_radius_km AS z12RadiusKm,
+      z14_radius_km AS z14RadiusKm,
+      z16_radius_meters AS z16RadiusMeters,
+      concurrency
+    FROM offline_tile_settings
+    WHERE id = 1
+  `).get();
+
+  return normalizeOfflineTileSettings(row || DEFAULT_OFFLINE_TILE_SETTINGS);
+}
+
+function saveOfflineTileSettings(db, input = {}) {
+  const normalized = normalizeOfflineTileSettings({
+    ...getOfflineTileSettings(db),
+    ...input
+  });
+  const updatedAt = new Date().toISOString();
+
+  db.prepare(`
+    INSERT INTO offline_tile_settings(
+      id,
+      z12_radius_km,
+      z14_radius_km,
+      z16_radius_meters,
+      concurrency,
+      updated_at
+    )
+    VALUES (1, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      z12_radius_km = excluded.z12_radius_km,
+      z14_radius_km = excluded.z14_radius_km,
+      z16_radius_meters = excluded.z16_radius_meters,
+      concurrency = excluded.concurrency,
+      updated_at = excluded.updated_at
+  `).run(
+    normalized.z12RadiusKm,
+    normalized.z14RadiusKm,
+    normalized.z16RadiusMeters,
+    normalized.concurrency,
+    updatedAt
+  );
+
+  return normalized;
+}
+
+function normalizeOfflineTileDownloadState(input = {}) {
+  return {
+    phase: String(input.phase || DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE.phase),
+    totalTiles: Math.max(0, Number(input.totalTiles || 0)),
+    downloadedTiles: Math.max(0, Number(input.downloadedTiles || 0)),
+    failedTiles: Math.max(0, Number(input.failedTiles || 0)),
+    bytesDownloaded: Math.max(0, Number(input.bytesDownloaded || 0)),
+    speedBps: Math.max(0, Number(input.speedBps || 0)),
+    startedAt: input.startedAt || null,
+    updatedAt: input.updatedAt || null,
+    completedAt: input.completedAt || null,
+    lastError: input.lastError || null,
+    planSummary: input.planSummary && typeof input.planSummary === 'object'
+      ? input.planSummary
+      : DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE.planSummary
+  };
+}
+
+function getOfflineTileDownloadState(db) {
+  const row = db.prepare(`
+    SELECT
+      phase,
+      total_tiles AS totalTiles,
+      downloaded_tiles AS downloadedTiles,
+      failed_tiles AS failedTiles,
+      bytes_downloaded AS bytesDownloaded,
+      speed_bps AS speedBps,
+      started_at AS startedAt,
+      updated_at AS updatedAt,
+      completed_at AS completedAt,
+      last_error AS lastError,
+      plan_summary_json AS planSummaryJson
+    FROM offline_tile_download_state
+    WHERE id = 1
+  `).get();
+
+  if (!row) {
+    return { ...DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE };
+  }
+
+  return normalizeOfflineTileDownloadState({
+    ...row,
+    planSummary: safeJsonParse(row.planSummaryJson, null)
+  });
+}
+
+function saveOfflineTileDownloadState(db, input = {}) {
+  const normalized = normalizeOfflineTileDownloadState({
+    ...getOfflineTileDownloadState(db),
+    ...input
+  });
+  const updatedAt = input.updatedAt === null
+    ? null
+    : (input.updatedAt || new Date().toISOString());
+
+  db.prepare(`
+    INSERT INTO offline_tile_download_state(
+      id,
+      phase,
+      total_tiles,
+      downloaded_tiles,
+      failed_tiles,
+      bytes_downloaded,
+      speed_bps,
+      started_at,
+      updated_at,
+      completed_at,
+      last_error,
+      plan_summary_json
+    )
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      phase = excluded.phase,
+      total_tiles = excluded.total_tiles,
+      downloaded_tiles = excluded.downloaded_tiles,
+      failed_tiles = excluded.failed_tiles,
+      bytes_downloaded = excluded.bytes_downloaded,
+      speed_bps = excluded.speed_bps,
+      started_at = excluded.started_at,
+      updated_at = excluded.updated_at,
+      completed_at = excluded.completed_at,
+      last_error = excluded.last_error,
+      plan_summary_json = excluded.plan_summary_json
+  `).run(
+    normalized.phase,
+    normalized.totalTiles,
+    normalized.downloadedTiles,
+    normalized.failedTiles,
+    normalized.bytesDownloaded,
+    normalized.speedBps,
+    normalized.startedAt,
+    updatedAt,
+    normalized.completedAt,
+    normalized.lastError,
+    JSON.stringify(normalized.planSummary || null)
+  );
+
+  return {
+    ...normalized,
+    updatedAt
+  };
 }
 
 function buildImportSchemaSql(tables, indexes) {
@@ -797,6 +1015,10 @@ function getDashboardSummary(db) {
     settings: {
       accessDbPath: getSetting(db, 'accessDbPath'),
       googleMapsApiKey: getSetting(db, 'googleMapsApiKey')
+    },
+    offlineTiles: {
+      settings: getOfflineTileSettings(db),
+      download: getOfflineTileDownloadState(db)
     }
   };
 }

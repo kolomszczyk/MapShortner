@@ -243,6 +243,81 @@
         <section class="panel panel-stack">
           <div class="panel-heading">
             <div>
+              <span class="eyebrow">Mapa offline</span>
+              <h2>Pobieranie kafelkow</h2>
+            </div>
+            <span class="info-chip" data-tile-download-phase>Bez planu</span>
+          </div>
+
+          <p class="copy">
+            Profil pobiera kafelki wokol zapisanych punktow. Zmniejszenie zakresu nie usuwa juz pobranych
+            kafelkow, tylko zaweza przyszle pobieranie.
+          </p>
+
+          <div class="dimension-grid">
+            <article>
+              <span>Postep</span>
+              <strong data-tile-download-progress>0%</strong>
+            </article>
+            <article>
+              <span>Szybkosc</span>
+              <strong data-tile-download-speed>Brak transferu</strong>
+            </article>
+            <article>
+              <span>Kafelki</span>
+              <strong data-tile-download-counts>0 / 0</strong>
+            </article>
+            <article>
+              <span>Punkty w planie</span>
+              <strong data-tile-download-points>0</strong>
+            </article>
+          </div>
+
+          <div class="three-cols">
+            <label class="field">
+              <span>Z12 promien (km)</span>
+              <input id="tile-z12-radius-km" type="number" min="0" step="0.1" value="10" />
+            </label>
+
+            <label class="field">
+              <span>Z14 promien (km)</span>
+              <input id="tile-z14-radius-km" type="number" min="0" step="0.1" value="0.5" />
+            </label>
+
+            <label class="field">
+              <span>Z16 promien (m)</span>
+              <input id="tile-z16-radius-meters" type="number" min="0" step="10" value="200" />
+            </label>
+          </div>
+
+          <div class="three-cols">
+            <label class="field">
+              <span>Rownolegle pobieran</span>
+              <input id="tile-download-concurrency" type="number" min="1" max="12" step="1" value="4" />
+            </label>
+
+            <div class="field">
+              <span>Plan</span>
+              <div class="info-chip" data-tile-download-plan>Brak wyliczen</div>
+            </div>
+
+            <div class="field">
+              <span>Ostatni blad</span>
+              <div class="info-chip" data-tile-download-error>Brak</div>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button type="button" id="tile-download-save-btn">Zapisz ustawienia</button>
+            <button type="button" id="tile-download-refresh-btn">Przelicz stan</button>
+            <button type="button" id="tile-download-start-btn" class="button-strong">Pobieraj</button>
+            <button type="button" id="tile-download-pause-btn">Pauza</button>
+          </div>
+        </section>
+
+        <section class="panel panel-stack">
+          <div class="panel-heading">
+            <div>
               <span class="eyebrow">Mapa JSON</span>
               <h2>Obszar wszystkich punktow</h2>
             </div>

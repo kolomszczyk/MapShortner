@@ -27,8 +27,24 @@ export function initDashboardPanel({
   const updaterDetailEl = root.querySelector('[data-updater-detail]');
   const updaterTestControlsEl = root.querySelector('[data-updater-test-controls]');
   const updaterTestNoteEl = root.querySelector('[data-updater-test-note]');
+  const tileZ12RadiusKmInput = root.querySelector('#tile-z12-radius-km');
+  const tileZ14RadiusKmInput = root.querySelector('#tile-z14-radius-km');
+  const tileZ16RadiusMetersInput = root.querySelector('#tile-z16-radius-meters');
+  const tileDownloadConcurrencyInput = root.querySelector('#tile-download-concurrency');
+  const tileDownloadSaveBtn = root.querySelector('#tile-download-save-btn');
+  const tileDownloadRefreshBtn = root.querySelector('#tile-download-refresh-btn');
+  const tileDownloadStartBtn = root.querySelector('#tile-download-start-btn');
+  const tileDownloadPauseBtn = root.querySelector('#tile-download-pause-btn');
+  const tileDownloadPhaseEls = root.querySelectorAll('[data-tile-download-phase]');
+  const tileDownloadProgressEls = root.querySelectorAll('[data-tile-download-progress]');
+  const tileDownloadSpeedEls = root.querySelectorAll('[data-tile-download-speed]');
+  const tileDownloadCountsEls = root.querySelectorAll('[data-tile-download-counts]');
+  const tileDownloadPointsEls = root.querySelectorAll('[data-tile-download-points]');
+  const tileDownloadPlanEls = root.querySelectorAll('[data-tile-download-plan]');
+  const tileDownloadErrorEls = root.querySelectorAll('[data-tile-download-error]');
   let lastUpdaterState = null;
   let lastUpdaterLogKey = null;
+  let lastTileDownloadPayload = null;
   let runtimeMeta = {
     version: null,
     isDevMode: false
@@ -57,6 +73,12 @@ export function initDashboardPanel({
     }
     appendLog(payload?.message || 'Zdarzenie systemowe.');
   });
+
+  if (hasTileDownloadSection()) {
+    window.appApi.onTileDownloadState((payload) => {
+      renderTileDownloadSection(payload);
+    });
+  }
 
   checkBtn?.addEventListener('click', async () => {
     setButtonBusy(checkBtn, true, 'Sprawdzanie...');
@@ -221,6 +243,52 @@ export function initDashboardPanel({
     }
   });
 
+  tileDownloadSaveBtn?.addEventListener('click', async () => {
+    await persistTileDownloadSettings({
+      button: tileDownloadSaveBtn,
+      successMessage: 'Zapisano ustawienia pobierania map offline.'
+    });
+  });
+
+  tileDownloadRefreshBtn?.addEventListener('click', async () => {
+    await persistTileDownloadSettings({
+      button: tileDownloadRefreshBtn,
+      successMessage: 'Przeliczono stan pobierania map offline.'
+    });
+  });
+
+  tileDownloadStartBtn?.addEventListener('click', async () => {
+    await persistTileDownloadSettings({
+      button: tileDownloadStartBtn,
+      successMessage: null
+    });
+    setButtonBusy(tileDownloadStartBtn, true, 'Pobieranie...');
+    try {
+      const result = await window.appApi.startTileDownload();
+      renderTileDownloadSection(result);
+      appendLog('Uruchomiono pobieranie kafelkow offline.');
+    } catch (error) {
+      appendLog(`Nie udalo sie uruchomic pobierania kafelkow: ${error.message}`);
+    } finally {
+      setButtonBusy(tileDownloadStartBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
+  tileDownloadPauseBtn?.addEventListener('click', async () => {
+    setButtonBusy(tileDownloadPauseBtn, true, 'Zatrzymywanie...');
+    try {
+      const result = await window.appApi.pauseTileDownload();
+      renderTileDownloadSection(result);
+      appendLog('Wyslano zadanie zatrzymania pobierania kafelkow.');
+    } catch (error) {
+      appendLog(`Nie udalo sie zatrzymac pobierania kafelkow: ${error.message}`);
+    } finally {
+      setButtonBusy(tileDownloadPauseBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
   void bootstrap();
 
   return {
@@ -249,6 +317,13 @@ export function initDashboardPanel({
       apiKeyInput.placeholder = 'Klucz ladowany automatycznie z ~/secrets/google_maps_api';
     }
     renderSummary(data.summary);
+    if (hasTileDownloadSection()) {
+      try {
+        renderTileDownloadSection(await window.appApi.getTileDownloadState());
+      } catch (_error) {
+        renderTileDownloadSection(data.summary?.offlineTiles);
+      }
+    }
     if (readyMessage) {
       appendLog(readyMessage);
     }
@@ -305,6 +380,30 @@ export function initDashboardPanel({
     }
     if (showUpdateMessageBtn) {
       showUpdateMessageBtn.disabled = !lastUpdaterState?.announcementAvailable;
+    }
+  }
+
+  async function persistTileDownloadSettings({ button = null, successMessage = null } = {}) {
+    if (!hasTileDownloadSection()) {
+      return null;
+    }
+
+    if (button) {
+      setButtonBusy(button, true, 'Zapisywanie...');
+    }
+
+    try {
+      const result = await window.appApi.saveTileDownloadSettings(readTileDownloadSettingsForm());
+      renderTileDownloadSection(result);
+      if (successMessage) {
+        appendLog(successMessage);
+      }
+      return result;
+    } finally {
+      if (button) {
+        setButtonBusy(button, false);
+      }
+      syncTileDownloadControls();
     }
   }
 
@@ -370,6 +469,7 @@ export function initDashboardPanel({
 
   function renderSummary(summary) {
     renderScopedSummary(root, summary);
+    renderTileDownloadSection(summary?.offlineTiles);
 
     accessPathEl.textContent = summarizePath(summary?.settings?.accessDbPath || '');
     importStatusEl.textContent = summary?.importMeta?.imported_at
@@ -385,6 +485,93 @@ export function initDashboardPanel({
     `;
 
     onSummaryUpdated?.(summary);
+  }
+
+  function hasTileDownloadSection() {
+    return Boolean(
+      tileZ12RadiusKmInput &&
+      tileZ14RadiusKmInput &&
+      tileZ16RadiusMetersInput &&
+      tileDownloadConcurrencyInput
+    );
+  }
+
+  function readTileDownloadSettingsForm() {
+    return {
+      z12RadiusKm: Number(tileZ12RadiusKmInput?.value || 0),
+      z14RadiusKm: Number(tileZ14RadiusKmInput?.value || 0),
+      z16RadiusMeters: Number(tileZ16RadiusMetersInput?.value || 0),
+      concurrency: Number(tileDownloadConcurrencyInput?.value || 4)
+    };
+  }
+
+  function renderTileDownloadSection(payload = null) {
+    if (!hasTileDownloadSection() || !payload) {
+      return;
+    }
+
+    lastTileDownloadPayload = payload;
+    const settings = payload?.settings || {};
+    const state = payload?.state || {};
+    const totalTiles = Number(state.totalTiles || 0);
+    const downloadedTiles = Number(state.downloadedTiles || 0);
+    const failedTiles = Number(state.failedTiles || 0);
+    const progressPercent = totalTiles > 0 ? Math.min(100, (downloadedTiles / totalTiles) * 100) : 0;
+    const planSummary = state.planSummary || null;
+    const countsByZoom = planSummary?.countsByZoom || {};
+    const planLabel = totalTiles > 0
+      ? [
+          countsByZoom[12] ? `z12: ${formatNumber(countsByZoom[12])}` : null,
+          countsByZoom[14] ? `z14: ${formatNumber(countsByZoom[14])}` : null,
+          countsByZoom[16] ? `z16: ${formatNumber(countsByZoom[16])}` : null
+        ].filter(Boolean).join(' | ')
+      : 'Brak wyliczen';
+
+    tileZ12RadiusKmInput.value = stringifySettingValue(settings.z12RadiusKm, 1);
+    tileZ14RadiusKmInput.value = stringifySettingValue(settings.z14RadiusKm, 1);
+    tileZ16RadiusMetersInput.value = stringifySettingValue(settings.z16RadiusMeters, 0);
+    tileDownloadConcurrencyInput.value = stringifySettingValue(settings.concurrency, 0);
+
+    tileDownloadPhaseEls.forEach((target) => {
+      target.textContent = formatTileDownloadPhaseLabel(state.phase);
+    });
+    tileDownloadProgressEls.forEach((target) => {
+      target.textContent = `${formatDecimal(progressPercent, 1)}%`;
+    });
+    tileDownloadSpeedEls.forEach((target) => {
+      target.textContent = state.speedBps > 0 ? `${formatBytes(state.speedBps)}/s` : 'Brak transferu';
+    });
+    tileDownloadCountsEls.forEach((target) => {
+      target.textContent = `${formatNumber(downloadedTiles)} / ${formatNumber(totalTiles)}`;
+    });
+    tileDownloadPointsEls.forEach((target) => {
+      target.textContent = formatNumber(planSummary?.pointsCount || 0);
+    });
+    tileDownloadPlanEls.forEach((target) => {
+      target.textContent = planLabel;
+    });
+    tileDownloadErrorEls.forEach((target) => {
+      target.textContent = state.lastError
+        ? `${state.lastError}${failedTiles > 0 ? ` (${formatNumber(failedTiles)} bledow)` : ''}`
+        : (failedTiles > 0 ? `${formatNumber(failedTiles)} bledow bez aktywnego komunikatu` : 'Brak');
+    });
+
+    syncTileDownloadControls(state);
+  }
+
+  function syncTileDownloadControls(state = lastTileDownloadPayload?.state || null) {
+    if (!hasTileDownloadSection()) {
+      return;
+    }
+
+    const phase = state?.phase || 'idle';
+    const isDownloading = phase === 'downloading' || phase === 'pausing';
+    if (tileDownloadStartBtn) {
+      tileDownloadStartBtn.disabled = isDownloading;
+    }
+    if (tileDownloadPauseBtn) {
+      tileDownloadPauseBtn.disabled = !isDownloading;
+    }
   }
 
   function appendLog(message) {
@@ -440,6 +627,61 @@ export function initDashboardPanel({
         return null;
     }
   }
+}
+
+function stringifySettingValue(value, fractionDigits = 0) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return '';
+  }
+  return fractionDigits > 0 ? numericValue.toFixed(fractionDigits) : String(Math.round(numericValue));
+}
+
+function formatTileDownloadPhaseLabel(phase) {
+  switch (phase) {
+    case 'downloading':
+      return 'Pobieranie';
+    case 'pausing':
+      return 'Zatrzymywanie';
+    case 'paused':
+      return 'Wstrzymane';
+    case 'completed':
+      return 'Kompletne';
+    case 'error':
+      return 'Blad';
+    default:
+      return 'Gotowe';
+  }
+}
+
+function formatBytes(bytes) {
+  const numericValue = Number(bytes || 0);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let unitIndex = 0;
+  let value = numericValue;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = value >= 100 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function formatDecimal(value, fractionDigits = 1) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue)) {
+    return '0';
+  }
+
+  return new Intl.NumberFormat('pl-PL', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
+  }).format(numericValue);
 }
 
 function renderScopedSummary(root, summary) {

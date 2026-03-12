@@ -350,9 +350,30 @@ textarea {
 
 .map-canvas-panel {
   display: flex;
+  position: relative;
   padding: 0;
   border-right: 1px solid rgba(48, 67, 54, 0.16);
   background: transparent;
+}
+
+.map-dev-hud {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 600;
+  min-width: 104px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(35, 65, 46, 0.18);
+  background: rgba(248, 251, 246, 0.9);
+  color: #23412e;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 24px rgba(35, 65, 46, 0.12);
+  pointer-events: none;
+  backdrop-filter: blur(10px);
 }
 
 .map-info-panel {
@@ -449,6 +470,33 @@ textarea {
   margin-top: 0;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  height: 100%;
+}
+
+.map-selection-cards.map-selection-cards-filter .time-filter-panel {
+  margin-bottom: 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-placeholder-stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  height: 100%;
+  padding: 18px 0 0;
+}
+
+.filter-placeholder-image {
+  display: block;
+  width: min(100%, 380px);
+  height: auto;
+  max-height: none;
+  align-self: center;
+  justify-self: center;
+  border-radius: 24px;
+  box-shadow: 0 24px 50px rgba(48, 31, 7, 0.18);
 }
 
 .map-selection-cards.map-selection-cards-search {
@@ -2764,6 +2812,11 @@ body.map-page .service-map {
     min-height: 420px;
   }
 
+  .map-dev-hud {
+    top: 12px;
+    right: 12px;
+  }
+
   .map-tool-button {
     width: 48px;
     height: 48px;
@@ -2808,6 +2861,23 @@ body.map-page .service-map {
     radial-gradient(circle at 18% 16%, rgba(255, 255, 255, 0.45), transparent 18%),
     radial-gradient(circle at 78% 12%, rgba(255, 255, 255, 0.24), transparent 24%),
     linear-gradient(180deg, #c9dbcf 0%, #aec6b5 100%);
+}
+
+.leaflet-control-scale {
+  margin: 0 0 18px 18px;
+}
+
+.leaflet-control-scale-line {
+  border-color: rgba(35, 65, 46, 0.56);
+  background: rgba(248, 251, 246, 0.9);
+  color: #23412e;
+  border-radius: 6px 6px 0 0;
+  box-shadow: 0 10px 24px rgba(35, 65, 46, 0.12);
+}
+
+.leaflet-control-scale-line:not(:first-child) {
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
 }
 
 .leaflet-popup-content-wrapper {
