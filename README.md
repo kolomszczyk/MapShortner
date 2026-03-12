@@ -66,13 +66,62 @@ To utworzy tag typu `v0.1.1` i pipeline zbuduje instalatory oraz opublikuje rele
 
 ## 6) Jak przetestować aktualizację
 
-1. Zainstaluj wersję `0.1.0`.
-2. Zwiększ wersję (`npm version patch`) i opublikuj `0.1.1`.
-3. Uruchom ponownie aplikację `0.1.0` i sprawdź status update.
+### Test lokalny samego ekranu pobierania
+
+To testuje tylko UI statusu aktualizacji, bez prawdziwego release i bez pobierania plikow updatera.
+
+1. Uruchom aplikacje w trybie developerskim:
+
+```bash
+npm run dev
+```
+
+2. Otworz dashboard i przejdz do sekcji `Aktualizacje aplikacji`.
+3. Uzyj przyciskow:
+   - `Symuluj sprawdzanie`
+   - `Symuluj pobieranie`
+   - `Symuluj pobrano`
+   - `Symuluj blad`
+   - `Reset testu`
+4. `Symuluj pobieranie` pokazuje ten sam ekran/status, ktory uzywany jest dla prawdziwego flow aktualizacji.
+
+### Test end-to-end z prawdziwym release
+
+1. Zainstaluj starsza wersje aplikacji, np. `0.5.1`.
+2. Zwieksz wersje w repo:
+
+```bash
+npm version patch
+```
+
+3. Opublikuj release z assetami updatera:
+
+```bash
+git push origin main --follow-tags
+```
+
+albo lokalnie:
+
+```bash
+export GH_TOKEN=twoj_personal_access_token
+npm run release
+```
+
+4. Uruchom ponownie zainstalowana starsza wersje aplikacji.
+5. Sprawdz sekcje `Aktualizacje aplikacji` oraz gorny status aplikacji.
+6. Po wykryciu nowszego release aplikacja rozpocznie pobieranie, a po zakonczeniu wykona instalacje i restart.
+
+### Specjalna wiadomosc w popupie nowej wersji
+
+- Popup `Nowa wersja` pokazuje sie tylko wtedy, gdy updater wykryje nowszy release.
+- Jesli release ma opis na GitHubie, jego tresc zostanie pokazana jako specjalna wiadomosc.
+- Jesli opis release jest pusty, popup pokaze zwykly komunikat o dostepnej wersji.
+- Po zamknieciu popupu mozna go otworzyc ponownie przyciskiem `Pokaz wiadomosc wersji` w dashboardzie.
 
 ## Uwaga
 
 - Auto-update działa dla aplikacji zbudowanej przez `electron-builder` (nie dla `npm run start`).
+- `npm run dev` sluzy tylko do lokalnego testu interfejsu aktualizacji przez symulacje.
 - Na Linuxie używany jest target `AppImage`, na Windowsie `NSIS`.
 
 ## Diagnostyka błędu `Unable to find latest version on GitHub` / `406`

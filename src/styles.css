@@ -488,8 +488,7 @@ textarea {
   box-shadow: -12px 0 28px rgba(25, 35, 28, 0.08);
 }
 
-.map-settings-upper,
-.map-settings-lower {
+.map-settings-upper {
   width: 100%;
   display: flex;
 }
@@ -502,17 +501,7 @@ textarea {
   gap: 22px;
 }
 
-.map-settings-lower {
-  flex: 0 0 auto;
-  margin-top: auto;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  align-items: center;
-  justify-content: center;
-}
-
-.map-tool-button,
-.settings-gear-button {
+.map-tool-button {
   position: relative;
   width: 54px;
   height: 54px;
@@ -520,8 +509,6 @@ textarea {
   border-radius: 18px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #335f42 0%, #23412e 100%);
-  box-shadow: 0 14px 24px rgba(35, 65, 46, 0.22);
 }
 
 .map-tool-button {
@@ -530,19 +517,16 @@ textarea {
   text-decoration: none;
 }
 
-.map-tool-button:hover:not(:disabled),
-.settings-gear-button:hover:not(:disabled) {
+.map-tool-button:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
-.map-tool-button:not(.is-active):hover:not(:disabled),
-.settings-gear-button:not(.is-active):hover:not(:disabled) {
+.map-tool-button:not(.is-active):hover:not(:disabled) {
   background: linear-gradient(135deg, #4b8e5f 0%, #2f6841 100%);
   box-shadow: 0 14px 24px rgba(47, 104, 65, 0.22);
 }
 
-.map-tool-button.is-active:hover:not(:disabled),
-.settings-gear-button.is-active:hover:not(:disabled) {
+.map-tool-button.is-active:hover:not(:disabled) {
   background: linear-gradient(135deg, #4b8e5f 0%, #2f6841 100%);
 }
 
@@ -559,21 +543,7 @@ textarea {
   border: 1px solid rgba(75, 142, 95, 0.34);
 }
 
-.settings-gear-button.is-active {
-  background: linear-gradient(135deg, #4b8e5f 0%, #2f6841 100%);
-  box-shadow: 0 16px 28px rgba(47, 104, 65, 0.24);
-}
-
-.settings-gear-button.is-active::after {
-  content: '';
-  position: absolute;
-  inset: -6px;
-  border-radius: 22px;
-  border: 1px solid rgba(75, 142, 95, 0.34);
-}
-
-.map-tool-button i,
-.settings-gear-button .fa-gear {
+.map-tool-button i {
   font-size: 28px;
   line-height: 1;
   color: #f4f8f1;
@@ -826,6 +796,67 @@ textarea {
   color: var(--text);
   opacity: 1;
   text-decoration: underline;
+}
+
+.update-announcement-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(25, 35, 28, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+.update-announcement-layer[hidden] {
+  display: none !important;
+}
+
+.update-announcement-card {
+  width: min(520px, 100%);
+  padding: 28px 26px 22px;
+  border-radius: 30px;
+  border: 1px solid rgba(48, 67, 54, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 252, 245, 0.98) 0%, rgba(245, 248, 242, 0.96) 100%);
+  box-shadow: 0 30px 70px rgba(25, 35, 28, 0.22);
+  display: grid;
+  gap: 12px;
+}
+
+.update-announcement-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.update-announcement-title {
+  margin: 0;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: clamp(1.7rem, 4vw, 2.25rem);
+  line-height: 0.98;
+}
+
+.update-announcement-version {
+  margin: 0;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.update-announcement-copy {
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-announcement-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
 }
 
 @keyframes startup-update-indeterminate {
@@ -2535,8 +2566,7 @@ body.map-page .service-map {
     border-top: 1px solid rgba(48, 67, 54, 0.22);
   }
 
-  .map-settings-upper,
-  .map-settings-lower {
+  .map-settings-upper {
     width: auto;
     align-items: center;
   }
@@ -2547,12 +2577,6 @@ body.map-page .service-map {
     justify-content: flex-start;
     gap: 10px;
     flex-wrap: wrap;
-  }
-
-  .map-settings-lower {
-    margin-top: 0;
-    padding: 0;
-    justify-content: flex-end;
   }
 
   .hero-stats,
@@ -2677,8 +2701,7 @@ body.map-page .service-map {
     min-height: 420px;
   }
 
-  .map-tool-button,
-  .settings-gear-button {
+  .map-tool-button {
     width: 48px;
     height: 48px;
   }

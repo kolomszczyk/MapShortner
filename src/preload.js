@@ -3,7 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('appApi', {
   getBootstrap: () => ipcRenderer.invoke('app:getBootstrap'),
   getUpdaterState: () => ipcRenderer.invoke('updater:getState'),
+  showUpdateAnnouncement: () => ipcRenderer.invoke('updater:showAnnouncement'),
+  hideUpdateAnnouncement: () => ipcRenderer.invoke('updater:hideAnnouncement'),
   checkNow: () => ipcRenderer.invoke('updater:checkNow'),
+  simulateUpdater: (payload) => ipcRenderer.invoke('updater:simulate', payload),
   installNow: () => ipcRenderer.invoke('updater:installNow'),
   skipStartupUpdate: () => ipcRenderer.invoke('updater:skipStartup'),
   saveAccessPassword: (password) => ipcRenderer.invoke('settings:saveAccessPassword', password),

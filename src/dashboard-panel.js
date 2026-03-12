@@ -11,6 +11,7 @@ export function initDashboardPanel({
   const passwordStatusEl = root.querySelector('#password-status');
   const importStatusEl = root.querySelector('#import-status');
   const checkBtn = root.querySelector('#check-btn');
+  const showUpdateMessageBtn = root.querySelector('#show-update-message-btn');
   const installBtn = root.querySelector('#install-btn');
   const chooseFileBtn = root.querySelector('#choose-file-btn');
   const saveAccessPasswordBtn = root.querySelector('#save-access-password-btn');
@@ -23,7 +24,15 @@ export function initDashboardPanel({
   const geocodeLimitInput = root.querySelector('#geocode-limit');
   const operationLogEl = root.querySelector('#operation-log');
   const importMetaEl = root.querySelector('#import-meta');
+  const updaterDetailEl = root.querySelector('[data-updater-detail]');
+  const updaterTestControlsEl = root.querySelector('[data-updater-test-controls]');
+  const updaterTestNoteEl = root.querySelector('[data-updater-test-note]');
   let lastUpdaterState = null;
+  let lastUpdaterLogKey = null;
+  let runtimeMeta = {
+    version: null,
+    isDevMode: false
+  };
 
   if (
     !accessPathEl ||
@@ -38,6 +47,8 @@ export function initDashboardPanel({
 
   window.appApi.onUpdaterState((state) => {
     syncUpdaterControls(state);
+    renderUpdaterDetails(state);
+    appendUpdaterLog(state);
   });
 
   window.appApi.onOperationStatus((payload) => {
@@ -61,6 +72,39 @@ export function initDashboardPanel({
 
   installBtn?.addEventListener('click', async () => {
     await window.appApi.installNow();
+  });
+
+  showUpdateMessageBtn?.addEventListener('click', async () => {
+    try {
+      await window.appApi.showUpdateAnnouncement();
+    } catch (error) {
+      appendLog(`Nie udalo sie otworzyc wiadomosci wersji: ${error.message}`);
+    }
+  });
+
+  root.querySelectorAll('[data-updater-sim]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!runtimeMeta.isDevMode) {
+        return;
+      }
+
+      const payload = {
+        phase: button.dataset.updaterSim
+      };
+      const progressPercent = Number(button.dataset.updaterProgress);
+      if (Number.isFinite(progressPercent)) {
+        payload.progressPercent = progressPercent;
+      }
+
+      setButtonBusy(button, true, 'Symulacja...');
+      try {
+        await window.appApi.simulateUpdater(payload);
+      } catch (error) {
+        appendLog(`Nie udalo sie zasymulowac aktualizacji: ${error.message}`);
+      } finally {
+        setButtonBusy(button, false);
+      }
+    });
   });
 
   chooseFileBtn?.addEventListener('click', async () => {
@@ -180,7 +224,19 @@ export function initDashboardPanel({
 
   async function bootstrap() {
     const data = bootstrapData || await window.appApi.getBootstrap();
+    runtimeMeta = {
+      version: data.version || null,
+      isDevMode: data.isDevMode === true
+    };
+    if (updaterTestControlsEl) {
+      updaterTestControlsEl.hidden = !runtimeMeta.isDevMode;
+    }
+    if (updaterTestNoteEl) {
+      updaterTestNoteEl.hidden = !runtimeMeta.isDevMode;
+    }
     syncUpdaterControls(data.updater);
+    renderUpdaterDetails(data.updater);
+    lastUpdaterLogKey = getUpdaterLogKey(data.updater);
     setAccessPasswordStatus(Boolean(data.passwordConfigured));
     apiKeyInput.value = data.summary?.settings?.googleMapsApiKey || '';
     if (!apiKeyInput.value && data.googleMapsConfigured) {
@@ -241,6 +297,69 @@ export function initDashboardPanel({
     if (checkBtn) {
       checkBtn.disabled = ['checking', 'downloading', 'installing'].includes(lastUpdaterState?.phase);
     }
+    if (showUpdateMessageBtn) {
+      showUpdateMessageBtn.disabled = !lastUpdaterState?.announcementAvailable;
+    }
+  }
+
+  function renderUpdaterDetails(state = lastUpdaterState) {
+    if (!updaterDetailEl) {
+      return;
+    }
+
+    const currentVersion = runtimeMeta.version ? `Aktualna wersja: ${runtimeMeta.version}.` : '';
+    const devSuffix = runtimeMeta.isDevMode
+      ? 'W npm run dev prawdziwy auto-update jest wylaczony, ale mozesz przetestowac ekran przyciskami powyzej.'
+      : '';
+
+    let details = 'Po wykryciu nowej wersji aplikacja pobierze ja automatycznie, a po zakonczeniu uruchomi instalacje i restart.';
+
+    switch (state?.phase) {
+      case 'checking':
+        details = 'Trwa sprawdzanie GitHub Releases pod katem nowej wersji.';
+        break;
+      case 'downloading':
+        details = state?.version
+          ? `Wykryto nowa wersje ${state.version} i trwa jej pobieranie. Po zakonczeniu aplikacja sama uruchomi instalacje oraz restart.`
+          : 'Trwa pobieranie nowej wersji aplikacji.';
+        break;
+      case 'downloaded':
+        details = state?.version
+          ? `Nowa wersja ${state.version} jest juz pobrana. Za chwile ruszy instalacja i restart, a lokalny import SQLite pozostanie zachowany.`
+          : 'Aktualizacja jest juz pobrana i czeka na instalacje.';
+        break;
+      case 'installing':
+        details = 'Instalacja aktualizacji jest w toku. Aplikacja za chwile uruchomi sie ponownie.';
+        break;
+      case 'up-to-date':
+        details = 'Ta instalacja jest aktualna. Nic nie trzeba pobierac.';
+        break;
+      case 'error':
+        details = state?.message || 'Nie udalo sie sprawdzic lub pobrac aktualizacji.';
+        break;
+      default:
+        if (state?.announcementAvailable && state?.announcementVersion) {
+          details = state.announcementHasSpecialMessage
+            ? `Dostepna jest nowa wersja ${state.announcementVersion}. Popup pokazuje tez specjalna wiadomosc z opisu release.`
+            : `Dostepna jest nowa wersja ${state.announcementVersion}. Popup pokaze zwykly komunikat bez dodatkowej wiadomosci.`;
+        }
+        break;
+    }
+
+    updaterDetailEl.textContent = [currentVersion, details, devSuffix].filter(Boolean).join(' ');
+  }
+
+  function appendUpdaterLog(state = lastUpdaterState) {
+    const nextKey = getUpdaterLogKey(state);
+    if (!nextKey || nextKey === lastUpdaterLogKey) {
+      return;
+    }
+
+    lastUpdaterLogKey = nextKey;
+    const message = getUpdaterLogMessage(state);
+    if (message) {
+      appendLog(message);
+    }
   }
 
   function renderSummary(summary) {
@@ -272,6 +391,47 @@ export function initDashboardPanel({
     operationLogEl.prepend(item);
     while (operationLogEl.children.length > 16) {
       operationLogEl.removeChild(operationLogEl.lastElementChild);
+    }
+  }
+
+  function getUpdaterLogKey(state) {
+    switch (state?.phase) {
+      case 'checking':
+      case 'up-to-date':
+      case 'installing':
+      case 'dismissed':
+        return state.phase;
+      case 'downloading':
+      case 'downloaded':
+        return `${state.phase}:${state.version || ''}`;
+      case 'error':
+        return `${state.phase}:${state.message || ''}`;
+      default:
+        return null;
+    }
+  }
+
+  function getUpdaterLogMessage(state) {
+    switch (state?.phase) {
+      case 'checking':
+        return 'Rozpoczeto sprawdzanie aktualizacji aplikacji.';
+      case 'downloading':
+        return state?.version
+          ? `Znaleziono nowa wersje ${state.version}. Trwa pobieranie.`
+          : 'Rozpoczeto pobieranie aktualizacji aplikacji.';
+      case 'downloaded':
+        return state?.version
+          ? `Nowa wersja ${state.version} zostala pobrana. Za chwile rozpocznie sie instalacja.`
+          : 'Aktualizacja zostala pobrana.';
+      case 'installing':
+        return 'Trwa instalacja aktualizacji i restart aplikacji.';
+      case 'up-to-date':
+        return 'Brak nowych aktualizacji aplikacji.';
+      case 'dismissed':
+      case 'error':
+        return state?.message || 'Aktualizacja aplikacji zakonczona komunikatem systemowym.';
+      default:
+        return null;
     }
   }
 }

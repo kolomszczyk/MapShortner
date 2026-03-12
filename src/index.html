@@ -148,11 +148,38 @@
 
           <div class="action-row">
             <button id="check-btn" type="button">Sprawdz aktualizacje</button>
+            <button id="show-update-message-btn" type="button" class="button-muted" disabled>
+              Pokaz wiadomosc wersji
+            </button>
           </div>
 
+          <p class="copy" data-updater-detail>
+            Status aktualizacji i informacja o nowej wersji beda pokazywane w tym miejscu.
+          </p>
+
+          <div class="action-row" data-updater-test-controls hidden>
+            <button type="button" data-updater-sim="checking">Symuluj sprawdzanie</button>
+            <button type="button" data-updater-sim="downloading" data-updater-progress="42">
+              Symuluj pobieranie
+            </button>
+            <button type="button" data-updater-sim="downloaded">Symuluj pobrano</button>
+            <button type="button" data-updater-sim="error">Symuluj blad</button>
+            <button type="button" data-updater-sim="reset">Reset testu</button>
+          </div>
+
+          <p class="copy copy-warning" data-updater-test-note hidden>
+            Lokalny test ekranu pobierania dziala tylko w <code>npm run dev</code>.
+          </p>
+
           <p class="copy">
-            Auto-update zostal zachowany. Po pobraniu nowej wersji aplikacja instaluje ja i restartuje
-            sie automatycznie. Ostatni import zapisuje sie lokalnie i jest niezalezny od procesu wydania aplikacji.
+            Prawdziwy auto-update dziala tylko dla aplikacji zbudowanej przez
+            <code>electron-builder</code>. Po pobraniu nowej wersji aplikacja instaluje ja i restartuje
+            sie automatycznie, a ostatni import zapisuje sie lokalnie i jest niezalezny od procesu wydania aplikacji.
+          </p>
+
+          <p class="copy">
+            Aby pokazac specjalny tekst w popupie nowej wersji, wpisz go w opisie GitHub Release.
+            Jesli opis release jest pusty, aplikacja pokaze zwykly komunikat o dostepnej wersji.
           </p>
         </section>
 

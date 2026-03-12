@@ -17,7 +17,6 @@ const mapEl = document.getElementById('service-map');
 const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
-const settingsButtonEl = document.querySelector('.settings-gear-button');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
@@ -459,10 +458,6 @@ function focusMapTimeColorLabelInput(rangeId, options = {}) {
   const valueLength = typeof labelInput.value === 'string' ? labelInput.value.length : 0;
   labelInput.setSelectionRange?.(valueLength, valueLength);
 }
-
-settingsButtonEl?.addEventListener('click', () => {
-  toggleSettingsPanel(undefined, { historyEntry: 'push' });
-});
 
 selectionButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('selection');
@@ -1217,8 +1212,6 @@ function syncSettingsPanelVisibility() {
   mapBoardEl?.classList.toggle('is-settings-open', isSettingsOpen);
   mapContentGroupEl?.classList.toggle('is-settings-open', isSettingsOpen);
   mapInfoPanelEl?.classList.toggle('is-settings-open', isSettingsOpen);
-  settingsButtonEl?.classList.toggle('is-active', isSettingsOpen);
-  settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsOpen));
   syncInfoToolButtons();
 }
 

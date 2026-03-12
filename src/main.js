@@ -33,6 +33,7 @@ const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
 const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
 const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
+const DEV_SIMULATED_UPDATE_VERSION = '0.5.99-test';
 const DEFAULT_WINDOW_BOUNDS = Object.freeze({
   width: 1480,
   height: 980
@@ -64,7 +65,13 @@ let updaterState = {
   readyToInstall: false,
   progressPercent: null,
   version: null,
-  source: null
+  source: null,
+  announcementAvailable: false,
+  announcementVisible: false,
+  announcementVersion: null,
+  announcementTitle: null,
+  announcementMessage: null,
+  announcementHasSpecialMessage: false
 };
 let currentUpdateCheckSource = null;
 let startupUpdateFlowPromise = null;
@@ -73,6 +80,42 @@ let startupUpdateResolutionTimer = null;
 let startupUpdateInstallTimer = null;
 let startupUpdateBlockTimer = null;
 let startupUpdateInstallArmed = false;
+
+function getDevModeUpdaterMessage() {
+  return 'Tryb dev: auto-reload wlaczony, auto-update wylaczony.';
+}
+
+function normalizeReleaseAnnouncementText(value) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function getReleaseAnnouncement(info = {}) {
+  const version = String(info.version || '').trim() || null;
+  const releaseName = normalizeReleaseAnnouncementText(info.releaseName);
+
+  let releaseNotes = '';
+  if (typeof info.releaseNotes === 'string') {
+    releaseNotes = normalizeReleaseAnnouncementText(info.releaseNotes);
+  } else if (Array.isArray(info.releaseNotes)) {
+    const matchingNote = info.releaseNotes.find((entry) => entry?.version === version && entry?.note) || info.releaseNotes[0];
+    releaseNotes = normalizeReleaseAnnouncementText(matchingNote?.note);
+  }
+
+  const title = releaseName || (version ? `Nowa wersja ${version}` : 'Nowa wersja aplikacji');
+  const message = releaseNotes || (version
+    ? `Dostepna jest nowa wersja ${version}. Pobieranie rozpoczelo sie automatycznie.`
+    : 'Dostepna jest nowa wersja aplikacji. Pobieranie rozpoczelo sie automatycznie.');
+
+  return {
+    version,
+    title,
+    message,
+    hasSpecialMessage: Boolean(releaseNotes)
+  };
+}
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -94,6 +137,24 @@ function setUpdaterState(patch) {
     ...patch
   };
   sendToRenderer('updater:state', getUpdaterState());
+}
+
+function showUpdateAnnouncement() {
+  if (!updaterState.announcementAvailable) {
+    return getUpdaterState();
+  }
+
+  setUpdaterState({
+    announcementVisible: true
+  });
+  return getUpdaterState();
+}
+
+function hideUpdateAnnouncement() {
+  setUpdaterState({
+    announcementVisible: false
+  });
+  return getUpdaterState();
 }
 
 function sendOperationStatus(payload) {
@@ -214,6 +275,176 @@ function installDownloadedUpdate({ version = null, visible = false, source = cur
     });
     autoUpdater.quitAndInstall();
   }, STARTUP_UPDATE_INSTALL_DELAY_MS);
+}
+
+function simulateUpdaterState(payload = {}) {
+  if (!isDevMode) {
+    throw new Error('Symulacja aktualizacji jest dostepna tylko w trybie dev.');
+  }
+
+  const phase = String(payload.phase || 'idle');
+  const version = String(payload.version || DEV_SIMULATED_UPDATE_VERSION).trim() || DEV_SIMULATED_UPDATE_VERSION;
+  const requestedProgress = Number(payload.progressPercent);
+  const progressPercent = Number.isFinite(requestedProgress)
+    ? Math.max(0, Math.min(100, requestedProgress))
+    : 42;
+  const announcement = {
+    announcementAvailable: true,
+    announcementVisible: true,
+    announcementVersion: version,
+    announcementTitle: payload.title ? String(payload.title).trim() : `Nowa wersja ${version}`,
+    announcementMessage: payload.announcementMessage
+      ? String(payload.announcementMessage).trim()
+      : `To jest testowa wiadomosc dla wersji ${version}.`,
+    announcementHasSpecialMessage: Boolean(payload.announcementMessage)
+  };
+
+  currentUpdateCheckSource = 'dev';
+  clearStartupUpdateInstallTimer();
+
+  switch (phase) {
+    case 'available':
+      sendUpdateStatus(`Dostepna jest nowa wersja ${version}. Trwa pobieranie...`);
+      setUpdaterState({
+        phase: 'downloading',
+        message: `Dostepna jest nowa wersja ${version}. Trwa pobieranie...`,
+        visible: false,
+        canSkip: false,
+        readyToInstall: false,
+        progressPercent: 0,
+        version,
+        source: 'dev',
+        ...announcement
+      });
+      break;
+    case 'checking':
+      sendUpdateStatus('Sprawdzanie aktualizacji...');
+      setUpdaterState({
+        phase: 'checking',
+        message: 'Sprawdzanie aktualizacji...',
+        visible: true,
+        canSkip: true,
+        readyToInstall: false,
+        progressPercent: null,
+        version: null,
+        source: 'dev'
+      });
+      break;
+    case 'downloading':
+      sendUpdateStatus(`Pobieranie aktualizacji ${version}: ${progressPercent.toFixed(1)}%`);
+      setUpdaterState({
+        phase: 'downloading',
+        message: `Pobieranie aktualizacji ${version}: ${progressPercent.toFixed(1)}%`,
+        visible: true,
+        canSkip: true,
+        readyToInstall: false,
+        progressPercent,
+        version,
+        source: 'dev',
+        ...announcement
+      });
+      break;
+    case 'downloaded':
+      sendUpdateStatus(`Aktualizacja ${version} pobrana. Za chwile instalacja i restart aplikacji.`);
+      setUpdaterState({
+        phase: 'downloaded',
+        message: `Aktualizacja ${version} pobrana. Za chwile instalacja i restart aplikacji.`,
+        visible: true,
+        canSkip: false,
+        readyToInstall: false,
+        progressPercent: 100,
+        version,
+        source: 'dev',
+        announcementAvailable: true,
+        announcementVisible: false,
+        announcementVersion: version,
+        announcementTitle: announcement.announcementTitle,
+        announcementMessage: announcement.announcementMessage,
+        announcementHasSpecialMessage: announcement.announcementHasSpecialMessage
+      });
+      break;
+    case 'installing':
+      sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
+      setUpdaterState({
+        phase: 'installing',
+        message: 'Instalowanie aktualizacji i ponowne uruchamianie...',
+        visible: true,
+        canSkip: false,
+        readyToInstall: true,
+        progressPercent: 100,
+        version,
+        source: 'dev',
+        announcementAvailable: true,
+        announcementVisible: false,
+        announcementVersion: version,
+        announcementTitle: announcement.announcementTitle,
+        announcementMessage: announcement.announcementMessage,
+        announcementHasSpecialMessage: announcement.announcementHasSpecialMessage
+      });
+      break;
+    case 'up-to-date':
+      sendUpdateStatus('Brak nowych aktualizacji.');
+      setUpdaterState({
+        phase: 'up-to-date',
+        message: 'Brak nowych aktualizacji.',
+        visible: true,
+        canSkip: false,
+        readyToInstall: false,
+        progressPercent: null,
+        version: null,
+        source: 'dev',
+        announcementAvailable: false,
+        announcementVisible: false,
+        announcementVersion: null,
+        announcementTitle: null,
+        announcementMessage: null,
+        announcementHasSpecialMessage: false
+      });
+      break;
+    case 'error':
+      sendUpdateStatus('Blad aktualizacji: symulowany problem pobierania.');
+      setUpdaterState({
+        phase: 'error',
+        message: 'Blad aktualizacji: symulowany problem pobierania.',
+        visible: true,
+        canSkip: true,
+        readyToInstall: false,
+        progressPercent: null,
+        version,
+        source: 'dev',
+        announcementAvailable: false,
+        announcementVisible: false,
+        announcementVersion: null,
+        announcementTitle: null,
+        announcementMessage: null,
+        announcementHasSpecialMessage: false
+      });
+      break;
+    case 'idle':
+    case 'reset':
+      sendUpdateStatus(getDevModeUpdaterMessage());
+      setUpdaterState({
+        phase: 'idle',
+        message: getDevModeUpdaterMessage(),
+        visible: false,
+        canSkip: false,
+        readyToInstall: false,
+        progressPercent: null,
+        version: null,
+        source: 'dev',
+        announcementAvailable: false,
+        announcementVisible: false,
+        announcementVersion: null,
+        announcementTitle: null,
+        announcementMessage: null,
+        announcementHasSpecialMessage: false
+      });
+      break;
+    default:
+      throw new Error(`Nieznany stan symulacji aktualizacji: ${phase}`);
+  }
+
+  return getUpdaterState();
 }
 
 async function runStartupUpdateFlow() {
@@ -686,13 +917,19 @@ function startDevReloadWatcher() {
 
   setUpdaterState({
     phase: 'idle',
-    message: 'Tryb dev: auto-reload wlaczony, auto-update wylaczony.',
+    message: getDevModeUpdaterMessage(),
     visible: false,
     canSkip: false,
     readyToInstall: false,
     progressPercent: null,
     version: null,
-    source: 'dev'
+    source: 'dev',
+    announcementAvailable: false,
+    announcementVisible: false,
+    announcementVersion: null,
+    announcementTitle: null,
+    announcementMessage: null,
+    announcementHasSpecialMessage: false
   });
 }
 
@@ -794,6 +1031,7 @@ function configureAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     const startupFlowActive = currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise);
+    const announcement = getReleaseAnnouncement(info);
     sendUpdateStatus(`Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`);
     setUpdaterState({
       phase: 'downloading',
@@ -803,7 +1041,13 @@ function configureAutoUpdater() {
       readyToInstall: false,
       progressPercent: 0,
       version: info.version,
-      source: currentUpdateCheckSource
+      source: currentUpdateCheckSource,
+      announcementAvailable: true,
+      announcementVisible: true,
+      announcementVersion: announcement.version,
+      announcementTitle: announcement.title,
+      announcementMessage: announcement.message,
+      announcementHasSpecialMessage: announcement.hasSpecialMessage
     });
 
     if (startupFlowActive) {
@@ -1147,6 +1391,7 @@ app.on('before-quit', () => {
 
 ipcMain.handle('app:getBootstrap', async () => ({
   version: app.getVersion(),
+  isDevMode,
   passwordConfigured: Boolean(loadAccessPassword()),
   googleMapsConfigured: Boolean(loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey')),
   summary: store.getDashboardSummary(),
@@ -1154,6 +1399,8 @@ ipcMain.handle('app:getBootstrap', async () => ({
 }));
 
 ipcMain.handle('updater:getState', async () => getUpdaterState());
+ipcMain.handle('updater:showAnnouncement', async () => showUpdateAnnouncement());
+ipcMain.handle('updater:hideAnnouncement', async () => hideUpdateAnnouncement());
 
 ipcMain.handle('updater:checkNow', async () => {
   if (!autoUpdater) {
@@ -1170,6 +1417,8 @@ ipcMain.handle('updater:checkNow', async () => {
   await autoUpdater.checkForUpdates();
   return true;
 });
+
+ipcMain.handle('updater:simulate', async (_event, payload = {}) => simulateUpdaterState(payload));
 
 ipcMain.handle('updater:installNow', () => {
   if (!autoUpdater) {

@@ -1,4 +1,5 @@
 let startupUpdateOverlay = null;
+let updateAnnouncementOverlay = null;
 
 async function dismissStartupUpdateOverlay() {
   const overlay = ensureStartupUpdateOverlay();
@@ -10,6 +11,17 @@ async function dismissStartupUpdateOverlay() {
     overlay.manuallyClosed = false;
   } finally {
     overlay.skipButton.disabled = false;
+    overlay.closeButton.disabled = false;
+  }
+}
+
+async function dismissUpdateAnnouncementOverlay() {
+  const overlay = ensureUpdateAnnouncementOverlay();
+  overlay.closeButton.disabled = true;
+
+  try {
+    await window.appApi.hideUpdateAnnouncement();
+  } finally {
     overlay.closeButton.disabled = false;
   }
 }
@@ -39,6 +51,7 @@ export function initShell(pageId) {
       updaterStatusEl.textContent = state.message;
     }
     syncStartupUpdateOverlay(state);
+    syncUpdateAnnouncementOverlay(state);
   });
 
   void window.appApi
@@ -48,6 +61,7 @@ export function initShell(pageId) {
         updaterStatusEl.textContent = state.message;
       }
       syncStartupUpdateOverlay(state);
+      syncUpdateAnnouncementOverlay(state);
     })
     .catch(() => {});
 
@@ -135,6 +149,55 @@ function ensureStartupUpdateOverlay() {
   return startupUpdateOverlay;
 }
 
+function ensureUpdateAnnouncementOverlay() {
+  if (updateAnnouncementOverlay) {
+    return updateAnnouncementOverlay;
+  }
+
+  const layer = document.createElement('div');
+  layer.className = 'update-announcement-layer';
+  layer.hidden = true;
+  layer.innerHTML = `
+    <div class="update-announcement-card" role="dialog" aria-modal="true" aria-labelledby="update-announcement-title">
+      <span class="update-announcement-kicker">Nowa wersja</span>
+      <h2 id="update-announcement-title" class="update-announcement-title"></h2>
+      <p class="update-announcement-version"></p>
+      <div class="update-announcement-copy"></div>
+      <div class="update-announcement-actions">
+        <button type="button" class="button-muted update-announcement-close">Zamknij</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(layer);
+
+  const closeButton = layer.querySelector('.update-announcement-close');
+
+  layer.addEventListener('mousedown', (event) => {
+    if (event.target === layer && !closeButton.disabled) {
+      void dismissUpdateAnnouncementOverlay();
+    }
+  });
+
+  closeButton.addEventListener('click', async () => {
+    if (closeButton.disabled) {
+      return;
+    }
+
+    await dismissUpdateAnnouncementOverlay();
+  });
+
+  updateAnnouncementOverlay = {
+    layer,
+    title: layer.querySelector('.update-announcement-title'),
+    version: layer.querySelector('.update-announcement-version'),
+    copy: layer.querySelector('.update-announcement-copy'),
+    closeButton
+  };
+
+  return updateAnnouncementOverlay;
+}
+
 function getStartupUpdateTitle(state) {
   switch (state?.phase) {
     case 'checking':
@@ -191,6 +254,24 @@ function syncStartupUpdateOverlay(state) {
 
   overlay.skipButton.hidden = !state?.canSkip;
   overlay.closeButton.hidden = !state?.canSkip;
+}
+
+function syncUpdateAnnouncementOverlay(state) {
+  const overlay = ensureUpdateAnnouncementOverlay();
+  const isVisible = Boolean(state?.announcementVisible && state?.announcementAvailable);
+
+  overlay.layer.hidden = !isVisible;
+  overlay.layer.classList.toggle('is-visible', isVisible);
+  if (!isVisible) {
+    return;
+  }
+
+  overlay.title.textContent = state?.announcementTitle || 'Nowa wersja aplikacji';
+  overlay.version.textContent = state?.announcementVersion
+    ? `Wersja: ${state.announcementVersion}`
+    : 'Wersja oczekuje na potwierdzenie.';
+  overlay.version.hidden = !overlay.version.textContent;
+  overlay.copy.textContent = state?.announcementMessage || 'Dostepna jest nowa wersja aplikacji.';
 }
 
 function bindHiddenDashboardShortcut(pageId) {
