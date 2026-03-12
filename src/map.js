@@ -22,6 +22,7 @@ const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
 const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
 const colorsButtonEl = document.querySelector('[data-map-tool="colors"]');
+const listButtonEl = document.querySelector('[data-map-tool="list"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
@@ -100,6 +101,10 @@ const MAP_PERSON_SEARCH_DEBOUNCE_MS = 160;
 const MAP_PERSON_SEARCH_SCROLL_THRESHOLD_PX = 120;
 const MAP_PERSON_SEARCH_ROW_GAP_PX = 10;
 const MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX = 108;
+const MAP_PERSON_LIST_BATCH_SIZE = 50;
+const MAP_PERSON_LIST_SCROLL_THRESHOLD_PX = 120;
+const MAP_PERSON_LIST_ROW_GAP_PX = 10;
+const MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX = 108;
 const MAP_DATE_FILTER_BATCH_SIZE = 50;
 const MAP_DATE_FILTER_SCROLL_THRESHOLD_PX = 120;
 const MAP_DATE_FILTER_ROW_GAP_PX = 10;
@@ -132,6 +137,7 @@ const MAP_TIME_COLOR_MENU_PRESETS = [
 const LAST_OPENED_MAP_PANEL_STORAGE_KEY = 'map:lastOpenedPanelState';
 const MAP_VIEWPORT_STORAGE_KEY = 'map:viewportState';
 const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
+const MAP_PERSON_SEARCH_QUERY_STORAGE_KEY = 'map:personSearchQuery';
 const MAP_TIME_COLOR_DATE_MATCH_MODE_STORAGE_KEY = 'map:timeColorDateMatchMode';
 const MAP_TIME_COLOR_RANGES_STORAGE_KEY = 'map:timeColorRanges';
 const RAW_FIELDS_EXPANDED_STORAGE_KEY = 'person:rawFieldsExpanded';
@@ -139,13 +145,14 @@ const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
-const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter', 'colors'];
+const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter', 'colors', 'list'];
 const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
 const EARLIEST_COMPARABLE_DATE = '0001-01-01';
 const LATEST_COMPARABLE_DATE = '9999-12-31';
 const restoredMapPanelState = readStoredMapPanelState();
 const restoredMapViewportState = readStoredMapViewportState();
 const restoredMapDateFilterState = readStoredMapDateFilterState();
+const restoredMapPersonSearchQuery = readStoredMapPersonSearchQuery();
 const restoredMapTimeColorRanges = readStoredMapTimeColorRanges();
 const restoredMapTimeColorDateMatchMode = readStoredMapTimeColorDateMatchMode();
 
@@ -195,14 +202,23 @@ let personSearchTimer = null;
 let personSearchRequestToken = 0;
 let areMapRawFieldsExpanded = readStoredMapRawFieldsExpanded();
 let personSearchState = {
-  query: '',
+  query: restoredMapPersonSearchQuery,
   results: [],
   total: 0,
   isLoading: false,
   hasLoaded: false,
   hasMore: false
 };
+let personListState = {
+  results: [],
+  total: 0,
+  isLoading: false,
+  hasLoaded: false,
+  hasMore: false,
+  renderedCount: 0
+};
 let mapSearchRowHeight = MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
+let mapListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
 let mapDateFilterRenderedCount = 0;
 let mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
 let mapTimeColorDateMatchModeAsyncPersistFrame = 0;
@@ -469,6 +485,10 @@ searchButtonEl?.addEventListener('click', () => {
   }
 });
 
+listButtonEl?.addEventListener('click', () => {
+  openInfoPanelMode('list');
+});
+
 historyButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('history');
 });
@@ -495,7 +515,7 @@ selectionExtraEl?.addEventListener('pointerdown', (event) => {
   syncMapTimeColorMenuDirection(menuElement, { allowClosedMeasurement: true });
 });
 
-selectionExtraEl?.addEventListener('click', (event) => {
+function handleSelectionPanelClick(event) {
   if (infoPanelMode === 'colors') {
     const clickedMenu = event.target.closest('.time-color-menu');
     window.setTimeout(() => {
@@ -551,6 +571,22 @@ selectionExtraEl?.addEventListener('click', (event) => {
     return;
   }
 
+  const listResultButton = event.target.closest('[data-map-list-source-row-id]');
+  if (listResultButton && infoPanelMode === 'list') {
+    const sourceRowId = listResultButton.getAttribute('data-map-list-source-row-id');
+    const listResult = personListState.results.find((entry) => entry.sourceRowId === sourceRowId);
+    if (!listResult) {
+      return;
+    }
+
+    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
+    focusSelectionOnMap(mapPerson);
+    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+      panelMode: 'selection'
+    });
+    return;
+  }
+
   const clearSearchButton = event.target.closest('[data-map-person-search-clear]');
   if (clearSearchButton && infoPanelMode === 'search') {
     updatePersonSearchQuery('', { immediate: true });
@@ -559,10 +595,10 @@ selectionExtraEl?.addEventListener('click', (event) => {
 
   const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
   if (resetFilterButton && infoPanelMode === 'filter') {
-    mapDateFilterDraft = buildMapDateFilterDraft({});
+    mapDateFilterDraft = buildDefaultMapDateFilterDraft();
     mapDateFilterHasInvalidRange = false;
     persistMapDateFilterState();
-    void applyMapDateFilter({});
+    void applyMapDateFilter(buildDefaultMapDateFilterDraft());
     return;
   }
 
@@ -731,7 +767,10 @@ selectionExtraEl?.addEventListener('click', (event) => {
   if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
     history.forward();
   }
-});
+}
+
+selectionExtraEl?.addEventListener('click', handleSelectionPanelClick);
+selectionMetaEl?.addEventListener('click', handleSelectionPanelClick);
 
 selectionExtraEl?.addEventListener('scroll', () => {
   syncOpenMapTimeColorMenusDirection();
@@ -1302,12 +1341,14 @@ window.addEventListener('resize', () => {
   }, 120);
 });
 
-async function loadPoints() {
+async function loadPoints(options = {}) {
   if (!mapInstance) {
     return;
   }
 
   const requestToken = ++mapPointsRequestToken;
+  const triggeredBySearchQuery = options.reason === 'person-search';
+  const shouldRefreshSearchResults = options.refreshSearchResults !== false;
   isMapPointsLoading = true;
   if (infoPanelMode === 'filter') {
     paintFilterPanel();
@@ -1334,18 +1375,26 @@ async function loadPoints() {
   }
 
   isMapPointsLoading = false;
-  const shouldAutoSelectPerson = infoPanelMode !== 'filter';
+  const shouldAutoSelectPerson = infoPanelMode !== 'filter' && !triggeredBySearchQuery;
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
   mapDateFilterRenderedCount = 0;
   mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
+  mapListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
   cacheKnownPeople(allPeople);
+  syncPersonListStateFromVisiblePeople();
+  const activeSelectedPersonSourceRowId = activeSelection?.type === 'person' && activeSelection.key
+    ? activeSelection.key.replace(/^person:/, '')
+    : null;
+  const preservedSearchSelection = triggeredBySearchQuery && activeSelectedPersonSourceRowId
+    ? allPeople.find((person) => person.sourceRowId === activeSelectedPersonSourceRowId) || null
+    : null;
   const nextPerson = shouldAutoSelectPerson
-    ? hasActiveMapDateFilter()
+    ? hasActiveMapDateFilter() || hasActiveMapPersonSearchFilter()
       ? resolveVisiblePersonSelection(allPeople)
       : resolveCurrentPersonSelection(allPeople)
-    : null;
+    : preservedSearchSelection;
 
   clearActiveSelection({ resetPanel: shouldAutoSelectPerson ? !nextPerson : false });
 
@@ -1365,12 +1414,20 @@ async function loadPoints() {
   }
 
   if (infoPanelMode === 'search' && personSearchState.hasLoaded) {
-    personSearchRequestToken += 1;
-    void loadPersonSearchResults(personSearchState.query, {
-      showLoadingState: false,
-      reset: true,
-      requestToken: personSearchRequestToken
-    });
+    if (shouldRefreshSearchResults) {
+      personSearchRequestToken += 1;
+      void loadPersonSearchResults(personSearchState.query, {
+        showLoadingState: false,
+        reset: true,
+        requestToken: personSearchRequestToken
+      });
+    } else {
+      paintSearchPanel({ shouldFocusInput: false });
+    }
+  }
+
+  if (infoPanelMode === 'list' && personListState.hasLoaded) {
+    paintListPanel();
   }
 
   shouldRestoreMapViewportOnNextLoad = false;
@@ -1380,7 +1437,7 @@ async function loadPoints() {
 
 function buildMapPointsRequest() {
   const payload = {
-    query: '',
+    query: getActiveMapPersonSearchQuery(),
     includeUnresolved: false
   };
 
@@ -1412,6 +1469,14 @@ function scheduleMapDateFilterApply() {
 
 function hasActiveMapDateFilter() {
   return Boolean(mapDateFilter.dateFrom || mapDateFilter.dateTo);
+}
+
+function getActiveMapPersonSearchQuery() {
+  return String(personSearchState.query || '').trim();
+}
+
+function hasActiveMapPersonSearchFilter() {
+  return Boolean(getActiveMapPersonSearchQuery());
 }
 
 function hasMapDateFilterDraftValue(input = mapDateFilterDraft) {
@@ -2524,11 +2589,27 @@ function extractMonthNumberValue(dateValue) {
 }
 
 function buildMapDateFilterDraft(filter = {}) {
-  return {
+  const draft = {
     fromMonth: extractMonthNumberValue(filter.dateFrom),
     fromYear: extractYearValue(filter.dateFrom),
     toMonth: extractMonthNumberValue(filter.dateTo),
     toYear: extractYearValue(filter.dateTo)
+  };
+
+  if (draft.fromMonth || draft.fromYear || draft.toMonth || draft.toYear) {
+    return draft;
+  }
+
+  return buildDefaultMapDateFilterDraft();
+}
+
+function buildDefaultMapDateFilterDraft() {
+  const defaultStartYear = String(new Date().getFullYear() - 10);
+  return {
+    fromMonth: '',
+    fromYear: defaultStartYear,
+    toMonth: '',
+    toYear: ''
   };
 }
 
@@ -3527,13 +3608,16 @@ function readStoredMapDateFilterState() {
   try {
     const raw = window.localStorage.getItem(MAP_DATE_FILTER_STORAGE_KEY);
     if (!raw) {
-      return {};
+      return buildDefaultMapDateFilterDraft();
     }
 
     const parsed = JSON.parse(raw);
-    return normalizeMapDateFilterDraft(parsed);
+    const normalized = normalizeMapDateFilterDraft(parsed);
+    return normalized.fromMonth || normalized.fromYear || normalized.toMonth || normalized.toYear
+      ? normalized
+      : buildDefaultMapDateFilterDraft();
   } catch (_error) {
-    return {};
+    return buildDefaultMapDateFilterDraft();
   }
 }
 
@@ -3542,6 +3626,25 @@ function persistMapDateFilterState() {
     window.localStorage.setItem(
       MAP_DATE_FILTER_STORAGE_KEY,
       JSON.stringify(normalizeMapDateFilterDraft(mapDateFilterDraft))
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
+function readStoredMapPersonSearchQuery() {
+  try {
+    return String(window.localStorage.getItem(MAP_PERSON_SEARCH_QUERY_STORAGE_KEY) || '');
+  } catch (_error) {
+    return '';
+  }
+}
+
+function persistMapPersonSearchQuery() {
+  try {
+    window.localStorage.setItem(
+      MAP_PERSON_SEARCH_QUERY_STORAGE_KEY,
+      String(personSearchState.query || '')
     );
   } catch (_error) {
     // Ignore storage failures and keep the current session working.
@@ -3937,6 +4040,10 @@ function setActiveSelection(nextSelection) {
   if (infoPanelMode === 'search') {
     paintSearchPanel();
   }
+
+  if (infoPanelMode === 'list') {
+    paintListPanel();
+  }
 }
 
 function clearActiveSelection(options = {}) {
@@ -3954,6 +4061,10 @@ function clearActiveSelection(options = {}) {
 
   if (infoPanelMode === 'search') {
     paintSearchPanel();
+  }
+
+  if (infoPanelMode === 'list') {
+    paintListPanel();
   }
 
   if (options.resetPanel !== false) {
@@ -4043,10 +4154,10 @@ function paintPersonSelectionState(person) {
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
     { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
-    { label: 'Ostatnia wplata', value: formatDate(person.lastPaymentAt) }
+    { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) }
   ]);
   selectionMetaEl.hidden = false;
-  selectionExtraEl.innerHTML = '<p class="empty-state">Ladowanie pelnych informacji o osobie...</p>';
+  selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
   selectionExtraEl.hidden = false;
 }
 
@@ -4076,7 +4187,7 @@ function paintPersonSelection(details) {
     { label: 'E-mail', value: person.email || 'Brak' },
     { label: 'Adres', value: person.addressText || person.routeAddress || 'Brak' },
     { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
-    { label: 'Ostatnia wplata', value: formatDate(person.lastPaymentAt) },
+    { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) },
     ...buildPersonPrimaryDetailItems(person)
   ]);
   selectionMetaEl.hidden = false;
@@ -4136,14 +4247,14 @@ function paintPersonSelection(details) {
     cards.push(`
       <article class="list-card">
         <div class="list-card-heading">
-          <strong>Pelne dane z bazy</strong>
+          <strong>Pełne dane z bazy</strong>
           <button
             type="button"
             class="button-muted section-toggle-button"
             data-map-toggle-raw-fields
             aria-expanded="${areMapRawFieldsExpanded ? 'true' : 'false'}"
           >
-            ${areMapRawFieldsExpanded ? 'Ukryj' : 'Pokaz'}
+            ${areMapRawFieldsExpanded ? 'Ukryj' : 'Pokaż'}
           </button>
         </div>
         <div class="kv-grid kv-grid-compact"${areMapRawFieldsExpanded ? '' : ' hidden'}>
@@ -4232,7 +4343,7 @@ function paintCustomPointSelection(point) {
   syncOverviewSpacing(false);
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = point.label || 'Punkt lokalny';
-  selectionCopyEl.textContent = point.addressText || 'Punkt lokalny zapisany recznie.';
+  selectionCopyEl.textContent = point.addressText || 'Punkt lokalny zapisany ręcznie.';
   selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'Typ', value: 'Punkt lokalny' },
@@ -4259,7 +4370,7 @@ function buildPersonPopupHtml(person) {
     <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong><br>
     ${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}<br>
     Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}<br>
-    Ostatnia wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}
+    Ostatnia wpłata: ${escapeHtml(formatDate(person.lastPaymentAt))}
   `;
 }
 
@@ -4491,6 +4602,14 @@ function renderCurrentInfoPanel() {
     return;
   }
 
+  if (infoPanelMode === 'list') {
+    if (!personListState.hasLoaded) {
+      syncPersonListStateFromVisiblePeople({ preserveRenderedCount: false });
+    }
+    paintListPanel();
+    return;
+  }
+
   paintSelectionPanelState();
 }
 
@@ -4503,9 +4622,9 @@ function syncInfoToolButtons() {
   const isSelectionMode = shouldHighlightInfoMode && infoPanelMode === 'selection';
   const isSearchMode = shouldHighlightInfoMode && infoPanelMode === 'search';
   const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
-  const isFilterMode =
-    shouldHighlightInfoMode && (infoPanelMode === 'filter' || hasActiveMapDateFilter());
+  const isFilterMode = shouldHighlightInfoMode && infoPanelMode === 'filter';
   const isColorsMode = shouldHighlightInfoMode && infoPanelMode === 'colors';
+  const isListMode = shouldHighlightInfoMode && infoPanelMode === 'list';
 
   selectionButtonEl?.classList.toggle('is-active', isSelectionMode);
   selectionButtonEl?.setAttribute('aria-pressed', String(isSelectionMode));
@@ -4521,6 +4640,9 @@ function syncInfoToolButtons() {
 
   colorsButtonEl?.classList.toggle('is-active', isColorsMode);
   colorsButtonEl?.setAttribute('aria-pressed', String(isColorsMode));
+
+  listButtonEl?.classList.toggle('is-active', isListMode);
+  listButtonEl?.setAttribute('aria-pressed', String(isListMode));
 }
 
 function paintSelectionPanelState() {
@@ -4600,16 +4722,20 @@ function paintSearchPanel(options = {}) {
 
   const query = personSearchState.query.trim();
   const searchCountLabel = personSearchState.isLoading && !personSearchState.hasLoaded
-    ? 'Ladowanie...'
+    ? 'Ładowanie...'
     : personSearchState.total === 1
-      ? '1 osoba'
-      : `${formatNumber(personSearchState.total)} osob`;
+      ? '1 osoba została wyszukana'
+      : `${formatNumber(personSearchState.total)} osób zostało wyszukanych`;
   const shouldFocusInput = options.shouldFocusInput === true;
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = 'Wyszukiwanie osob';
+  selectionTitleEl.textContent = 'Wyszukiwanie osób';
   selectionCopyEl.hidden = true;
-  selectionMetaEl.innerHTML = '';
-  selectionMetaEl.hidden = true;
+  selectionMetaEl.innerHTML = `
+    <div class="filter-panel-toolbar">
+      <strong class="filter-panel-count search-panel-count">${escapeHtml(searchCountLabel)}</strong>
+    </div>
+  `;
+  selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-person-search-form>
       <label class="field">
@@ -4621,16 +4747,15 @@ function paintSearchPanel(options = {}) {
             type="search"
             name="query"
             value="${escapeHtml(personSearchState.query)}"
-            placeholder="Np. Nabialek, Przyrow, 600, 2025-03-10, 10.03.2025"
+            placeholder="Np. Nabiałek, Przyrów, 600, 2025-03-10, 10.03.2025"
             data-map-person-search-input
           />
         </div>
       </label>
-      <div class="action-row filter-action-row">
-        <span class="filter-action-count">${escapeHtml(searchCountLabel)}</span>
+      <div class="action-row filter-action-row search-action-row">
         <button type="submit" class="button-strong">Szukaj</button>
         <button type="button" class="button-muted" data-map-person-search-clear${query ? '' : ' disabled'}>
-          Wyczysc
+          Wyczyść
         </button>
       </div>
     </form>
@@ -4657,13 +4782,13 @@ function paintSearchPanel(options = {}) {
 
 function renderPersonSearchResults() {
   if (personSearchState.isLoading && !personSearchState.hasLoaded) {
-    return '<p class="empty-state">Ladowanie wynikow wyszukiwania...</p>';
+    return '<p class="empty-state">Ładowanie wyników wyszukiwania...</p>';
   }
 
   if (personSearchState.results.length === 0) {
     return personSearchState.query.trim()
-      ? '<p class="empty-state">Brak wynikow dla podanego zapytania.</p>'
-      : '<p class="empty-state">Wpisz zapytanie, aby wyszukac osobe po wszystkich polach i datach.</p>';
+      ? '<p class="empty-state">Brak wyników dla podanego zapytania.</p>'
+      : '<p class="empty-state">Wpisz zapytanie, aby wyszukać osobę po wszystkich polach i datach.</p>';
   }
 
   return renderPersonSearchRows(personSearchState.results, getCurrentSelectedPersonSourceRowId());
@@ -4677,8 +4802,8 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
       const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
         ? isVisibleOnMap
           ? 'Widoczna na mapie'
-          : 'Poza biezacym filtrem mapy'
-        : 'Brak wspolrzednych';
+          : 'Poza bieżącym filtrem mapy'
+        : 'Brak współrzędnych';
 
       return `
         <button
@@ -4696,6 +4821,164 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
       `;
     })
     .join('');
+}
+
+function paintListPanel() {
+  clearHoveredPersonSourceRowId();
+  syncOverviewSpacing(false, false, false, false, true);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  const listCountLabel = (isMapPointsLoading && !personListState.hasLoaded) || (personListState.isLoading && !personListState.hasLoaded)
+    ? 'Ładowanie...'
+    : personListState.total === 1
+      ? '1 osoba została wyszukana'
+      : `${formatNumber(personListState.total)} osób zostało wyszukanych`;
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Lista osób';
+  selectionCopyEl.hidden = true;
+  selectionMetaEl.innerHTML = `
+    <div class="list-panel-summary">
+      <strong class="filter-panel-count list-panel-count">${escapeHtml(listCountLabel)}</strong>
+      <p class="copy list-panel-copy">Lista pokazuje osoby widoczne po aktualnych regułach wyszukiwania i filtra dat.</p>
+    </div>
+  `;
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = `
+    ${renderListAppliedRulesMarkup()}
+    <div class="vertical-list map-tool-results-list" data-map-person-list-results>
+      ${renderPersonListResults()}
+    </div>
+  `;
+  bindHoverTrackingToRenderedPersonLists();
+  bindLazyLoadingToRenderedPersonListResults();
+  selectionExtraEl.hidden = false;
+
+  const resultsList = selectionExtraEl?.querySelector('[data-map-person-list-results]');
+  if (resultsList && personListState.hasLoaded && personListState.results.length > 0) {
+    syncMapListResultsTail(resultsList);
+    updateMapListRowHeight(resultsList);
+  }
+}
+
+function renderPersonListResults() {
+  if ((isMapPointsLoading && !personListState.hasLoaded) || (personListState.isLoading && !personListState.hasLoaded)) {
+    return '<p class="empty-state">Ładowanie listy osób...</p>';
+  }
+
+  if (personListState.results.length === 0) {
+    return '<p class="empty-state">Brak osób do wyświetlenia.</p>';
+  }
+
+  return renderPersonListRows(personListState.results, getCurrentSelectedPersonSourceRowId());
+}
+
+function renderListAppliedRulesMarkup() {
+  const activeSearchQuery = getActiveMapPersonSearchQuery();
+  const defaultFilter = normalizeMapDateFilter(buildDefaultMapDateFilterDraft());
+  const oldestDateLabel = formatMapDateRuleLabel(
+    extractYearValue(mapDateFilter.dateFrom),
+    extractMonthNumberValue(mapDateFilter.dateFrom)
+  );
+  const newestDateLabel = formatMapDateRuleLabel(
+    extractYearValue(mapDateFilter.dateTo),
+    extractMonthNumberValue(mapDateFilter.dateTo)
+  );
+  const ruleBadges = [];
+
+  if (activeSearchQuery) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Szukaj: ${escapeHtml(activeSearchQuery)}</span>`
+    );
+  }
+
+  if (mapDateFilter.dateFrom) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Najstarsza: ${escapeHtml(oldestDateLabel)}</span>`
+    );
+  }
+
+  if (mapDateFilter.dateTo !== defaultFilter.dateTo) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Najnowsza: ${escapeHtml(newestDateLabel)}</span>`
+    );
+  }
+
+  if (ruleBadges.length === 0) {
+    return '';
+  }
+
+  return `
+    <div class="map-rule-badges" aria-label="Zastosowane reguły">
+      ${ruleBadges.join('')}
+    </div>
+  `;
+}
+
+function formatMapDateRuleLabel(yearValue, monthValue) {
+  const normalizedYear = normalizeYearInputValue(yearValue);
+  const normalizedMonth = normalizeMonthNumberInputValue(monthValue);
+  if (!normalizedYear) {
+    return 'Dowolna';
+  }
+
+  if (!normalizedMonth) {
+    return normalizedYear;
+  }
+
+  return formatMonthYear(`${normalizedYear}-${normalizedMonth}`);
+}
+
+function renderPersonListRows(people, currentSelectedPersonId = null) {
+  return people
+    .map((person) => {
+      const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
+      const isCurrent = person.sourceRowId === currentSelectedPersonId;
+      const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
+        ? isVisibleOnMap
+          ? 'Widoczna na mapie'
+          : 'Poza bieżącym filtrem mapy'
+        : 'Brak współrzędnych';
+
+      return `
+        <button
+          type="button"
+          class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
+          data-map-list-source-row-id="${escapeHtml(person.sourceRowId)}"
+          data-map-hover-source-row-id="${escapeHtml(person.sourceRowId)}"
+        >
+          <div class="list-card-heading">
+            <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+          </div>
+          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+          <span>${escapeHtml(locationLabel)}</span>
+        </button>
+      `;
+    })
+    .join('');
+}
+
+function syncPersonListStateFromVisiblePeople(options = {}) {
+  const preserveRenderedCount = options.preserveRenderedCount !== false;
+  const nextRenderedCount = allPeople.length === 0
+    ? 0
+    : Math.min(
+        allPeople.length,
+        Math.max(
+          preserveRenderedCount ? Number(personListState.renderedCount || 0) : 0,
+          MAP_PERSON_LIST_BATCH_SIZE
+        )
+      );
+
+  personListState = {
+    results: allPeople.slice(0, nextRenderedCount),
+    total: allPeople.length,
+    isLoading: false,
+    hasLoaded: true,
+    hasMore: nextRenderedCount < allPeople.length,
+    renderedCount: nextRenderedCount
+  };
 }
 
 function paintTimeColorPanel() {
@@ -4716,8 +4999,8 @@ function paintTimeColorPanel() {
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Kolorowanie według daty';
-  selectionCopyEl.textContent = '';
-  selectionCopyEl.hidden = true;
+  selectionCopyEl.textContent = 'Nie wpływa na wyszukiwanie. Zmienia tylko widoczność i kolory punktów na mapie.';
+  selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;
   selectionExtraEl.hidden = false;
@@ -5104,13 +5387,13 @@ function renderMapTimeColorPreviewField(range, side) {
 function renderMapTimeColorChartMarkup(ranges = mapTimeColorRanges) {
   const chartModel = buildMapTimeColorChartModel(ranges);
   if (!chartModel) {
-    return '<p class="time-color-chart-empty">Dodaj zakresy, aby zobaczyc wykres czasu.</p>';
+    return '<p class="time-color-chart-empty">Dodaj zakresy, aby zobaczyć wykres czasu.</p>';
   }
 
   if (chartModel.kind === 'mixed') {
     return `
       <p class="time-color-chart-empty">
-        Wykres obsluguje osobno zakresy w dniach albo osobno zakresy po datach.
+        Wykres obsługuje osobno zakresy w dniach albo osobno zakresy po datach.
       </p>
     `;
   }
@@ -6648,38 +6931,37 @@ function paintFilterPanel() {
   const toYear = mapDateFilterDraft.toYear;
   const hasMonthOptions = mapDateFilterOptions.length > 0;
   const filteredPeopleLabel = isMapPointsLoading
-    ? 'Odswiezanie...'
-    : (allPeople.length === 1 ? '1 osoba' : `${formatNumber(allPeople.length)} osob`);
+    ? 'Odświeżanie...'
+    : (allPeople.length === 1
+      ? '1 osoba została wyszukana'
+      : `${formatNumber(allPeople.length)} osób zostało wyszukanych`);
   const isFromMonthActive = hasMonthOptions && Boolean(fromYear);
   const isToMonthActive = hasMonthOptions && Boolean(toYear);
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
   const hasDraftValue = hasMapDateFilterDraftValue();
 
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = 'Widoczność wględem daty';
+  selectionTitleEl.textContent = 'Filtr';
   selectionCopyEl.hidden = true;
-  selectionMetaEl.innerHTML = '';
-  selectionMetaEl.hidden = true;
+  selectionMetaEl.innerHTML = `
+    <div class="filter-panel-toolbar">
+      <strong class="filter-panel-count">${escapeHtml(filteredPeopleLabel)}</strong>
+      <button
+        type="button"
+        class="button-muted filter-panel-reset"
+        data-map-date-filter-reset
+        ${hasDraftValue ? '' : 'disabled'}
+      >
+        Reset
+      </button>
+    </div>
+  `;
+  selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
       <div class="filter-date-stack">
         <div class="field filter-date-box">
-          <span>Data poczatkowa</span>
-          <div class="filter-date-box-grid">
-            <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
-              <select name="fromYear"${hasMonthOptions ? '' : ' disabled'}>
-                ${buildYearOptionsMarkup(fromYear)}
-              </select>
-            </div>
-            <div class="select-wrap${isFromMonthActive ? '' : ' is-dimmed'}${hasInvalidDateRange ? ' is-invalid' : ''}">
-              <select name="fromMonth"${hasMonthOptions ? '' : ' disabled'}>
-                ${buildMonthNumberOptionsMarkup(fromMonth)}
-              </select>
-            </div>
-          </div>
-        </div>
-        <div class="field filter-date-box">
-          <span>Data koncowa</span>
+          <span>Najnowsza data</span>
           <div class="filter-date-box-grid">
             <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
               <select name="toYear"${hasMonthOptions ? '' : ' disabled'}>
@@ -6693,38 +6975,36 @@ function paintFilterPanel() {
             </div>
           </div>
         </div>
-      </div>
-      <div class="action-row filter-action-row">
-        <span class="filter-action-count">${escapeHtml(filteredPeopleLabel)}</span>
-        <button type="button" data-map-date-filter-reset${hasDraftValue ? '' : ' disabled'}>
-          Wyczysc
-        </button>
+        <div class="field filter-date-box">
+          <span>Najstarsza data</span>
+          <div class="filter-date-box-grid">
+            <div class="select-wrap${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="fromYear"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildYearOptionsMarkup(fromYear)}
+              </select>
+            </div>
+            <div class="select-wrap${isFromMonthActive ? '' : ' is-dimmed'}${hasInvalidDateRange ? ' is-invalid' : ''}">
+              <select name="fromMonth"${hasMonthOptions ? '' : ' disabled'}>
+                ${buildMonthNumberOptionsMarkup(fromMonth)}
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
     </form>
-    <div class="vertical-list map-tool-results-list" data-map-date-filter-results>
-      ${renderMapDateFilterResults()}
-    </div>
   `;
-  bindHoverTrackingToRenderedPersonLists();
-  bindLazyLoadingToRenderedMapDateFilterResults();
   selectionExtraEl.hidden = false;
-
-  const resultsList = selectionExtraEl?.querySelector('[data-map-date-filter-results]');
-  if (resultsList && allPeople.length > 0) {
-    syncMapDateFilterResultsTail(resultsList);
-    updateMapDateFilterRowHeight(resultsList);
-  }
 }
 
 function renderMapDateFilterResults() {
   if (isMapPointsLoading) {
-    return '<p class="empty-state">Trwa odswiezanie wynikow filtra dat.</p>';
+    return '<p class="empty-state">Trwa odświeżanie wyników filtra dat.</p>';
   }
 
   if (allPeople.length === 0) {
     return hasActiveMapDateFilter()
-      ? '<p class="empty-state">Brak osob pasujacych do wybranego zakresu dat.</p>'
-      : '<p class="empty-state">Brak osob dostepnych na mapie dla biezacych danych.</p>';
+      ? '<p class="empty-state">Brak osób pasujących do wybranego zakresu dat.</p>'
+      : '<p class="empty-state">Brak osób dostępnych na mapie dla bieżących danych.</p>';
   }
 
   return renderMapDateFilterRows(allPeople.slice(0, mapDateFilterRenderedCount), getCurrentSelectedPersonSourceRowId());
@@ -6782,6 +7062,7 @@ function updatePersonSearchQuery(nextQuery, options = {}) {
     ...personSearchState,
     query: String(nextQuery || '')
   };
+  persistMapPersonSearchQuery();
 
   const clearButton = selectionExtraEl?.querySelector('[data-map-person-search-clear]');
   if (clearButton) {
@@ -6800,6 +7081,10 @@ function updatePersonSearchQuery(nextQuery, options = {}) {
       reset: true,
       requestToken: personSearchRequestToken
     });
+    void loadPoints({
+      reason: 'person-search',
+      refreshSearchResults: false
+    });
     return;
   }
 
@@ -6810,6 +7095,10 @@ function updatePersonSearchQuery(nextQuery, options = {}) {
       showLoadingState: true,
       reset: true,
       requestToken: personSearchRequestToken
+    });
+    void loadPoints({
+      reason: 'person-search',
+      refreshSearchResults: false
     });
   }, MAP_PERSON_SEARCH_DEBOUNCE_MS);
 }
@@ -6907,14 +7196,14 @@ function paintHistorySelection() {
   });
 
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = 'Historia przegladania';
+  selectionTitleEl.textContent = 'Historia przeglądania';
   selectionCopyEl.textContent = '';
   selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;
 
   if (historyEntries.length === 0) {
-    selectionExtraEl.innerHTML = '<p class="empty-state">Historia wyboru osob jest jeszcze pusta.</p>';
+    selectionExtraEl.innerHTML = '<p class="empty-state">Historia wyboru osób jest jeszcze pusta.</p>';
     selectionExtraEl.hidden = false;
     return;
   }
@@ -6932,7 +7221,7 @@ function paintHistorySelection() {
             ${person ? '' : 'disabled'}
           >
             <div class="list-card-heading">
-              <strong>${escapeHtml(person?.fullName || person?.companyName || 'Ladowanie osoby...')}</strong>
+              <strong>${escapeHtml(person?.fullName || person?.companyName || 'Ładowanie osoby...')}</strong>
             </div>
             <span>Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}</span>
           </button>
@@ -6944,15 +7233,23 @@ function paintHistorySelection() {
   selectionExtraEl.hidden = false;
 }
 
-function syncOverviewSpacing(isHistoryMode, isFilterMode = false, isSearchMode = false, isColorsMode = false) {
+function syncOverviewSpacing(
+  isHistoryMode,
+  isFilterMode = false,
+  isSearchMode = false,
+  isColorsMode = false,
+  isListMode = false
+) {
   overviewViewEl?.classList.toggle('map-info-view-history', Boolean(isHistoryMode));
   overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
   overviewViewEl?.classList.toggle('map-info-view-search', Boolean(isSearchMode));
   overviewViewEl?.classList.toggle('map-info-view-colors', Boolean(isColorsMode));
+  overviewViewEl?.classList.toggle('map-info-view-list', Boolean(isListMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-history', Boolean(isHistoryMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-filter', Boolean(isFilterMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-search', Boolean(isSearchMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-colors', Boolean(isColorsMode));
+  selectionExtraEl?.classList.toggle('map-selection-cards-list', Boolean(isListMode));
 }
 
 function bindHoverTrackingToRenderedPersonLists() {
@@ -6999,6 +7296,18 @@ function bindLazyLoadingToRenderedPersonSearchResults() {
   listElement.dataset.lazyLoadingBound = 'true';
   listElement.addEventListener('scroll', () => {
     void maybeLoadMorePersonSearchResults(listElement);
+  });
+}
+
+function bindLazyLoadingToRenderedPersonListResults() {
+  const listElement = selectionExtraEl?.querySelector('[data-map-person-list-results]');
+  if (!listElement || listElement.dataset.lazyLoadingBound === 'true') {
+    return;
+  }
+
+  listElement.dataset.lazyLoadingBound = 'true';
+  listElement.addEventListener('scroll', () => {
+    void maybeLoadMorePersonListResults(listElement);
   });
 }
 
@@ -7065,6 +7374,20 @@ async function maybeLoadMorePersonSearchResults(listElement) {
   });
 }
 
+async function maybeLoadMorePersonListResults(listElement) {
+  if (infoPanelMode !== 'list' || !personListState.hasMore) {
+    return;
+  }
+
+  const loadedContentHeight = personListState.results.length * getMapListRowStride();
+  const viewportBottom = listElement.scrollTop + listElement.clientHeight;
+  if (viewportBottom + MAP_PERSON_LIST_SCROLL_THRESHOLD_PX < loadedContentHeight) {
+    return;
+  }
+
+  appendPersonListResults();
+}
+
 function appendPersonSearchResults(items) {
   const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
   if (!listElement) {
@@ -7085,15 +7408,59 @@ function appendPersonSearchResults(items) {
   syncHoveredPersonListRows();
 }
 
+function appendPersonListResults() {
+  const listElement = selectionExtraEl?.querySelector('[data-map-person-list-results]');
+  if (!listElement) {
+    paintListPanel();
+    return;
+  }
+
+  const nextRenderedCount = Math.min(allPeople.length, personListState.renderedCount + MAP_PERSON_LIST_BATCH_SIZE);
+  const items = allPeople.slice(personListState.renderedCount, nextRenderedCount);
+  if (items.length === 0) {
+    return;
+  }
+
+  personListState = {
+    ...personListState,
+    results: allPeople.slice(0, nextRenderedCount),
+    total: allPeople.length,
+    isLoading: false,
+    hasLoaded: true,
+    hasMore: nextRenderedCount < allPeople.length,
+    renderedCount: nextRenderedCount
+  };
+  removeMapListResultsTail(listElement);
+  listElement.insertAdjacentHTML(
+    'beforeend',
+    renderPersonListRows(items, getCurrentSelectedPersonSourceRowId())
+  );
+  syncMapListResultsTail(listElement);
+  updateMapListRowHeight(listElement);
+  updateMapListCountLabel();
+  syncHoveredPersonListRows();
+}
+
 function updateMapSearchCountLabel() {
-  const counterEl = selectionExtraEl?.querySelector('.filter-action-count');
+  const counterEl = selectionMetaEl?.querySelector('.search-panel-count');
   if (!counterEl) {
     return;
   }
 
   counterEl.textContent = personSearchState.total === 1
-    ? '1 osoba'
-    : `${formatNumber(personSearchState.total)} osob`;
+    ? '1 osoba została wyszukana'
+    : `${formatNumber(personSearchState.total)} osób zostało wyszukanych`;
+}
+
+function updateMapListCountLabel() {
+  const counterEl = selectionMetaEl?.querySelector('.list-panel-count');
+  if (!counterEl) {
+    return;
+  }
+
+  counterEl.textContent = personListState.total === 1
+    ? '1 osoba została wyszukana'
+    : `${formatNumber(personListState.total)} osób zostało wyszukanych`;
 }
 
 function showMapSearchLoadingState(listElement) {
@@ -7104,7 +7471,7 @@ function showMapSearchLoadingState(listElement) {
   const loading = document.createElement('p');
   loading.className = 'empty-state';
   loading.dataset.mapSearchLoadingMore = 'true';
-  loading.textContent = 'Ladowanie kolejnych wynikow...';
+  loading.textContent = 'Ładowanie kolejnych wyników...';
   listElement.appendChild(loading);
 }
 
@@ -7117,12 +7484,21 @@ function removeMapSearchLoadingState(listElement) {
   listElement.querySelector('[data-map-search-loading-more]')?.remove();
 }
 
+function removeMapListResultsTail(listElement) {
+  listElement.querySelector('[data-map-list-results-spacer]')?.remove();
+}
+
 function syncMapSearchResultsTail(listElement) {
   removeMapSearchResultsTail(listElement);
   if (personSearchState.isLoading && personSearchState.hasLoaded) {
     showMapSearchLoadingState(listElement);
   }
   appendMapSearchResultsSpacer(listElement);
+}
+
+function syncMapListResultsTail(listElement) {
+  removeMapListResultsTail(listElement);
+  appendMapListResultsSpacer(listElement);
 }
 
 function appendMapSearchResultsSpacer(listElement) {
@@ -7135,6 +7511,20 @@ function appendMapSearchResultsSpacer(listElement) {
   spacer.className = 'results-spacer';
   spacer.dataset.mapSearchResultsSpacer = 'true';
   spacer.style.height = `${Math.round(remainingCount * getMapSearchRowStride())}px`;
+  spacer.setAttribute('aria-hidden', 'true');
+  listElement.appendChild(spacer);
+}
+
+function appendMapListResultsSpacer(listElement) {
+  const remainingCount = Math.max(0, personListState.total - personListState.results.length);
+  if (remainingCount <= 0) {
+    return;
+  }
+
+  const spacer = document.createElement('div');
+  spacer.className = 'results-spacer';
+  spacer.dataset.mapListResultsSpacer = 'true';
+  spacer.style.height = `${Math.round(remainingCount * getMapListRowStride())}px`;
   spacer.setAttribute('aria-hidden', 'true');
   listElement.appendChild(spacer);
 }
@@ -7158,6 +7548,27 @@ function updateMapSearchRowHeight(listElement) {
 
 function getMapSearchRowStride() {
   return mapSearchRowHeight + MAP_PERSON_SEARCH_ROW_GAP_PX;
+}
+
+function updateMapListRowHeight(listElement) {
+  const rows = Array.from(listElement.querySelectorAll('.person-row'));
+  if (rows.length === 0) {
+    return;
+  }
+
+  const nextHeight = Math.round(rows.reduce((sum, row) => sum + row.offsetHeight, 0) / rows.length);
+  if (Number.isFinite(nextHeight) && nextHeight > 0 && nextHeight !== mapListRowHeight) {
+    mapListRowHeight = nextHeight;
+    const spacer = listElement.querySelector('[data-map-list-results-spacer]');
+    if (spacer) {
+      const remainingCount = Math.max(0, personListState.total - personListState.results.length);
+      spacer.style.height = `${Math.round(remainingCount * getMapListRowStride())}px`;
+    }
+  }
+}
+
+function getMapListRowStride() {
+  return mapListRowHeight + MAP_PERSON_LIST_ROW_GAP_PX;
 }
 
 function removeMapDateFilterResultsTail(listElement) {
@@ -7423,6 +7834,7 @@ function findPersonBySourceRowId(sourceRowId) {
     allPeople.find((entry) => entry.sourceRowId === sourceRowId) ||
     knownPeopleBySourceRowId.get(sourceRowId) ||
     (personFromSelectionState?.sourceRowId === sourceRowId ? personFromSelectionState : null) ||
+    personListState.results.find((entry) => entry.sourceRowId === sourceRowId) ||
     personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId) ||
     null
   );

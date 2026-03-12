@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const runtimeMeta = ipcRenderer.sendSync('app:getRuntimeMetaSync');
 
 contextBridge.exposeInMainWorld('appApi', {
+  runtimeMeta,
   getBootstrap: () => ipcRenderer.invoke('app:getBootstrap'),
   getUpdaterState: () => ipcRenderer.invoke('updater:getState'),
   showUpdateAnnouncement: () => ipcRenderer.invoke('updater:showAnnouncement'),

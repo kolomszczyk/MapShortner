@@ -1,6 +1,24 @@
 let startupUpdateOverlay = null;
 let updateAnnouncementOverlay = null;
 
+const APP_LAST_SEEN_VERSION_STORAGE_KEY = 'app:lastSeenVersion';
+// TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET: remove this one-off upgrade reset after 0.5.2 rollout.
+const TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_FROM_VERSION = '0.5.1';
+// TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET: remove this one-off upgrade reset after 0.5.2 rollout.
+const TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_TO_VERSION = '0.5.2';
+// TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET: remove this one-off upgrade reset after 0.5.2 rollout.
+const TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_APPLIED_KEY = 'app:tempRendererReset:0.5.2';
+// TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET: remove this one-off upgrade reset after 0.5.2 rollout.
+const TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_KEYS = Object.freeze([
+  'map:lastOpenedPanelState',
+  'map:dateFilterState',
+  'map:personSearchQuery',
+  'map:timeColorDateMatchMode',
+  'map:timeColorRanges'
+]);
+
+applyTemporaryRendererResetFor_0_5_2();
+
 async function dismissStartupUpdateOverlay() {
   const overlay = ensureStartupUpdateOverlay();
   overlay.skipButton.disabled = true;
@@ -23,6 +41,35 @@ async function dismissUpdateAnnouncementOverlay() {
     await window.appApi.hideUpdateAnnouncement();
   } finally {
     overlay.closeButton.disabled = false;
+  }
+}
+
+function applyTemporaryRendererResetFor_0_5_2() {
+  // TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET: remove this one-off upgrade reset after 0.5.2 rollout.
+  const currentVersion = String(window.appApi?.runtimeMeta?.version || '').trim();
+  if (!currentVersion) {
+    return;
+  }
+
+  try {
+    const lastSeenVersion = String(window.localStorage.getItem(APP_LAST_SEEN_VERSION_STORAGE_KEY) || '').trim();
+    const alreadyApplied =
+      window.localStorage.getItem(TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_APPLIED_KEY) === 'true';
+    const shouldApplyReset =
+      !alreadyApplied
+      && lastSeenVersion === TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_FROM_VERSION
+      && currentVersion === TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_TO_VERSION;
+
+    if (shouldApplyReset) {
+      TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_KEYS.forEach((key) => {
+        window.localStorage.removeItem(key);
+      });
+      window.localStorage.setItem(TEMP_REMOVE_AFTER_0_5_2_RENDERER_RESET_APPLIED_KEY, 'true');
+    }
+
+    window.localStorage.setItem(APP_LAST_SEEN_VERSION_STORAGE_KEY, currentVersion);
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
   }
 }
 

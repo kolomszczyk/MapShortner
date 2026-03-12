@@ -1398,6 +1398,13 @@ ipcMain.handle('app:getBootstrap', async () => ({
   updater: getUpdaterState()
 }));
 
+ipcMain.on('app:getRuntimeMetaSync', (event) => {
+  event.returnValue = {
+    version: app.getVersion(),
+    isDevMode
+  };
+});
+
 ipcMain.handle('updater:getState', async () => getUpdaterState());
 ipcMain.handle('updater:showAnnouncement', async () => showUpdateAnnouncement());
 ipcMain.handle('updater:hideAnnouncement', async () => hideUpdateAnnouncement());
