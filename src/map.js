@@ -7099,7 +7099,7 @@ function paintFilterPanel() {
     <div class="filter-placeholder-stage">
       <img
         class="filter-placeholder-image"
-        src="../image copy.png"
+        src="./assets/filter-cat.png"
         alt="Praca w toku. Kot wie co robi."
       />
     </div>
