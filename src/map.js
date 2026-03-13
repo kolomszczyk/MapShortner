@@ -4964,12 +4964,6 @@ async function selectPersonPoint(person, marker, options = {}) {
   saveLastSelectedPersonId(person.sourceRowId);
   saveLastSelectedPersonRestoreState(person.sourceRowId, options.bypassOverlapSelection === true);
   if (options.historyMode !== 'restore') {
-    showMapToast({
-      message: `Zaznaczono osobe: ${getMapPersonDisplayName(person)}`,
-      type: 'info'
-    });
-  }
-  if (options.historyMode !== 'restore') {
     const personHistoryChanged = recordPersonSelectionHistory(person.sourceRowId);
     if (personHistoryChanged || panelStateChanged) {
       pushCurrentNavigationState({
@@ -5567,7 +5561,6 @@ function buildPersonPopupHtml(person) {
                     .map((entry) => {
                       const displayName = escapeHtml(entry.fullName || entry.companyName || 'Bez nazwy');
                       const personId = escapeHtml(String(entry.sourceRowId || entry.id || 'Brak'));
-                      const lastVisitAt = escapeHtml(formatDate(entry.lastVisitAt));
                       const lastPaymentAt = escapeHtml(formatDate(entry.lastPaymentAt));
                       return `
                         <div
@@ -5579,7 +5572,7 @@ function buildPersonPopupHtml(person) {
                         >
                           <strong>${displayName}</strong>
                           <span>ID: ${personId} <span class="map-person-id-copy" data-map-copy-person-id="${personId}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>
-                          <span>Wizyta: ${lastVisitAt} • Wplata: ${lastPaymentAt}</span>
+                          <span>Ostatnia wpłata: ${lastPaymentAt}</span>
                         </div>
                       `;
                     })
@@ -5604,7 +5597,7 @@ function buildPersonPopupHtml(person) {
       <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
       <span>ID: ${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))} <span class="map-person-id-copy" data-map-copy-person-id="${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>
       <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
-      <span>Wizyta: ${escapeHtml(formatDate(person.lastVisitAt))} • Wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}</span>
+      <span>Ostatnia wpłata: ${escapeHtml(formatDate(person.lastPaymentAt))}</span>
     </div>
   `;
 }
@@ -8420,7 +8413,7 @@ function renderPersonMetaLine(person, locationLabel = null) {
   const personId = String(person?.sourceRowId || person?.id || 'Brak');
   const parts = [
     `<span class="map-person-meta-id">ID: ${escapeHtml(personId)} <span class="map-person-id-copy" data-map-copy-person-id="${escapeHtml(personId)}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>`,
-    `Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}`
+    `Ostatnia wpłata: ${escapeHtml(formatDate(person?.lastPaymentAt))}`
   ];
 
   if (locationLabel) {
@@ -8694,7 +8687,7 @@ function paintHistorySelection() {
                     ? 'Widoczna na mapie'
                     : 'Poza bieżącym filtrem mapy'
                 )
-              : `<span class="map-person-meta-line"><span class="map-person-meta-id">ID: ${escapeHtml(String(sourceRowId || 'Brak'))}</span> • Ostatnia wizyta: Brak</span>`}
+              : `<span class="map-person-meta-line"><span class="map-person-meta-id">ID: ${escapeHtml(String(sourceRowId || 'Brak'))}</span> • Ostatnia wpłata: Brak</span>`}
           </button>
         `;
       })
