@@ -95,6 +95,8 @@ const WHEEL_PAGE_HEIGHT_FACTOR = 0.85;
 const WHEEL_ZOOM_MULTIPLIER = 5;
 const BUTTON_ZOOM_STEP = 1;
 const HOVER_POPUP_DELAY_MS = 400;
+const HOVER_POPUP_CLOSE_DELAY_MS = 140;
+const PERSON_POPUP_OVERLAP_DISTANCE_PX = 4;
 const MAP_HOVER_PREFETCH_DEBOUNCE_MS = 360;
 const HOVERED_PERSON_PREVIEW_DELAY_MS = 320;
 const HOVERED_PERSON_RESTORE_DELAY_MS = 160;
@@ -530,6 +532,33 @@ colorsButtonEl?.addEventListener('click', () => {
 
 settingsButtonEl?.addEventListener('click', () => {
   toggleSettingsPanel();
+});
+
+mapEl?.addEventListener('click', (event) => {
+  const popupPersonEntry = event.target.closest('[data-map-popup-person-source-row-id]');
+  if (!popupPersonEntry) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  openSelectionPanelForSourceRowId(popupPersonEntry.getAttribute('data-map-popup-person-source-row-id'));
+});
+
+mapEl?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+
+  const popupPersonEntry = event.target.closest('[data-map-popup-person-source-row-id]');
+  if (!popupPersonEntry) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  openSelectionPanelForSourceRowId(popupPersonEntry.getAttribute('data-map-popup-person-source-row-id'));
 });
 
 selectionExtraEl?.addEventListener('pointerdown', (event) => {
@@ -3422,6 +3451,67 @@ function buildPersonKey(person) {
   return buildPersonKeyFromSourceRowId(person?.sourceRowId);
 }
 
+function getVisiblePeopleWithOverlappingMarkers(person) {
+  if (!mapInstance || !person?.sourceRowId) {
+    return person ? [person] : [];
+  }
+
+  const anchorMarker = getPersonMarkerBySourceRowId(person.sourceRowId);
+  if (!anchorMarker || typeof anchorMarker.getLatLng !== 'function') {
+    return [person];
+  }
+
+  const anchorPoint = mapInstance.latLngToLayerPoint(anchorMarker.getLatLng());
+  const overlappingSourceRowIds = new Set();
+  const consideredSourceRowIds = new Set();
+
+  const considerMarker = (marker) => {
+    if (!marker || typeof marker.getLatLng !== 'function') {
+      return;
+    }
+
+    const sourceRowId = String(marker.__personSourceRowId || '').trim();
+    if (!sourceRowId || consideredSourceRowIds.has(sourceRowId)) {
+      return;
+    }
+
+    if (typeof mapInstance.hasLayer === 'function' && !mapInstance.hasLayer(marker)) {
+      return;
+    }
+
+    consideredSourceRowIds.add(sourceRowId);
+    const markerPoint = mapInstance.latLngToLayerPoint(marker.getLatLng());
+    if (anchorPoint.distanceTo(markerPoint) <= PERSON_POPUP_OVERLAP_DISTANCE_PX) {
+      overlappingSourceRowIds.add(sourceRowId);
+    }
+  };
+
+  for (const marker of visiblePeopleMarkers.values()) {
+    considerMarker(marker);
+  }
+  for (const marker of supplementalPeopleMarkers.values()) {
+    considerMarker(marker);
+  }
+
+  if (overlappingSourceRowIds.size === 0) {
+    return [person];
+  }
+
+  const overlappingPeople = [];
+  for (const sourceRowId of overlappingSourceRowIds) {
+    const matchingPerson = findPersonBySourceRowId(sourceRowId);
+    if (matchingPerson) {
+      overlappingPeople.push(matchingPerson);
+    }
+  }
+
+  if (overlappingPeople.length === 0) {
+    return [person];
+  }
+
+  return overlappingPeople;
+}
+
 function buildPersonKeyFromSourceRowId(sourceRowId) {
   if (!sourceRowId) {
     return '';
@@ -4214,6 +4304,25 @@ function saveLastSelectedPersonDetails(details) {
   }
 }
 
+function openSelectionPanelForSourceRowId(sourceRowId) {
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  if (!normalizedSourceRowId) {
+    return;
+  }
+
+  const person = allPeople.find((entry) => entry.sourceRowId === normalizedSourceRowId)
+    || findPersonBySourceRowId(normalizedSourceRowId);
+  if (!person) {
+    return;
+  }
+
+  openInfoPanelMode('selection');
+  focusSelectionOnMap(person);
+  void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
+    panelMode: 'selection'
+  });
+}
+
 function focusSelectionOnMap(person) {
   if (!mapInstance || !Number.isFinite(person?.lat) || !Number.isFinite(person?.lng)) {
     return;
@@ -4374,6 +4483,26 @@ function easeInOutQuint(progress) {
 
 function attachLazyPopup(marker, buildHtml, onSelect) {
   let hoverPopupTimer = null;
+  let closePopupTimer = null;
+  let isPointerOverPopup = false;
+  let isViewportSyncBound = false;
+
+  const clearClosePopupTimer = () => {
+    if (closePopupTimer) {
+      window.clearTimeout(closePopupTimer);
+      closePopupTimer = null;
+    }
+  };
+
+  const schedulePopupClose = () => {
+    clearClosePopupTimer();
+    closePopupTimer = window.setTimeout(() => {
+      closePopupTimer = null;
+      if (!isPointerOverPopup) {
+        marker.closePopup();
+      }
+    }, HOVER_POPUP_CLOSE_DELAY_MS);
+  };
 
   const clearHoverPopupTimer = () => {
     if (hoverPopupTimer) {
@@ -4382,14 +4511,65 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
     }
   };
 
+  const refreshPopupContent = () => {
+    const popup = marker.getPopup();
+    if (!popup) {
+      return;
+    }
+
+    popup.setContent(buildHtml());
+    bindPopupHoverHandlers();
+  };
+
   const ensurePopup = () => {
     if (!marker.getPopup()) {
-      marker.bindPopup(buildHtml());
+      marker.bindPopup('');
     }
+
+    refreshPopupContent();
+  };
+
+  const bindPopupViewportSync = () => {
+    if (!mapInstance || isViewportSyncBound) {
+      return;
+    }
+
+    mapInstance.on('zoomend', refreshPopupContent);
+    mapInstance.on('moveend', refreshPopupContent);
+    isViewportSyncBound = true;
+  };
+
+  const unbindPopupViewportSync = () => {
+    if (!mapInstance || !isViewportSyncBound) {
+      return;
+    }
+
+    mapInstance.off('zoomend', refreshPopupContent);
+    mapInstance.off('moveend', refreshPopupContent);
+    isViewportSyncBound = false;
+  };
+
+  const bindPopupHoverHandlers = () => {
+    const popupElement = marker.getPopup()?.getElement();
+    if (!popupElement || popupElement.__mapPopupHoverBound) {
+      return;
+    }
+
+    popupElement.__mapPopupHoverBound = true;
+    popupElement.addEventListener('mouseenter', () => {
+      isPointerOverPopup = true;
+      clearClosePopupTimer();
+    });
+    popupElement.addEventListener('mouseleave', () => {
+      isPointerOverPopup = false;
+      schedulePopupClose();
+    });
   };
 
   marker.on('click', () => {
     clearHoverPopupTimer();
+    clearClosePopupTimer();
+    isPointerOverPopup = false;
     ensurePopup();
     marker.openPopup();
     onSelect?.();
@@ -4399,6 +4579,8 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
     clearHoverPopupTimer();
     hoverPopupTimer = window.setTimeout(() => {
       hoverPopupTimer = null;
+      clearClosePopupTimer();
+      isPointerOverPopup = false;
       ensurePopup();
       marker.openPopup();
     }, HOVER_POPUP_DELAY_MS);
@@ -4406,11 +4588,26 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
 
   marker.on('mouseout', () => {
     clearHoverPopupTimer();
-    marker.closePopup();
+    schedulePopupClose();
+  });
+
+  marker.on('popupopen', () => {
+    refreshPopupContent();
+    bindPopupHoverHandlers();
+    bindPopupViewportSync();
+  });
+
+  marker.on('popupclose', () => {
+    isPointerOverPopup = false;
+    clearClosePopupTimer();
+    unbindPopupViewportSync();
   });
 
   marker.on('remove', () => {
     clearHoverPopupTimer();
+    clearClosePopupTimer();
+    isPointerOverPopup = false;
+    unbindPopupViewportSync();
   });
 }
 
@@ -4836,11 +5033,103 @@ function formatCoordinate(value) {
 }
 
 function buildPersonPopupHtml(person) {
+  const matchingPeople = getVisiblePeopleWithOverlappingMarkers(person);
+  if (matchingPeople.length > 1) {
+    const sortedPeople = [...matchingPeople].sort((left, right) => {
+      const leftName = String(left.fullName || left.companyName || '').trim();
+      const rightName = String(right.fullName || right.companyName || '').trim();
+      return leftName.localeCompare(rightName, 'pl', { sensitivity: 'base' });
+    });
+
+    const groups = [];
+    for (const entry of sortedPeople) {
+      const normalizedAddress = normalizeComparableText(entry.routeAddress || entry.addressText || '');
+      const hasCoordinates = Number.isFinite(Number(entry.lat)) && Number.isFinite(Number(entry.lng));
+      const coordinateKey = hasCoordinates
+        ? `${Number(entry.lat).toFixed(6)}:${Number(entry.lng).toFixed(6)}`
+        : '';
+
+      const matchingGroup = groups.find((group) => {
+        const matchesAddress = normalizedAddress && group.addressKeys.has(normalizedAddress);
+        const matchesCoordinates = coordinateKey && group.coordinateKeys.has(coordinateKey);
+        return matchesAddress || matchesCoordinates;
+      });
+
+      if (matchingGroup) {
+        matchingGroup.people.push(entry);
+        if (normalizedAddress) {
+          matchingGroup.addressKeys.add(normalizedAddress);
+        }
+        if (coordinateKey) {
+          matchingGroup.coordinateKeys.add(coordinateKey);
+        }
+        continue;
+      }
+
+      groups.push({
+        people: [entry],
+        addressKeys: new Set(normalizedAddress ? [normalizedAddress] : []),
+        coordinateKeys: new Set(coordinateKey ? [coordinateKey] : [])
+      });
+    }
+
+    return `
+      <strong>Osoby w tym obszarze (${sortedPeople.length})</strong>
+      <div class="map-popup-person-scroll">
+        ${groups
+          .map((group) => {
+            const firstPerson = group.people[0] || {};
+            const displayAddress = escapeHtml(firstPerson.routeAddress || firstPerson.addressText || 'Brak adresu');
+
+            return `
+              <article class="map-popup-person-box">
+                <div class="map-popup-person-box-header">
+                  <span>${displayAddress}</span>
+                </div>
+                <div class="map-popup-person-list">
+                  ${group.people
+                    .map((entry) => {
+                      const displayName = escapeHtml(entry.fullName || entry.companyName || 'Bez nazwy');
+                      const personId = escapeHtml(String(entry.sourceRowId || entry.id || 'Brak'));
+                      const lastVisitAt = escapeHtml(formatDate(entry.lastVisitAt));
+                      const lastPaymentAt = escapeHtml(formatDate(entry.lastPaymentAt));
+                      return `
+                        <div
+                          class="map-popup-person-entry"
+                          data-map-popup-person-source-row-id="${escapeHtml(String(entry.sourceRowId || entry.id || ''))}"
+                          role="button"
+                          tabindex="0"
+                          aria-label="Przejdz do osoby ${displayName}"
+                        >
+                          <strong>${displayName}</strong>
+                          <span>ID: ${personId}</span>
+                          <span>Wizyta: ${lastVisitAt} • Wplata: ${lastPaymentAt}</span>
+                        </div>
+                      `;
+                    })
+                    .join('')}
+                </div>
+              </article>
+            `;
+          })
+          .join('')}
+      </div>
+    `;
+  }
+
   return `
-    <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong><br>
-    ${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}<br>
-    Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}<br>
-    Ostatnia wpłata: ${escapeHtml(formatDate(person.lastPaymentAt))}
+    <div
+      class="map-popup-person-entry"
+      data-map-popup-person-source-row-id="${escapeHtml(String(person.sourceRowId || person.id || ''))}"
+      role="button"
+      tabindex="0"
+      aria-label="Przejdz do osoby ${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}"
+    >
+      <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+      <span>ID: ${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))}</span>
+      <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
+      <span>Wizyta: ${escapeHtml(formatDate(person.lastVisitAt))} • Wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}</span>
+    </div>
   `;
 }
 
