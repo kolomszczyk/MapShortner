@@ -18,6 +18,7 @@ const PREFETCH_VIEWPORT_ZOOM_AHEAD = 1;
 const PREFETCH_HOVER_ZOOM_AHEAD = 2;
 const PREFETCH_HOVER_RADIUS_METERS = 200;
 const FOREGROUND_PRIORITY_POLL_MS = 120;
+const FOREGROUND_PRIORITY_IDLE_GRACE_MS = 350;
 const TILE_FALLBACK_MAX_ZOOM_DELTA = 6;
 
 const OFFLINE_TILE_DEFAULTS = Object.freeze({
@@ -94,8 +95,11 @@ function createMapTileService({
   let lastPersistedState = normalizeOfflineTileState(store?.getOfflineTileDownloadState?.() || {});
   let pendingOfflineStateFlush = null;
   let pendingOfflineStatePatch = null;
+  let pendingNetworkSpeedReset = null;
   let lastOfflineStateFlushAt = 0;
   let activeForegroundDownloads = 0;
+  let lastForegroundActivityAt = 0;
+  const tileNetworkSpeedSamples = [];
   let prefetchWorkersStarted = false;
 
   async function registerProtocol() {
@@ -110,7 +114,8 @@ function createMapTileService({
 
     if (lastPersistedState.phase === 'downloading' || lastPersistedState.phase === 'pausing') {
       updateOfflineState({
-        phase: 'paused',
+        phase: 'idle',
+        pauseReason: null,
         speedBps: 0,
         updatedAt: new Date().toISOString(),
         lastError: lastPersistedState.lastError
@@ -141,26 +146,37 @@ function createMapTileService({
   }
 
   async function readOrFetchTile(tile, options = {}) {
-    const cachePath = buildCachePath(tile);
-    const cached = await readCachedTile(cachePath);
-    if (cached) {
-      return cached;
+    const isForeground = options.priority === 'foreground';
+    if (isForeground) {
+      lastForegroundActivityAt = Date.now();
     }
 
-    const pendingKey = cachePath;
-    if (!inFlightDownloads.has(pendingKey)) {
-      if (options.priority !== 'foreground') {
-        await waitForForegroundCapacity();
+    try {
+      const cachePath = buildCachePath(tile);
+      const cached = await readCachedTile(cachePath);
+      if (cached) {
+        return cached;
       }
-      inFlightDownloads.set(
-        pendingKey,
-        downloadAndCacheTile(tile, cachePath, options).finally(() => {
-          inFlightDownloads.delete(pendingKey);
-        })
-      );
-    }
 
-    return inFlightDownloads.get(pendingKey);
+      const pendingKey = cachePath;
+      if (!inFlightDownloads.has(pendingKey)) {
+        if (!isForeground) {
+          await waitForForegroundCapacity();
+        }
+        inFlightDownloads.set(
+          pendingKey,
+          downloadAndCacheTile(tile, cachePath, options).finally(() => {
+            inFlightDownloads.delete(pendingKey);
+          })
+        );
+      }
+
+      return await inFlightDownloads.get(pendingKey);
+    } finally {
+      if (isForeground) {
+        lastForegroundActivityAt = Date.now();
+      }
+    }
   }
 
   async function readCachedTile(cachePath) {
@@ -219,6 +235,7 @@ function createMapTileService({
 
     if (isForeground) {
       activeForegroundDownloads += 1;
+      lastForegroundActivityAt = Date.now();
     }
 
     try {
@@ -243,10 +260,12 @@ function createMapTileService({
         contentType: response.headers.get('content-type') || 'image/png'
       };
       touchMemoryCache(cachePath, downloaded);
+      pushTileNetworkSpeedSample(buffer.length || 0);
       return downloaded;
     } finally {
       if (isForeground) {
         activeForegroundDownloads = Math.max(0, activeForegroundDownloads - 1);
+        lastForegroundActivityAt = Date.now();
       }
     }
   }
@@ -362,6 +381,7 @@ function createMapTileService({
     if (!activeDownloadRun) {
       const state = updateOfflineState({
         phase: lastPersistedState.phase === 'completed' ? 'completed' : 'paused',
+        pauseReason: lastPersistedState.phase === 'completed' ? null : 'manual',
         speedBps: 0,
         updatedAt: new Date().toISOString()
       }, { force: true });
@@ -374,6 +394,7 @@ function createMapTileService({
     activeDownloadRun.cancelled = true;
     const state = updateOfflineState({
       phase: 'pausing',
+      pauseReason: 'manual',
       speedBps: 0,
       updatedAt: new Date().toISOString()
     }, { force: true });
@@ -626,6 +647,7 @@ function createMapTileService({
 
     return updateOfflineState({
       phase,
+      pauseReason: phase === 'paused' ? previousState.pauseReason : null,
       totalTiles: plan.tiles.length,
       downloadedTiles: cachedTiles,
       failedTiles: phase === 'completed' ? 0 : previousState.failedTiles,
@@ -658,6 +680,7 @@ function createMapTileService({
 
     return updateOfflineState({
       phase: previousState.phase,
+      pauseReason: previousState.phase === 'paused' ? previousState.pauseReason : null,
       totalTiles,
       downloadedTiles: cachedTiles,
       failedTiles: previousState.failedTiles,
@@ -746,6 +769,7 @@ function createMapTileService({
     const startedAt = new Date().toISOString();
     const initialState = updateOfflineState({
       phase: missingTiles.length > 0 ? 'downloading' : (blockedTilesCount > 0 ? 'idle' : 'completed'),
+      pauseReason: null,
       totalTiles: plan.tiles.length,
       downloadedTiles: cachedTiles,
       failedTiles: 0,
@@ -847,7 +871,7 @@ function createMapTileService({
           downloadedTiles: run.downloadedTiles,
           failedTiles: run.failedTiles,
           bytesDownloaded: run.bytesDownloaded,
-          speedBps: calculateSpeedBps(run.speedSamples),
+          speedBps: getCurrentTileNetworkSpeedBps(),
           updatedAt: new Date().toISOString(),
           lastError: error.message,
           planSummary: buildRuntimePlanSummary(run)
@@ -874,7 +898,7 @@ function createMapTileService({
       downloadedTiles: run.downloadedTiles,
       failedTiles: run.failedTiles,
       bytesDownloaded: run.bytesDownloaded,
-      speedBps: calculateSpeedBps(run.speedSamples),
+      speedBps: getCurrentTileNetworkSpeedBps(),
       updatedAt: new Date().toISOString(),
       lastError: null,
       planSummary: buildRuntimePlanSummary(run)
@@ -908,6 +932,7 @@ function createMapTileService({
       : (run.cancelled ? 'paused' : (blockedTilesCount > 0 && run.downloadedTiles < totalTiles ? 'idle' : 'completed'));
     const nextState = updateOfflineState({
       phase,
+      pauseReason: phase === 'paused' ? 'manual' : null,
       totalTiles,
       downloadedTiles: run.downloadedTiles,
       failedTiles: run.failedTiles,
@@ -969,6 +994,58 @@ function createMapTileService({
     }
 
     return lastPersistedState;
+  }
+
+  function pushTileNetworkSpeedSample(bytes) {
+    const sampleBytes = Math.max(0, Number(bytes || 0));
+    if (sampleBytes <= 0) {
+      return;
+    }
+
+    const now = Date.now();
+    tileNetworkSpeedSamples.push({
+      at: now,
+      bytes: sampleBytes
+    });
+    trimTileNetworkSpeedSamples(now);
+
+    updateOfflineState({
+      speedBps: getCurrentTileNetworkSpeedBps(),
+      updatedAt: new Date().toISOString()
+    });
+
+    scheduleTileNetworkSpeedReset();
+  }
+
+  function trimTileNetworkSpeedSamples(now = Date.now()) {
+    while (tileNetworkSpeedSamples.length > 0 && now - tileNetworkSpeedSamples[0].at > SPEED_WINDOW_MS) {
+      tileNetworkSpeedSamples.shift();
+    }
+  }
+
+  function getCurrentTileNetworkSpeedBps() {
+    trimTileNetworkSpeedSamples(Date.now());
+    return calculateSpeedBps(tileNetworkSpeedSamples);
+  }
+
+  function scheduleTileNetworkSpeedReset() {
+    if (pendingNetworkSpeedReset) {
+      clearTimeout(pendingNetworkSpeedReset);
+    }
+
+    pendingNetworkSpeedReset = setTimeout(() => {
+      pendingNetworkSpeedReset = null;
+      trimTileNetworkSpeedSamples(Date.now());
+      if (tileNetworkSpeedSamples.length > 0) {
+        scheduleTileNetworkSpeedReset();
+        return;
+      }
+
+      updateOfflineState({
+        speedBps: 0,
+        updatedAt: new Date().toISOString()
+      });
+    }, SPEED_WINDOW_MS + 50);
   }
 
   function flushOfflineState() {
@@ -1068,7 +1145,10 @@ function createMapTileService({
   }
 
   async function waitForForegroundCapacity() {
-    while (activeForegroundDownloads > 0) {
+    while (
+      activeForegroundDownloads > 0
+      || (lastForegroundActivityAt > 0 && (Date.now() - lastForegroundActivityAt) < FOREGROUND_PRIORITY_IDLE_GRACE_MS)
+    ) {
       await delay(FOREGROUND_PRIORITY_POLL_MS);
     }
   }
@@ -1237,6 +1317,7 @@ function normalizeOfflineTileBoolean(value, fallback) {
 function normalizeOfflineTileState(input = {}) {
   return {
     phase: String(input.phase || 'idle'),
+    pauseReason: input.pauseReason || null,
     totalTiles: Math.max(0, Number(input.totalTiles || 0)),
     downloadedTiles: Math.max(0, Number(input.downloadedTiles || 0)),
     failedTiles: Math.max(0, Number(input.failedTiles || 0)),
@@ -1302,7 +1383,11 @@ function shouldAutoStartOfflineDownload(state, settings) {
     return true;
   }
 
-  if (state.phase === 'downloading' || state.phase === 'pausing' || state.phase === 'paused') {
+  if (state.phase === 'downloading' || state.phase === 'pausing') {
+    return false;
+  }
+
+  if (state.phase === 'paused' && state.pauseReason === 'manual') {
     return false;
   }
 

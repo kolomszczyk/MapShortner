@@ -101,6 +101,7 @@ const DEFAULT_OFFLINE_TILE_SETTINGS = Object.freeze({
 
 const DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE = Object.freeze({
   phase: 'idle',
+  pauseReason: null,
   totalTiles: 0,
   downloadedTiles: 0,
   failedTiles: 0,
@@ -171,6 +172,7 @@ function initSchema(db) {
     CREATE TABLE IF NOT EXISTS offline_tile_download_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       phase TEXT NOT NULL DEFAULT 'idle',
+      pause_reason TEXT,
       total_tiles INTEGER NOT NULL DEFAULT 0,
       downloaded_tiles INTEGER NOT NULL DEFAULT 0,
       failed_tiles INTEGER NOT NULL DEFAULT 0,
@@ -185,6 +187,7 @@ function initSchema(db) {
   `);
 
   ensureOfflineTileSettingsColumns(db);
+  ensureOfflineTileDownloadStateColumns(db);
 }
 
 function normalizeOfflineTileSettings(input = {}) {
@@ -334,6 +337,7 @@ function ensureOfflineTileSettingsColumns(db) {
 function normalizeOfflineTileDownloadState(input = {}) {
   return {
     phase: String(input.phase || DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE.phase),
+    pauseReason: input.pauseReason || DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE.pauseReason,
     totalTiles: Math.max(0, Number(input.totalTiles || 0)),
     downloadedTiles: Math.max(0, Number(input.downloadedTiles || 0)),
     failedTiles: Math.max(0, Number(input.failedTiles || 0)),
@@ -353,6 +357,7 @@ function getOfflineTileDownloadState(db) {
   const row = db.prepare(`
     SELECT
       phase,
+      pause_reason AS pauseReason,
       total_tiles AS totalTiles,
       downloaded_tiles AS downloadedTiles,
       failed_tiles AS failedTiles,
@@ -390,6 +395,7 @@ function saveOfflineTileDownloadState(db, input = {}) {
     INSERT INTO offline_tile_download_state(
       id,
       phase,
+      pause_reason,
       total_tiles,
       downloaded_tiles,
       failed_tiles,
@@ -401,9 +407,10 @@ function saveOfflineTileDownloadState(db, input = {}) {
       last_error,
       plan_summary_json
     )
-    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       phase = excluded.phase,
+      pause_reason = excluded.pause_reason,
       total_tiles = excluded.total_tiles,
       downloaded_tiles = excluded.downloaded_tiles,
       failed_tiles = excluded.failed_tiles,
@@ -416,6 +423,7 @@ function saveOfflineTileDownloadState(db, input = {}) {
       plan_summary_json = excluded.plan_summary_json
   `).run(
     normalized.phase,
+    normalized.pauseReason,
     normalized.totalTiles,
     normalized.downloadedTiles,
     normalized.failedTiles,
@@ -432,6 +440,15 @@ function saveOfflineTileDownloadState(db, input = {}) {
     ...normalized,
     updatedAt
   };
+}
+
+function ensureOfflineTileDownloadStateColumns(db) {
+  const columns = db.prepare('PRAGMA table_info(offline_tile_download_state)').all();
+  const columnNames = new Set(columns.map((column) => String(column.name || '')));
+
+  if (!columnNames.has('pause_reason')) {
+    db.exec('ALTER TABLE offline_tile_download_state ADD COLUMN pause_reason TEXT');
+  }
 }
 
 function buildImportSchemaSql(tables, indexes) {
