@@ -1604,9 +1604,16 @@ function hasActiveMapPersonSearchFilter() {
   return Boolean(getActiveMapPersonSearchQuery());
 }
 
-function hasMapDateFilterDraftValue(input = mapDateFilterDraft) {
+function hasMapDateFilterDraftChanges(input = mapDateFilterDraft) {
   const draft = normalizeMapDateFilterDraft(input);
-  return Boolean(draft.fromMonth || draft.fromYear || draft.toMonth || draft.toYear);
+  const defaultDraft = buildDefaultMapDateFilterDraft();
+
+  return (
+    draft.fromMonth !== defaultDraft.fromMonth
+    || draft.fromYear !== defaultDraft.fromYear
+    || draft.toMonth !== defaultDraft.toMonth
+    || draft.toYear !== defaultDraft.toYear
+  );
 }
 
 async function applyMapDateFilter(nextFilter) {
@@ -7064,7 +7071,7 @@ function paintFilterPanel() {
   const isFromMonthActive = hasMonthOptions && Boolean(fromYear);
   const isToMonthActive = hasMonthOptions && Boolean(toYear);
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
-  const hasDraftValue = hasMapDateFilterDraftValue();
+  const hasDraftChanges = hasMapDateFilterDraftChanges();
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Filtr';
@@ -7076,15 +7083,16 @@ function paintFilterPanel() {
         type="button"
         class="button-muted filter-panel-reset"
         data-map-date-filter-reset
-        ${hasDraftValue ? '' : 'disabled'}
+        ${hasDraftChanges ? '' : 'disabled'}
       >
-        Reset
+        Resetuj wszystko
       </button>
     </div>
   `;
   selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
+      <span class="eyebrow filter-panel-subtitle">Sortuj po dacie</span>
       <div class="filter-date-stack">
         <div class="field filter-date-box">
           <span>Najnowsza data</span>
@@ -7115,6 +7123,14 @@ function paintFilterPanel() {
               </select>
             </div>
           </div>
+          <button
+            type="button"
+            class="button-muted filter-panel-section-reset"
+            data-map-date-filter-reset
+            ${hasDraftChanges ? '' : 'disabled'}
+          >
+            Resetuj
+          </button>
         </div>
       </div>
     </form>
@@ -7124,6 +7140,7 @@ function paintFilterPanel() {
         src="./assets/filter-cat.png"
         alt="Praca w toku. Kot wie co robi."
       />
+      <p class="filter-placeholder-copy">Reszta filtrow bedzie wprowadzana krok po kroku.</p>
     </div>
   `;
   selectionExtraEl.hidden = false;
