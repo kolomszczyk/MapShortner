@@ -30,16 +30,28 @@ export function initDashboardPanel({
   const tileZ12RadiusKmInput = root.querySelector('#tile-z12-radius-km');
   const tileZ14RadiusKmInput = root.querySelector('#tile-z14-radius-km');
   const tileZ16RadiusMetersInput = root.querySelector('#tile-z16-radius-meters');
+  const tileZ18RadiusMetersInput = root.querySelector('#tile-z18-radius-meters');
+  const tileIncludePolandBaseInput = root.querySelector('#tile-include-poland-base');
+  const tileIncludeWorldBaseInput = root.querySelector('#tile-include-world-base');
+  const tileAutoDownloadInput = root.querySelector('#tile-auto-download');
+  const tileSimulateNoInternetInput = root.querySelector('#tile-simulate-no-internet');
   const tileDownloadConcurrencyInput = root.querySelector('#tile-download-concurrency');
   const tileDownloadSaveBtn = root.querySelector('#tile-download-save-btn');
+  const tileDownloadResetBtn = root.querySelector('#tile-download-reset-btn');
   const tileDownloadRefreshBtn = root.querySelector('#tile-download-refresh-btn');
   const tileDownloadStartBtn = root.querySelector('#tile-download-start-btn');
   const tileDownloadPauseBtn = root.querySelector('#tile-download-pause-btn');
+  const tileDeletePackageBtn = root.querySelector('#tile-delete-package-btn');
+  const tileDeleteExtraBtn = root.querySelector('#tile-delete-extra-btn');
   const tileDownloadPhaseEls = root.querySelectorAll('[data-tile-download-phase]');
   const tileDownloadProgressEls = root.querySelectorAll('[data-tile-download-progress]');
   const tileDownloadSpeedEls = root.querySelectorAll('[data-tile-download-speed]');
   const tileDownloadCountsEls = root.querySelectorAll('[data-tile-download-counts]');
   const tileDownloadPointsEls = root.querySelectorAll('[data-tile-download-points]');
+  const tileDownloadEstimateEls = root.querySelectorAll('[data-tile-download-estimate]');
+  const tileDownloadPackageEls = root.querySelectorAll('[data-tile-download-package]');
+  const tileDownloadExtraEls = root.querySelectorAll('[data-tile-download-extra]');
+  const tileDownloadTotalDiskEls = root.querySelectorAll('[data-tile-download-total-disk]');
   const tileDownloadPlanEls = root.querySelectorAll('[data-tile-download-plan]');
   const tileDownloadErrorEls = root.querySelectorAll('[data-tile-download-error]');
   let lastUpdaterState = null;
@@ -250,6 +262,29 @@ export function initDashboardPanel({
     });
   });
 
+  tileDownloadResetBtn?.addEventListener('click', async () => {
+    const confirmed = await showStyledConfirmDialog({
+      title: 'Przywrocic domyslne?',
+      message: 'Czy na pewno chcesz przywrocic domyslne ustawienia pobierania offline?',
+      confirmLabel: 'Przywroc'
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setButtonBusy(tileDownloadResetBtn, true, 'Przywracanie...');
+    try {
+      const result = await window.appApi.resetTileDownloadSettings();
+      renderTileDownloadSection(result);
+      appendLog('Przywrocono domyslne ustawienia pobierania map offline.');
+    } catch (error) {
+      appendLog(`Nie udalo sie przywrocic domyslnych ustawien offline: ${error.message}`);
+    } finally {
+      setButtonBusy(tileDownloadResetBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
   tileDownloadRefreshBtn?.addEventListener('click', async () => {
     await persistTileDownloadSettings({
       button: tileDownloadRefreshBtn,
@@ -260,7 +295,8 @@ export function initDashboardPanel({
   tileDownloadStartBtn?.addEventListener('click', async () => {
     await persistTileDownloadSettings({
       button: tileDownloadStartBtn,
-      successMessage: null
+      successMessage: null,
+      skipAutoStart: true
     });
     setButtonBusy(tileDownloadStartBtn, true, 'Pobieranie...');
     try {
@@ -285,6 +321,60 @@ export function initDashboardPanel({
       appendLog(`Nie udalo sie zatrzymac pobierania kafelkow: ${error.message}`);
     } finally {
       setButtonBusy(tileDownloadPauseBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
+  tileDeletePackageBtn?.addEventListener('click', async () => {
+    const confirmed = await showStyledConfirmDialog({
+      title: 'Usunac paczke?',
+      message: 'Czy na pewno chcesz usunac aktualna paczke offline?',
+      confirmLabel: 'Usun'
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setButtonBusy(tileDeletePackageBtn, true, 'Usuwanie...');
+    try {
+      const result = await window.appApi.deleteOfflinePackageTiles();
+      renderTileDownloadSection(result);
+      appendLog(
+        result?.removedTiles > 0
+          ? `Usunieto paczke offline: ${formatNumber(result.removedTiles)} kafelkow.`
+          : 'Aktualna paczka offline nie miala zapisanych kafelkow.'
+      );
+    } catch (error) {
+      appendLog(`Nie udalo sie usunac paczki offline: ${error.message}`);
+    } finally {
+      setButtonBusy(tileDeletePackageBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
+  tileDeleteExtraBtn?.addEventListener('click', async () => {
+    const confirmed = await showStyledConfirmDialog({
+      title: 'Usunac dodatkowe?',
+      message: 'Czy na pewno chcesz usunac dodatkowe kafelki poza aktualnym planem offline?',
+      confirmLabel: 'Usun'
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setButtonBusy(tileDeleteExtraBtn, true, 'Usuwanie...');
+    try {
+      const result = await window.appApi.deleteExtraCachedTiles();
+      renderTileDownloadSection(result);
+      appendLog(
+        result?.removedTiles > 0
+          ? `Usunieto dodatkowe kafelki: ${formatNumber(result.removedTiles)}.`
+          : 'Brak dodatkowych kafelkow do usuniecia.'
+      );
+    } catch (error) {
+      appendLog(`Nie udalo sie usunac dodatkowych kafelkow: ${error.message}`);
+    } finally {
+      setButtonBusy(tileDeleteExtraBtn, false);
       syncTileDownloadControls();
     }
   });
@@ -383,7 +473,7 @@ export function initDashboardPanel({
     }
   }
 
-  async function persistTileDownloadSettings({ button = null, successMessage = null } = {}) {
+  async function persistTileDownloadSettings({ button = null, successMessage = null, skipAutoStart = false } = {}) {
     if (!hasTileDownloadSection()) {
       return null;
     }
@@ -393,7 +483,10 @@ export function initDashboardPanel({
     }
 
     try {
-      const result = await window.appApi.saveTileDownloadSettings(readTileDownloadSettingsForm());
+      const result = await window.appApi.saveTileDownloadSettings({
+        ...readTileDownloadSettingsForm(),
+        skipAutoStart
+      });
       renderTileDownloadSection(result);
       if (successMessage) {
         appendLog(successMessage);
@@ -492,6 +585,7 @@ export function initDashboardPanel({
       tileZ12RadiusKmInput &&
       tileZ14RadiusKmInput &&
       tileZ16RadiusMetersInput &&
+      tileZ18RadiusMetersInput &&
       tileDownloadConcurrencyInput
     );
   }
@@ -500,7 +594,12 @@ export function initDashboardPanel({
     return {
       z12RadiusKm: Number(tileZ12RadiusKmInput?.value || 0),
       z14RadiusKm: Number(tileZ14RadiusKmInput?.value || 0),
-      z16RadiusMeters: Number(tileZ16RadiusMetersInput?.value || 0),
+      z16RadiusMeters: Number(tileZ16RadiusMetersInput?.value || 0) * 1000,
+      z18RadiusMeters: Number(tileZ18RadiusMetersInput?.value || 0) * 1000,
+      includePolandBase: tileIncludePolandBaseInput?.checked === true,
+      includeWorldBase: tileIncludeWorldBaseInput?.checked === true,
+      autoDownload: tileAutoDownloadInput?.checked === true,
+      simulateNoInternet: tileSimulateNoInternetInput?.checked === true,
       concurrency: Number(tileDownloadConcurrencyInput?.value || 4)
     };
   }
@@ -512,24 +611,53 @@ export function initDashboardPanel({
 
     lastTileDownloadPayload = payload;
     const settings = payload?.settings || {};
-    const state = payload?.state || {};
+    const state = payload?.state || payload?.download || {};
     const totalTiles = Number(state.totalTiles || 0);
     const downloadedTiles = Number(state.downloadedTiles || 0);
     const failedTiles = Number(state.failedTiles || 0);
     const progressPercent = totalTiles > 0 ? Math.min(100, (downloadedTiles / totalTiles) * 100) : 0;
     const planSummary = state.planSummary || null;
     const countsByZoom = planSummary?.countsByZoom || {};
+    const planName = String(planSummary?.planName || '').trim();
+    const estimatedTotalBytes = Number(planSummary?.estimatedTotalBytes || 0);
+    const actualPackageBytes = Number(planSummary?.actualPackageBytes || 0);
+    const extraCachedBytes = Number(planSummary?.extraCachedBytes || 0);
+    const totalCachedBytes = Number(planSummary?.totalCachedBytes || 0);
     const planLabel = totalTiles > 0
       ? [
+          planName || null,
           countsByZoom[12] ? `z12: ${formatNumber(countsByZoom[12])}` : null,
           countsByZoom[14] ? `z14: ${formatNumber(countsByZoom[14])}` : null,
-          countsByZoom[16] ? `z16: ${formatNumber(countsByZoom[16])}` : null
+          countsByZoom[16] ? `z16: ${formatNumber(countsByZoom[16])}` : null,
+          countsByZoom[18] ? `z18: ${formatNumber(countsByZoom[18])}` : null,
+          ...Object.keys(countsByZoom)
+            .map((zoomKey) => Number.parseInt(zoomKey, 10))
+            .filter((zoom) => ![12, 14, 16, 18].includes(zoom))
+            .sort((left, right) => left - right)
+            .map((zoom) => `z${zoom}: ${formatNumber(countsByZoom[zoom])}`)
         ].filter(Boolean).join(' | ')
       : 'Brak wyliczen';
+    const estimateLabel = formatBytes(estimatedTotalBytes);
+    const packageLabel = formatBytes(actualPackageBytes);
+    const extraLabel = formatBytes(extraCachedBytes);
+    const totalDiskLabel = formatBytes(totalCachedBytes);
 
     tileZ12RadiusKmInput.value = stringifySettingValue(settings.z12RadiusKm, 1);
     tileZ14RadiusKmInput.value = stringifySettingValue(settings.z14RadiusKm, 1);
-    tileZ16RadiusMetersInput.value = stringifySettingValue(settings.z16RadiusMeters, 0);
+    tileZ16RadiusMetersInput.value = stringifySettingValue((settings.z16RadiusMeters || 0) / 1000, 2);
+    tileZ18RadiusMetersInput.value = stringifySettingValue((settings.z18RadiusMeters || 0) / 1000, 2);
+    if (tileIncludePolandBaseInput) {
+      tileIncludePolandBaseInput.checked = settings.includePolandBase === true;
+    }
+    if (tileIncludeWorldBaseInput) {
+      tileIncludeWorldBaseInput.checked = settings.includeWorldBase === true;
+    }
+    if (tileAutoDownloadInput) {
+      tileAutoDownloadInput.checked = settings.autoDownload !== false;
+    }
+    if (tileSimulateNoInternetInput) {
+      tileSimulateNoInternetInput.checked = settings.simulateNoInternet === true;
+    }
     tileDownloadConcurrencyInput.value = stringifySettingValue(settings.concurrency, 0);
 
     tileDownloadPhaseEls.forEach((target) => {
@@ -546,6 +674,18 @@ export function initDashboardPanel({
     });
     tileDownloadPointsEls.forEach((target) => {
       target.textContent = formatNumber(planSummary?.pointsCount || 0);
+    });
+    tileDownloadEstimateEls.forEach((target) => {
+      target.textContent = estimateLabel;
+    });
+    tileDownloadPackageEls.forEach((target) => {
+      target.textContent = packageLabel;
+    });
+    tileDownloadExtraEls.forEach((target) => {
+      target.textContent = extraLabel;
+    });
+    tileDownloadTotalDiskEls.forEach((target) => {
+      target.textContent = totalDiskLabel;
     });
     tileDownloadPlanEls.forEach((target) => {
       target.textContent = planLabel;
@@ -571,6 +711,15 @@ export function initDashboardPanel({
     }
     if (tileDownloadPauseBtn) {
       tileDownloadPauseBtn.disabled = !isDownloading;
+    }
+    if (tileDownloadResetBtn) {
+      tileDownloadResetBtn.disabled = isDownloading;
+    }
+    if (tileDeletePackageBtn) {
+      tileDeletePackageBtn.disabled = isDownloading;
+    }
+    if (tileDeleteExtraBtn) {
+      tileDeleteExtraBtn.disabled = isDownloading;
     }
   }
 
@@ -627,6 +776,52 @@ export function initDashboardPanel({
         return null;
     }
   }
+
+  function showStyledConfirmDialog({ title = 'Potwierdzenie', message = '', confirmLabel = 'Potwierdz' } = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'time-color-confirm-overlay';
+      overlay.style.inset = '0';
+      overlay.innerHTML = `
+        <div class="time-color-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dashboard-confirm-title">
+          <strong id="dashboard-confirm-title">${escapeHtml(title)}</strong>
+          <p>${escapeHtml(message)}</p>
+          <div class="time-color-confirm-actions">
+            <button type="button" class="button-muted" data-dashboard-confirm-cancel>Anuluj</button>
+            <button type="button" class="button-strong" data-dashboard-confirm-accept>${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>
+      `;
+
+      const confirmButton = overlay.querySelector('[data-dashboard-confirm-accept]');
+      const cancelButton = overlay.querySelector('[data-dashboard-confirm-cancel]');
+
+      const cleanup = (result) => {
+        document.removeEventListener('keydown', handleKeydown);
+        overlay.remove();
+        resolve(result);
+      };
+
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cleanup(false);
+        }
+      };
+
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) {
+          cleanup(false);
+        }
+      });
+
+      cancelButton?.addEventListener('click', () => cleanup(false));
+      confirmButton?.addEventListener('click', () => cleanup(true));
+      document.addEventListener('keydown', handleKeydown);
+      document.body.appendChild(overlay);
+      confirmButton?.focus();
+    });
+  }
 }
 
 function stringifySettingValue(value, fractionDigits = 0) {
@@ -682,6 +877,15 @@ function formatDecimal(value, fractionDigits = 1) {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits
   }).format(numericValue);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function renderScopedSummary(root, summary) {

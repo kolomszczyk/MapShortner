@@ -1170,6 +1170,10 @@ textarea {
   gap: 14px;
 }
 
+.tile-download-stats-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .dimension-grid article {
   border-radius: var(--radius-lg);
   padding: 18px;
@@ -1188,6 +1192,10 @@ textarea {
   margin-top: 8px;
   font-size: 1.9rem;
   line-height: 1;
+}
+
+.tile-download-stats-grid strong {
+  font-size: 1.45rem;
 }
 
 .json-export-area {
@@ -1323,6 +1331,36 @@ textarea {
 
 .three-cols {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tile-download-detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr);
+  align-items: start;
+}
+
+.tile-download-detail-field {
+  min-width: 0;
+}
+
+.tile-download-detail-chip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 92px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tile-download-detail-field-plan .tile-download-detail-chip {
+  min-height: 112px;
 }
 
 .time-filter-grid {
@@ -2692,6 +2730,10 @@ body.map-page .service-map {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .tile-download-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .panel-heading,
   .subpanel-header,
   .kv-row {
@@ -2753,6 +2795,7 @@ body.map-page .service-map {
   .dimension-grid,
   .two-cols,
   .three-cols,
+  .tile-download-detail-grid,
   .time-filter-grid,
   .map-mini-stats,
   .time-color-hint-grid,

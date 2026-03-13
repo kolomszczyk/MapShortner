@@ -88,9 +88,14 @@ function createDataStore(app) {
 }
 
 const DEFAULT_OFFLINE_TILE_SETTINGS = Object.freeze({
-  z12RadiusKm: 10,
-  z14RadiusKm: 0.5,
-  z16RadiusMeters: 200,
+  z12RadiusKm: 15,
+  z14RadiusKm: 2.5,
+  z16RadiusMeters: 800,
+  z18RadiusMeters: 100,
+  includePolandBase: true,
+  includeWorldBase: true,
+  autoDownload: true,
+  simulateNoInternet: false,
   concurrency: 4
 });
 
@@ -151,9 +156,14 @@ function initSchema(db) {
 
     CREATE TABLE IF NOT EXISTS offline_tile_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      z12_radius_km REAL NOT NULL DEFAULT 10,
-      z14_radius_km REAL NOT NULL DEFAULT 0.5,
-      z16_radius_meters REAL NOT NULL DEFAULT 200,
+      z12_radius_km REAL NOT NULL DEFAULT 15,
+      z14_radius_km REAL NOT NULL DEFAULT 2.5,
+      z16_radius_meters REAL NOT NULL DEFAULT 800,
+      z18_radius_meters REAL NOT NULL DEFAULT 100,
+      include_poland_base INTEGER NOT NULL DEFAULT 1,
+      include_world_base INTEGER NOT NULL DEFAULT 1,
+      auto_download INTEGER NOT NULL DEFAULT 1,
+      simulate_no_internet INTEGER NOT NULL DEFAULT 0,
       concurrency INTEGER NOT NULL DEFAULT 4,
       updated_at TEXT
     );
@@ -173,12 +183,15 @@ function initSchema(db) {
       plan_summary_json TEXT
     );
   `);
+
+  ensureOfflineTileSettingsColumns(db);
 }
 
 function normalizeOfflineTileSettings(input = {}) {
   const z12RadiusKm = Number(input.z12RadiusKm);
   const z14RadiusKm = Number(input.z14RadiusKm);
   const z16RadiusMeters = Number(input.z16RadiusMeters);
+  const z18RadiusMeters = Number(input.z18RadiusMeters);
   const concurrency = Number(input.concurrency);
 
   return {
@@ -187,10 +200,42 @@ function normalizeOfflineTileSettings(input = {}) {
     z16RadiusMeters: Number.isFinite(z16RadiusMeters)
       ? Math.max(0, z16RadiusMeters)
       : DEFAULT_OFFLINE_TILE_SETTINGS.z16RadiusMeters,
+    z18RadiusMeters: Number.isFinite(z18RadiusMeters)
+      ? Math.max(0, z18RadiusMeters)
+      : DEFAULT_OFFLINE_TILE_SETTINGS.z18RadiusMeters,
+    includePolandBase: normalizeOfflineTileBoolean(input.includePolandBase, DEFAULT_OFFLINE_TILE_SETTINGS.includePolandBase),
+    includeWorldBase: normalizeOfflineTileBoolean(input.includeWorldBase, DEFAULT_OFFLINE_TILE_SETTINGS.includeWorldBase),
+    autoDownload: normalizeOfflineTileBoolean(input.autoDownload, DEFAULT_OFFLINE_TILE_SETTINGS.autoDownload),
+    simulateNoInternet: normalizeOfflineTileBoolean(
+      input.simulateNoInternet,
+      DEFAULT_OFFLINE_TILE_SETTINGS.simulateNoInternet
+    ),
     concurrency: Number.isFinite(concurrency)
       ? Math.min(12, Math.max(1, Math.round(concurrency)))
       : DEFAULT_OFFLINE_TILE_SETTINGS.concurrency
   };
+}
+
+function normalizeOfflineTileBoolean(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback === true;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') {
+      return true;
+    }
+    if (normalized === 'false' || normalized === '0') {
+      return false;
+    }
+  }
+
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+
+  return value === true;
 }
 
 function getOfflineTileSettings(db) {
@@ -199,6 +244,11 @@ function getOfflineTileSettings(db) {
       z12_radius_km AS z12RadiusKm,
       z14_radius_km AS z14RadiusKm,
       z16_radius_meters AS z16RadiusMeters,
+      z18_radius_meters AS z18RadiusMeters,
+      include_poland_base AS includePolandBase,
+      include_world_base AS includeWorldBase,
+      auto_download AS autoDownload,
+      simulate_no_internet AS simulateNoInternet,
       concurrency
     FROM offline_tile_settings
     WHERE id = 1
@@ -220,25 +270,65 @@ function saveOfflineTileSettings(db, input = {}) {
       z12_radius_km,
       z14_radius_km,
       z16_radius_meters,
+      z18_radius_meters,
+      include_poland_base,
+      include_world_base,
+      auto_download,
+      simulate_no_internet,
       concurrency,
       updated_at
     )
-    VALUES (1, ?, ?, ?, ?, ?)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       z12_radius_km = excluded.z12_radius_km,
       z14_radius_km = excluded.z14_radius_km,
       z16_radius_meters = excluded.z16_radius_meters,
+      z18_radius_meters = excluded.z18_radius_meters,
+      include_poland_base = excluded.include_poland_base,
+      include_world_base = excluded.include_world_base,
+      auto_download = excluded.auto_download,
+      simulate_no_internet = excluded.simulate_no_internet,
       concurrency = excluded.concurrency,
       updated_at = excluded.updated_at
   `).run(
     normalized.z12RadiusKm,
     normalized.z14RadiusKm,
     normalized.z16RadiusMeters,
+    normalized.z18RadiusMeters,
+    normalized.includePolandBase ? 1 : 0,
+    normalized.includeWorldBase ? 1 : 0,
+    normalized.autoDownload ? 1 : 0,
+    normalized.simulateNoInternet ? 1 : 0,
     normalized.concurrency,
     updatedAt
   );
 
   return normalized;
+}
+
+function ensureOfflineTileSettingsColumns(db) {
+  const columns = db.prepare('PRAGMA table_info(offline_tile_settings)').all();
+  const columnNames = new Set(columns.map((column) => String(column.name || '')));
+
+  if (!columnNames.has('include_poland_base')) {
+    db.exec('ALTER TABLE offline_tile_settings ADD COLUMN include_poland_base INTEGER NOT NULL DEFAULT 1');
+  }
+
+  if (!columnNames.has('include_world_base')) {
+    db.exec('ALTER TABLE offline_tile_settings ADD COLUMN include_world_base INTEGER NOT NULL DEFAULT 1');
+  }
+
+  if (!columnNames.has('auto_download')) {
+    db.exec('ALTER TABLE offline_tile_settings ADD COLUMN auto_download INTEGER NOT NULL DEFAULT 1');
+  }
+
+  if (!columnNames.has('simulate_no_internet')) {
+    db.exec('ALTER TABLE offline_tile_settings ADD COLUMN simulate_no_internet INTEGER NOT NULL DEFAULT 0');
+  }
+
+  if (!columnNames.has('z18_radius_meters')) {
+    db.exec('ALTER TABLE offline_tile_settings ADD COLUMN z18_radius_meters REAL NOT NULL DEFAULT 100');
+  }
 }
 
 function normalizeOfflineTileDownloadState(input = {}) {
@@ -1018,7 +1108,7 @@ function getDashboardSummary(db) {
     },
     offlineTiles: {
       settings: getOfflineTileSettings(db),
-      download: getOfflineTileDownloadState(db)
+      state: getOfflineTileDownloadState(db)
     }
   };
 }

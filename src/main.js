@@ -40,7 +40,7 @@ const DEFAULT_WINDOW_BOUNDS = Object.freeze({
 });
 const WINDOW_MIN_WIDTH = 1120;
 const WINDOW_MIN_HEIGHT = 760;
-const isDevMode = process.argv.includes('--dev');
+const isDevMode = process.argv.includes('--dev') || process.argv.includes('dev');
 let mapTileService = null;
 let persistWindowStateTimer = null;
 
@@ -1593,8 +1593,11 @@ ipcMain.handle('geocode:run', async (_event, payload = {}) => {
 ipcMain.handle('dashboard:getSummary', () => store.getDashboardSummary());
 ipcMain.handle('tiles:getState', async () => mapTileService.refreshOfflineDownloadState());
 ipcMain.handle('tiles:saveSettings', async (_event, payload = {}) => mapTileService.saveOfflineDownloadSettings(payload));
+ipcMain.handle('tiles:resetSettings', async () => mapTileService.resetOfflineDownloadSettings());
 ipcMain.handle('tiles:startDownload', async () => mapTileService.startOfflineDownload());
 ipcMain.handle('tiles:pauseDownload', async () => mapTileService.pauseOfflineDownload());
+ipcMain.handle('tiles:deleteOfflinePackage', async () => mapTileService.deleteOfflinePackageTiles());
+ipcMain.handle('tiles:deleteExtraTiles', async () => mapTileService.deleteExtraCachedTiles());
 ipcMain.handle('tiles:queueViewportPrefetch', async (_event, payload = {}) => mapTileService.queueViewportPrefetch(payload));
 ipcMain.handle('tiles:queueHoverPrefetch', async (_event, payload = {}) => mapTileService.queueHoverPrefetch(payload));
 ipcMain.handle('data:getTables', () => store.getImportTables());
