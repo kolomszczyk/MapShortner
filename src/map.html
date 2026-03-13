@@ -30,10 +30,14 @@
                   <div>
                     <h1 data-map-selection-title></h1>
                     <div class="map-selection-actions" aria-label="Akcje osoby" data-map-selection-actions>
+                      <span
+                        class="map-selection-action-color"
+                        data-map-selection-color-indicator
+                        aria-label="Kolor osoby na mapie"
+                      ></span>
                       <button
                         type="button"
                         class="button-muted map-selection-action-button"
-                        title="Zakladka"
                         aria-label="Zakladka"
                         aria-pressed="false"
                         data-map-selection-bookmark
@@ -81,7 +85,6 @@
                   </div>
                   <p class="copy">
                     Kliknij zebatke na prawym pasku, aby otworzyc ustawienia importu i geokodowania
-                    na calej przestrzeni roboczej. Kliknij zebatke ponownie, aby wrocic do mapy.
                   </p>
                 </section>
               </section>
@@ -501,10 +504,18 @@
               </button>
               <button
                 class="map-tool-button"
+                aria-label="Zaznaczone osoby"
+                aria-pressed="false"
+                data-map-tool="bookmarked"
+                type="button"
+              >
+                <i class="fa-solid fa-bookmark" aria-hidden="true"></i>
+              </button>
+              <button
+                class="map-tool-button"
                 type="button"
                 aria-label="Paleta kolorów"
                 aria-pressed="false"
-                title="Paleta kolorów"
                 data-map-tool="colors"
               >
                 <i class="fa-solid fa-palette" aria-hidden="true"></i>
@@ -522,7 +533,6 @@
                 class="map-tool-button"
                 type="button"
                 aria-label="Filtr"
-                title="Filtr"
                 aria-pressed="false"
                 data-map-tool="filter"
               >
@@ -531,7 +541,6 @@
               <button
                 class="map-tool-button"
                 aria-label="Lista osób"
-                title="Lista osób"
                 aria-pressed="false"
                 data-map-tool="list"
                 type="button"
@@ -539,19 +548,8 @@
                 <i class="fa-solid fa-list" aria-hidden="true"></i>
               </button>
               <button
-                class="map-tool-button"
-                aria-label="Zaznaczone osoby"
-                title="Zaznaczone osoby"
-                aria-pressed="false"
-                data-map-tool="bookmarked"
-                type="button"
-              >
-                <i class="fa-solid fa-bookmark" aria-hidden="true"></i>
-              </button>
-              <button
                 class="map-tool-button map-tool-button-settings"
                 aria-label="Ustawienia"
-                title="Ustawienia"
                 aria-pressed="false"
                 data-map-tool="settings"
                 type="button"

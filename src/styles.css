@@ -472,6 +472,16 @@ textarea {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+  align-items: center;
+}
+
+.map-selection-action-color {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--map-selection-action-color, #ffffff);
+  border: 2px solid var(--map-selection-action-color-border, rgba(48, 67, 54, 0.28));
+  flex: 0 0 auto;
 }
 
 .map-selection-action-button {
@@ -2621,6 +2631,40 @@ body.map-page .service-map {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
+}
+
+.map-person-row-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.map-person-row-bookmark {
+  width: 19px;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(48, 67, 54, 0.14);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.map-person-row-bookmark.is-active {
+  color: var(--accent-strong);
+  border-color: rgba(46, 111, 74, 0.3);
+  background: rgba(226, 242, 231, 0.92);
+}
+
+.map-person-row-color {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--map-person-row-color, #ffffff);
+  border: 2px solid var(--map-person-row-color-border, color-mix(in srgb, var(--map-person-row-color, #ffffff) 64%, #1a221c 36%));
 }
 
 .list-card p {

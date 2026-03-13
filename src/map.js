@@ -34,6 +34,7 @@ const overviewDefaultEls = document.querySelectorAll('[data-map-overview-default
 const selectionHeaderEl = document.querySelector('[data-map-selection-header]');
 const selectionTitleEl = document.querySelector('[data-map-selection-title]');
 const selectionActionsEl = document.querySelector('[data-map-selection-actions]');
+const selectionColorIndicatorEl = document.querySelector('[data-map-selection-color-indicator]');
 const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
 const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
@@ -570,6 +571,14 @@ function handleSelectionPanelClick(event) {
     return;
   }
 
+  const personRowBookmarkToggle = event.target.closest('[data-map-person-bookmark-toggle]');
+  if (personRowBookmarkToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    void togglePersonBookmarkFromListRow(personRowBookmarkToggle);
+    return;
+  }
+
   const filterResultButton = event.target.closest('[data-map-filter-source-row-id]');
   if (filterResultButton && infoPanelMode === 'filter') {
     const sourceRowId = filterResultButton.getAttribute('data-map-filter-source-row-id');
@@ -813,6 +822,63 @@ function handleSelectionPanelClick(event) {
   if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
     history.forward();
   }
+
+  async function togglePersonBookmarkFromListRow(bookmarkElement) {
+    const sourceRowId = String(bookmarkElement?.getAttribute('data-map-person-bookmark-toggle') || '').trim();
+    if (!sourceRowId || !window.appApi?.setPersonBookmark) {
+      return;
+    }
+
+    const isBookmarked = bookmarkElement.getAttribute('data-map-person-bookmarked') === 'true';
+    const nextState = !isBookmarked;
+
+    bookmarkElement.setAttribute('data-map-person-bookmarked', String(nextState));
+    bookmarkElement.classList.toggle('is-active', nextState);
+    const iconEl = bookmarkElement.querySelector('i');
+    iconEl?.classList.toggle('fa-solid', nextState);
+    iconEl?.classList.toggle('fa-regular', !nextState);
+
+    try {
+      const result = await window.appApi.setPersonBookmark({
+        sourceRowId,
+        isBookmarked: nextState
+      });
+      const persistedState = result?.isBookmarked === true;
+      syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
+      refreshPeopleListPanelsAfterBookmarkToggle();
+    } catch (error) {
+      bookmarkElement.setAttribute('data-map-person-bookmarked', String(isBookmarked));
+      bookmarkElement.classList.toggle('is-active', isBookmarked);
+      iconEl?.classList.toggle('fa-solid', isBookmarked);
+      iconEl?.classList.toggle('fa-regular', !isBookmarked);
+    }
+  }
+
+  function refreshPeopleListPanelsAfterBookmarkToggle() {
+    if (infoPanelMode === 'search') {
+      paintSearchPanel({ shouldFocusInput: false });
+      return;
+    }
+
+    if (infoPanelMode === 'list') {
+      paintListPanel();
+      return;
+    }
+
+    if (infoPanelMode === 'bookmarked') {
+      paintBookmarkedListPanel();
+      return;
+    }
+
+    if (infoPanelMode === 'filter') {
+      paintFilterPanel();
+      return;
+    }
+
+    if (infoPanelMode === 'history') {
+      paintHistorySelection();
+    }
+  }
 }
 
 function setMapSelectionBookmarkActive(isActive) {
@@ -858,7 +924,28 @@ function syncSelectionBookmarkUiState() {
 
   if (!shouldShowActions) {
     setMapSelectionBookmarkActive(false);
+    syncSelectionActionColor(null);
   }
+}
+
+function syncSelectionActionColor(person) {
+  if (!selectionColorIndicatorEl) {
+    return;
+  }
+
+  const normalizedSourceRowId = String(person?.sourceRowId || '').trim();
+  const isVisibleOnMap = normalizedSourceRowId
+    ? allPeople.some((entry) => entry.sourceRowId === normalizedSourceRowId)
+    : false;
+  const nextColor = normalizedSourceRowId && isVisibleOnMap
+    ? normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.fillColor || '#bb86fc')
+    : '#ffffff';
+  const borderColor = nextColor === '#ffffff'
+    ? 'rgba(48, 67, 54, 0.28)'
+    : '';
+
+  selectionColorIndicatorEl.style.setProperty('--map-selection-action-color', nextColor);
+  selectionColorIndicatorEl.style.setProperty('--map-selection-action-color-border', borderColor);
 }
 
 function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
@@ -884,6 +971,42 @@ function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
       ...knownPerson,
       isBookmarked
     });
+  }
+
+  personSearchState = {
+    ...personSearchState,
+    results: personSearchState.results.map((person) => {
+      if (person?.sourceRowId !== normalizedSourceRowId) {
+        return person;
+      }
+
+      return {
+        ...person,
+        isBookmarked
+      };
+    })
+  };
+
+  personListState = {
+    ...personListState,
+    results: personListState.results.map((person) => {
+      if (person?.sourceRowId !== normalizedSourceRowId) {
+        return person;
+      }
+
+      return {
+        ...person,
+        isBookmarked
+      };
+    })
+  };
+
+  if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === normalizedSourceRowId) {
+    selectionPanelState.details.person.isBookmarked = isBookmarked;
+  }
+
+  if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId === normalizedSourceRowId) {
+    selectionPanelState.person.isBookmarked = isBookmarked;
   }
 
   syncBookmarkedPersonListStateFromVisiblePeople();
@@ -4448,6 +4571,7 @@ function paintEmptySelection() {
   selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = '';
   selectionExtraEl.hidden = true;
+  syncSelectionActionColor(null);
   syncSelectionBookmarkUiState();
 }
 
@@ -4481,6 +4605,7 @@ function paintPersonSelectionState(person) {
   selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
   selectionExtraEl.hidden = false;
+  syncSelectionActionColor(person);
   setMapSelectionBookmarkActive(person?.isBookmarked === true);
   syncSelectionBookmarkUiState();
 }
@@ -4516,6 +4641,7 @@ function paintPersonSelection(details) {
     ...buildPersonPrimaryDetailItems(person)
   ]);
   selectionMetaEl.hidden = false;
+  syncSelectionActionColor(person);
   setMapSelectionBookmarkActive(person?.isBookmarked === true);
   syncSelectionBookmarkUiState();
 
@@ -4682,6 +4808,7 @@ function paintCustomPointSelection(point) {
   selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = '<p class="empty-state">Ten punkt nie ma jeszcze dodatkowych notatek.</p>';
   selectionExtraEl.hidden = false;
+  syncSelectionActionColor(null);
   syncSelectionBookmarkUiState();
 }
 
@@ -5163,6 +5290,7 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+            ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
           <span>${escapeHtml(locationLabel)}</span>
@@ -5299,6 +5427,7 @@ function renderPersonListRows(people, currentSelectedPersonId = null) {
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+            ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
           <span>${escapeHtml(locationLabel)}</span>
@@ -5429,6 +5558,7 @@ function renderBookmarkedPersonListRows(people, currentSelectedPersonId = null) 
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+            ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
           <span>${escapeHtml(locationLabel)}</span>
@@ -7490,6 +7620,7 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
   return people
     .map((person) => {
       const isCurrent = person.sourceRowId === currentSelectedPersonId;
+      const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
       return `
         <button
           type="button"
@@ -7499,12 +7630,57 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
         >
           <div class="list-card-heading">
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+            ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
           <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
         </button>
       `;
     })
     .join('');
+}
+
+function renderMapPersonRowTools(person, options = {}) {
+  const sourceRowId = String(person?.sourceRowId || '').trim();
+  if (!sourceRowId) {
+    return '';
+  }
+
+  const isCurrent = options.isCurrent === true;
+  const isVisibleOnMap = options.isVisibleOnMap === true;
+  const isBookmarked = person?.isBookmarked === true;
+  const swatchColor = resolveMapPersonRowSwatchColor(person, { isCurrent, isVisibleOnMap });
+  const swatchBorderColor = swatchColor === '#ffffff' ? 'rgba(48, 67, 54, 0.28)' : '';
+
+  return `
+    <span class="map-person-row-tools">
+      <span
+        class="map-person-row-bookmark${isBookmarked ? ' is-active' : ''}"
+        data-map-person-bookmark-toggle="${escapeHtml(sourceRowId)}"
+        data-map-person-bookmarked="${String(isBookmarked)}"
+        aria-label="${isBookmarked ? 'Usuń zakładkę' : 'Dodaj zakładkę'}"
+      >
+        <i class="${isBookmarked ? 'fa-solid' : 'fa-regular'} fa-bookmark" aria-hidden="true"></i>
+      </span>
+      <span
+        class="map-person-row-color"
+        style="--map-person-row-color: ${escapeHtml(swatchColor)}; --map-person-row-color-border: ${escapeHtml(swatchBorderColor)}"
+        aria-label="Kolor osoby na mapie"
+      ></span>
+    </span>
+  `;
+}
+
+function resolveMapPersonRowSwatchColor(person, options = {}) {
+  if (options.isCurrent === true) {
+    return normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.fillColor || '#bb86fc');
+  }
+
+  if (options.isVisibleOnMap !== true) {
+    return '#ffffff';
+  }
+
+  const markerStyle = buildDefaultPersonMarkerStyle(person);
+  return normalizeHexColorInputValue(markerStyle?.fillColor || DEFAULT_PERSON_MARKER_STYLE.fillColor || '#4db06f');
 }
 
 function syncMapDateFilterRenderedCount() {
@@ -7694,6 +7870,12 @@ function paintHistorySelection() {
           >
             <div class="list-card-heading">
               <strong>${escapeHtml(person?.fullName || person?.companyName || 'Ładowanie osoby...')}</strong>
+              ${person
+                ? renderMapPersonRowTools(person, {
+                    isVisibleOnMap: allPeople.some((entry) => entry.sourceRowId === sourceRowId),
+                    isCurrent
+                  })
+                : ''}
             </div>
             <span>Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}</span>
           </button>

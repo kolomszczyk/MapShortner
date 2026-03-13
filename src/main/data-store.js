@@ -1292,7 +1292,12 @@ function listPeople(db, input = {}) {
       last_visit_at AS lastVisitAt,
       last_payment_at AS lastPaymentAt,
       planned_visit_at AS plannedVisitAt,
-      total_paid AS totalPaid
+      total_paid AS totalPaid,
+      EXISTS(
+        SELECT 1
+        FROM person_bookmarks
+        WHERE person_bookmarks.source_row_id = people_cache.source_row_id
+      ) AS isBookmarked
     FROM people_cache
     ${whereClause}
     ORDER BY full_name COLLATE NOCASE ASC
