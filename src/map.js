@@ -938,7 +938,7 @@ function syncSelectionActionColor(person) {
     ? allPeople.some((entry) => entry.sourceRowId === normalizedSourceRowId)
     : false;
   const nextColor = normalizedSourceRowId && isVisibleOnMap
-    ? normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.fillColor || '#bb86fc')
+    ? resolveMapPersonRowSwatchColor(person, { isVisibleOnMap })
     : '#ffffff';
   const borderColor = nextColor === '#ffffff'
     ? 'rgba(48, 67, 54, 0.28)'
@@ -946,6 +946,21 @@ function syncSelectionActionColor(person) {
 
   selectionColorIndicatorEl.style.setProperty('--map-selection-action-color', nextColor);
   selectionColorIndicatorEl.style.setProperty('--map-selection-action-color-border', borderColor);
+}
+
+function sanitizeMapPersonSwatchColor(colorValue) {
+  const normalizedColor = normalizeHexColorInputValue(colorValue || DEFAULT_PERSON_MARKER_STYLE.fillColor || '#4db06f');
+  const excludedColors = new Set([
+    normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.fillColor || '#bb86fc'),
+    normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.color || '#6e3cbc'),
+    '#845ec2'
+  ]);
+
+  if (excludedColors.has(normalizedColor)) {
+    return normalizeHexColorInputValue(DEFAULT_PERSON_MARKER_STYLE.fillColor || '#4db06f');
+  }
+
+  return normalizedColor;
 }
 
 function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
@@ -7671,16 +7686,12 @@ function renderMapPersonRowTools(person, options = {}) {
 }
 
 function resolveMapPersonRowSwatchColor(person, options = {}) {
-  if (options.isCurrent === true) {
-    return normalizeHexColorInputValue(ACTIVE_PERSON_MARKER_STYLE.fillColor || '#bb86fc');
-  }
-
   if (options.isVisibleOnMap !== true) {
     return '#ffffff';
   }
 
   const markerStyle = buildDefaultPersonMarkerStyle(person);
-  return normalizeHexColorInputValue(markerStyle?.fillColor || DEFAULT_PERSON_MARKER_STYLE.fillColor || '#4db06f');
+  return sanitizeMapPersonSwatchColor(markerStyle?.fillColor || DEFAULT_PERSON_MARKER_STYLE.fillColor || '#4db06f');
 }
 
 function syncMapDateFilterRenderedCount() {
