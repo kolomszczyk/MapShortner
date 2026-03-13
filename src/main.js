@@ -87,6 +87,12 @@ let startupUpdateInstallTimer = null;
 let startupUpdateBlockTimer = null;
 let startupUpdateInstallArmed = false;
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
 function getDevModeUpdaterMessage() {
   return 'Tryb dev: auto-reload wlaczony, auto-update wylaczony.';
 }
@@ -1453,51 +1459,70 @@ async function runFirstLaunchSetup() {
   });
 }
 
-app.whenReady().then(async () => {
-  store = createDataStore(app);
-  resetCachedStoreState();
-  mapTileService = createMapTileService({
-    app,
-    log,
-    protocol,
-    store,
-    sendTileDownloadState,
-    sendOperationStatus
-  });
-  await mapTileService.registerProtocol();
-  const windowReady = createWindow();
-  if (!isDevMode) {
-    configureAutoUpdater();
-  }
-  await windowReady;
+if (hasSingleInstanceLock) {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      if (!mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      mainWindow.focus();
+      return;
+    }
 
-  startDevReloadWatcher();
-
-  if (!isDevMode) {
-    await runStartupUpdateFlow();
-  }
-
-  try {
-    await runFirstLaunchSetup();
-  } catch (error) {
-    log.error('First launch setup failed', error);
-    sendOperationStatus({
-      type: 'first-launch',
-      status: 'failed',
-      message: `Konfiguracja pierwszego uruchomienia nie powiodla sie: ${error.message}`,
-      error: error.message,
-      summary: store.getDashboardSummary()
-    });
-  }
-
-  startAccessReimportMonitor();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (app.isReady()) {
       createWindow();
     }
   });
-});
+
+  app.whenReady().then(async () => {
+    store = createDataStore(app);
+    resetCachedStoreState();
+    mapTileService = createMapTileService({
+      app,
+      log,
+      protocol,
+      store,
+      sendTileDownloadState,
+      sendOperationStatus
+    });
+    await mapTileService.registerProtocol();
+    const windowReady = createWindow();
+    if (!isDevMode) {
+      configureAutoUpdater();
+    }
+    await windowReady;
+
+    startDevReloadWatcher();
+
+    if (!isDevMode) {
+      await runStartupUpdateFlow();
+    }
+
+    try {
+      await runFirstLaunchSetup();
+    } catch (error) {
+      log.error('First launch setup failed', error);
+      sendOperationStatus({
+        type: 'first-launch',
+        status: 'failed',
+        message: `Konfiguracja pierwszego uruchomienia nie powiodla sie: ${error.message}`,
+        error: error.message,
+        summary: store.getDashboardSummary()
+      });
+    }
+
+    startAccessReimportMonitor();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

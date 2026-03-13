@@ -127,6 +127,7 @@ npm run release
 - Auto-update działa dla aplikacji zbudowanej przez `electron-builder` (nie dla `npm run start`).
 - `npm run dev` sluzy tylko do lokalnego testu interfejsu aktualizacji przez symulacje.
 - Na Linuxie używany jest target `AppImage`, na Windowsie `NSIS`.
+- Aplikacja działa w trybie pojedynczej instancji: kolejne uruchomienie nie tworzy nowego procesu okna, tylko aktywuje już otwarte okno.
 
 ## Diagnostyka błędu `Unable to find latest version on GitHub` / `406`
 
