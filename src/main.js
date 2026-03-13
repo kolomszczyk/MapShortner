@@ -1724,6 +1724,7 @@ ipcMain.handle('tiles:getState', async () => mapTileService.refreshOfflineDownlo
 ipcMain.handle('tiles:saveSettings', async (_event, payload = {}) => mapTileService.saveOfflineDownloadSettings(payload));
 ipcMain.handle('tiles:resetSettings', async () => mapTileService.resetOfflineDownloadSettings());
 ipcMain.handle('tiles:startDownload', async () => mapTileService.startOfflineDownload());
+ipcMain.handle('tiles:startRefreshDownload', async () => mapTileService.startOfflinePackageRefresh({ source: 'manual' }));
 ipcMain.handle('tiles:pauseDownload', async () => mapTileService.pauseOfflineDownload());
 ipcMain.handle('tiles:deleteOfflinePackage', async () => mapTileService.deleteOfflinePackageTiles());
 ipcMain.handle('tiles:deleteExtraTiles', async () => mapTileService.deleteExtraCachedTiles());

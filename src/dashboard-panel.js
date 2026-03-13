@@ -40,6 +40,7 @@ export function initDashboardPanel({
   const tileDownloadResetBtn = root.querySelector('#tile-download-reset-btn');
   const tileDownloadRefreshBtn = root.querySelector('#tile-download-refresh-btn');
   const tileDownloadStartBtn = root.querySelector('#tile-download-start-btn');
+  const tileRefreshDownloadBtn = root.querySelector('#tile-refresh-download-btn');
   const tileDownloadPauseBtn = root.querySelector('#tile-download-pause-btn');
   const tileDeletePackageBtn = root.querySelector('#tile-delete-package-btn');
   const tileDeleteExtraBtn = root.querySelector('#tile-delete-extra-btn');
@@ -54,6 +55,10 @@ export function initDashboardPanel({
   const tileDownloadTotalDiskEls = root.querySelectorAll('[data-tile-download-total-disk]');
   const tileDownloadPlanEls = root.querySelectorAll('[data-tile-download-plan]');
   const tileDownloadErrorEls = root.querySelectorAll('[data-tile-download-error]');
+  const tilePackageUpdatedAtEls = root.querySelectorAll('[data-tile-package-updated-at]');
+  const tilePackageNextRefreshEls = root.querySelectorAll('[data-tile-package-next-refresh]');
+  const tileRefreshStatusEls = root.querySelectorAll('[data-tile-refresh-status]');
+  const tileRefreshProgressEls = root.querySelectorAll('[data-tile-refresh-progress]');
   let lastUpdaterState = null;
   let lastUpdaterLogKey = null;
   let lastTileDownloadPayload = null;
@@ -313,6 +318,25 @@ export function initDashboardPanel({
       appendLog(`Nie udalo sie uruchomic pobierania kafelkow: ${error.message}`);
     } finally {
       setButtonBusy(tileDownloadStartBtn, false);
+      syncTileDownloadControls();
+    }
+  });
+
+  tileRefreshDownloadBtn?.addEventListener('click', async () => {
+    await persistTileDownloadSettings({
+      button: tileRefreshDownloadBtn,
+      successMessage: null,
+      skipAutoStart: true
+    });
+    setButtonBusy(tileRefreshDownloadBtn, true, 'Nowa wersja...');
+    try {
+      const result = await window.appApi.startTileRefreshDownload();
+      renderTileDownloadSection(result);
+      appendLog('Uruchomiono pobieranie nowej wersji mapy offline.');
+    } catch (error) {
+      appendLog(`Nie udalo sie uruchomic pobierania nowej wersji mapy: ${error.message}`);
+    } finally {
+      setButtonBusy(tileRefreshDownloadBtn, false);
       syncTileDownloadControls();
     }
   });
@@ -619,10 +643,17 @@ export function initDashboardPanel({
     lastTileDownloadPayload = payload;
     const settings = payload?.settings || {};
     const state = payload?.state || payload?.download || {};
+    const packageState = payload?.packageState || {};
+    const refreshState = packageState.refresh || {};
     const totalTiles = Number(state.totalTiles || 0);
     const downloadedTiles = Number(state.downloadedTiles || 0);
     const failedTiles = Number(state.failedTiles || 0);
     const progressPercent = totalTiles > 0 ? Math.min(100, (downloadedTiles / totalTiles) * 100) : 0;
+    const refreshTotalTiles = Number(refreshState.totalTiles || 0);
+    const refreshDownloadedTiles = Number(refreshState.downloadedTiles || 0);
+    const refreshProgressPercent = refreshTotalTiles > 0
+      ? Math.min(100, (refreshDownloadedTiles / refreshTotalTiles) * 100)
+      : 0;
     const planSummary = state.planSummary || null;
     const countsByZoom = planSummary?.countsByZoom || {};
     const planName = String(planSummary?.planName || '').trim();
@@ -705,31 +736,53 @@ export function initDashboardPanel({
         ? `${state.lastError}${failedTiles > 0 ? ` (${formatNumber(failedTiles)} bledow)` : ''}`
         : (failedTiles > 0 ? `${formatNumber(failedTiles)} bledow bez aktywnego komunikatu` : 'Brak');
     });
+    tilePackageUpdatedAtEls.forEach((target) => {
+      target.textContent = packageState.activePackageUpdatedAt
+        ? `Rev ${formatNumber(packageState.activeRevision || 1)} | ${formatDateTime(packageState.activePackageUpdatedAt)}`
+        : 'Brak aktywnej paczki';
+    });
+    tilePackageNextRefreshEls.forEach((target) => {
+      target.textContent = formatTilePackageNextRefreshLabel(packageState);
+    });
+    tileRefreshStatusEls.forEach((target) => {
+      target.textContent = formatTileRefreshPhaseLabel(refreshState.phase, packageState);
+    });
+    tileRefreshProgressEls.forEach((target) => {
+      target.textContent = `${formatDecimal(refreshProgressPercent, 1)}% | ${formatNumber(refreshDownloadedTiles)} / ${formatNumber(refreshTotalTiles)}`;
+    });
 
-    syncTileDownloadControls(state);
+    syncTileDownloadControls(state, refreshState);
   }
 
-  function syncTileDownloadControls(state = lastTileDownloadPayload?.state || null) {
+  function syncTileDownloadControls(
+    state = lastTileDownloadPayload?.state || null,
+    refreshState = lastTileDownloadPayload?.packageState?.refresh || null
+  ) {
     if (!hasTileDownloadSection()) {
       return;
     }
 
     const phase = state?.phase || 'idle';
+    const refreshPhase = refreshState?.phase || 'idle';
     const isDownloading = phase === 'downloading' || phase === 'pausing';
+    const isRefreshing = refreshPhase === 'downloading' || refreshPhase === 'switching';
     if (tileDownloadStartBtn) {
-      tileDownloadStartBtn.disabled = isDownloading;
+      tileDownloadStartBtn.disabled = isDownloading || isRefreshing;
+    }
+    if (tileRefreshDownloadBtn) {
+      tileRefreshDownloadBtn.disabled = isDownloading || isRefreshing;
     }
     if (tileDownloadPauseBtn) {
-      tileDownloadPauseBtn.disabled = !isDownloading;
+      tileDownloadPauseBtn.disabled = !(isDownloading || isRefreshing);
     }
     if (tileDownloadResetBtn) {
-      tileDownloadResetBtn.disabled = isDownloading;
+      tileDownloadResetBtn.disabled = isDownloading || isRefreshing;
     }
     if (tileDeletePackageBtn) {
-      tileDeletePackageBtn.disabled = isDownloading;
+      tileDeletePackageBtn.disabled = isDownloading || isRefreshing;
     }
     if (tileDeleteExtraBtn) {
-      tileDeleteExtraBtn.disabled = isDownloading;
+      tileDeleteExtraBtn.disabled = isDownloading || isRefreshing;
     }
   }
 
@@ -739,6 +792,37 @@ export function initDashboardPanel({
       return `${formatBytes(speedBps)}/s`;
     }
     return '0 B/s';
+  }
+
+  function formatTilePackageNextRefreshLabel(packageState = {}) {
+    if (!packageState?.activePackageUpdatedAt || !packageState?.nextRefreshDueAt) {
+      return 'Brak harmonogramu';
+    }
+
+    if (packageState.isRefreshDue) {
+      return `Do odswiezenia od ${formatDateTime(packageState.nextRefreshDueAt)}`;
+    }
+
+    return formatDateTime(packageState.nextRefreshDueAt);
+  }
+
+  function formatTileRefreshPhaseLabel(phase, packageState = {}) {
+    switch (phase) {
+      case 'downloading':
+        return 'Pobieranie nowej wersji';
+      case 'switching':
+        return 'Automatyczne przelaczanie';
+      case 'paused':
+        return 'Pobieranie wstrzymane';
+      case 'failed':
+        return packageState?.refresh?.lastError || 'Blad odswiezania';
+      case 'completed':
+        return packageState?.lastRefreshCompletedAt
+          ? `Aktywna od ${formatDateTime(packageState.lastRefreshCompletedAt)}`
+          : 'Nowa wersja gotowa';
+      default:
+        return packageState?.isRefreshDue ? 'Nowa wersja czeka na pobranie' : 'Brak aktywnego odswiezania';
+    }
   }
 
   function renderOperationLogHistory(entries = []) {

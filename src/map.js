@@ -160,6 +160,7 @@ const restoredMapTimeColorRanges = readStoredMapTimeColorRanges();
 const restoredMapTimeColorDateMatchMode = readStoredMapTimeColorDateMatchMode();
 
 let mapInstance;
+let tileLayer;
 let peopleLayer;
 let supplementalPeopleLayer;
 let customLayer;
@@ -245,6 +246,7 @@ let timeColorConfirmState = null;
 let mapTimeColorAsyncPersistFrame = 0;
 let hoverTilePrefetchTimer = 0;
 let lastQueuedHoverTilePrefetchKey = '';
+let activeTilePackageRevision = 1;
 
 function endTimeColorChartDragState(options = {}) {
   const shouldCommit = Boolean(options?.commit);
@@ -1205,6 +1207,10 @@ window.appApi.onOperationStatus(async (payload) => {
   }
 });
 
+window.appApi.onTileDownloadState((payload) => {
+  syncTileLayerRevision(payload?.packageState);
+});
+
 syncSettingsPanelVisibility();
 renderCurrentInfoPanel();
 bootstrap();
@@ -1216,6 +1222,7 @@ async function bootstrap() {
     hydratePersonSelectionHistory()
   ]);
   renderOverviewSummary(bootstrapData.summary);
+  syncTileLayerRevision(bootstrapData.summary?.offlineTiles?.packageState);
   initDashboardPanel({
     root: settingsViewEl,
     bootstrapData,
@@ -1228,6 +1235,21 @@ async function bootstrap() {
       console.error('Map points load failed', error);
     });
   });
+}
+
+function buildTileUrlTemplate(revision = activeTilePackageRevision) {
+  return `${TILE_URL_TEMPLATE}?rev=${encodeURIComponent(String(revision || 1))}`;
+}
+
+function syncTileLayerRevision(packageState = {}) {
+  const nextRevision = Math.max(1, Number(packageState?.activeRevision || 1));
+  if (nextRevision === activeTilePackageRevision) {
+    return;
+  }
+
+  activeTilePackageRevision = nextRevision;
+  tileLayer?.setUrl(buildTileUrlTemplate(activeTilePackageRevision), false);
+  tileLayer?.redraw();
 }
 
 function toggleSettingsPanel(forceState = !isSettingsOpen, options = {}) {
@@ -1313,7 +1335,7 @@ function buildMap() {
 
   mapInstance.getContainer().classList.add('offline-map');
   installAcceleratedWheelZoom(mapInstance);
-  L.tileLayer(TILE_URL_TEMPLATE, {
+  tileLayer = L.tileLayer(buildTileUrlTemplate(), {
     keepBuffer: 3,
     minZoom: 2,
     maxZoom: 18,

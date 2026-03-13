@@ -13,6 +13,7 @@ const TRANSPARENT_PNG = Buffer.from(
 const MEMORY_CACHE_LIMIT = 256;
 const SPEED_WINDOW_MS = 8000;
 const OFFLINE_STATE_FLUSH_INTERVAL_MS = 250;
+const OFFLINE_PACKAGE_STATE_FLUSH_INTERVAL_MS = 250;
 const PREFETCH_WORKER_COUNT = 1;
 const PREFETCH_VIEWPORT_ZOOM_AHEAD = 1;
 const PREFETCH_HOVER_ZOOM_AHEAD = 2;
@@ -98,15 +99,91 @@ function createMapTileService({
   const queuedPrefetchKeys = new Set();
   let protocolRegistered = false;
   let activeDownloadRun = null;
+  let activePackageRefreshRun = null;
   let lastPersistedState = normalizeOfflineTileState(store?.getOfflineTileDownloadState?.() || {});
+  let packageState = normalizeOfflineTilePackageState(readOfflineTilePackageState(store));
   let pendingOfflineStateFlush = null;
   let pendingOfflineStatePatch = null;
+  let pendingPackageStateFlush = null;
+  let pendingPackageStatePatch = null;
   let pendingNetworkSpeedReset = null;
   let lastOfflineStateFlushAt = 0;
+  let lastPackageStateFlushAt = 0;
   let activeForegroundDownloads = 0;
   let lastForegroundActivityAt = 0;
   const tileNetworkSpeedSamples = [];
   let prefetchWorkersStarted = false;
+
+  function getActiveCacheRoot() {
+    return path.join(cacheRoot, ACTIVE_TILE_PACKAGE_DIRNAME);
+  }
+
+  function getRefreshCacheRoot() {
+    return path.join(cacheRoot, REFRESH_TILE_PACKAGE_DIRNAME);
+  }
+
+  function getPreviousCacheRoot() {
+    return path.join(cacheRoot, PREVIOUS_TILE_PACKAGE_DIRNAME);
+  }
+
+  function buildTileDownloadPayload(input = {}) {
+    return {
+      settings: normalizeOfflineTileSettings(input.settings || store.getOfflineTileSettings()),
+      state: normalizeOfflineTileState(input.state || lastPersistedState),
+      packageState: normalizeOfflineTilePackageState(input.packageState || getOfflineTilePackageState())
+    };
+  }
+
+  function emitTileDownloadState(input = {}) {
+    const payload = buildTileDownloadPayload(input);
+    sendTileDownloadState(payload);
+    return payload;
+  }
+
+  function ensurePackageDirectories() {
+    fs.mkdirSync(getActiveCacheRoot(), { recursive: true });
+  }
+
+  function hasLegacyCacheTiles() {
+    if (!fs.existsSync(cacheRoot)) {
+      return false;
+    }
+
+    return fs.readdirSync(cacheRoot, { withFileTypes: true }).some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      const z = Number.parseInt(entry.name, 10);
+      return Number.isInteger(z) && z >= 0;
+    });
+  }
+
+  function migrateLegacyCacheToActivePackage() {
+    const activeRoot = getActiveCacheRoot();
+    if (fs.existsSync(activeRoot) || !hasLegacyCacheTiles()) {
+      return;
+    }
+
+    fs.mkdirSync(activeRoot, { recursive: true });
+    fs.readdirSync(cacheRoot, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isDirectory()) {
+        return;
+      }
+
+      const z = Number.parseInt(entry.name, 10);
+      if (!Number.isInteger(z) || z < 0) {
+        return;
+      }
+
+      fs.renameSync(path.join(cacheRoot, entry.name), path.join(activeRoot, entry.name));
+    });
+
+    if (!packageState.activePackageUpdatedAt) {
+      updateOfflineTilePackageState({
+        activePackageUpdatedAt: new Date().toISOString()
+      });
+    }
+  }
 
   async function registerProtocol() {
     if (protocolRegistered) {
@@ -114,6 +191,9 @@ function createMapTileService({
     }
 
     fs.mkdirSync(cacheRoot, { recursive: true });
+    migrateLegacyCacheToActivePackage();
+    ensurePackageDirectories();
+    packageState = normalizeOfflineTilePackageState(readOfflineTilePackageState(store));
     protocol.handle('maptiles', handleTileRequest);
     protocolRegistered = true;
     ensurePrefetchWorkers();
@@ -127,6 +207,22 @@ function createMapTileService({
         lastError: lastPersistedState.lastError
       }, { force: true });
     }
+
+    if (packageState.refresh.phase === 'downloading' || packageState.refresh.phase === 'switching') {
+      updateOfflineTilePackageState({
+        refresh: {
+          ...packageState.refresh,
+          phase: 'idle',
+          speedBps: 0,
+          updatedAt: new Date().toISOString(),
+          lastError: packageState.refresh.lastError || 'Odświeżanie nowej wersji mapy przerwano przy poprzednim uruchomieniu.'
+        }
+      });
+    }
+
+    void maybeStartScheduledPackageRefresh().catch((error) => {
+      log.error('Scheduled offline map refresh failed', error);
+    });
   }
 
   async function handleTileRequest(request) {
@@ -288,6 +384,11 @@ function createMapTileService({
       state = started.state;
     }
 
+     if (!skipAutoStart && shouldAutoStartOfflinePackageRefresh(getOfflineTilePackageState(), settings, state)) {
+      const refreshed = await startOfflinePackageRefresh({ source: 'auto' });
+      state = refreshed.state;
+    }
+
     sendOperationStatus({
       type: 'tiles',
       status: 'updated',
@@ -297,7 +398,7 @@ function createMapTileService({
       summary: store.getDashboardSummary()
     });
 
-    return { settings, state };
+    return buildTileDownloadPayload({ settings, state });
   }
 
   async function resetOfflineDownloadSettings() {
@@ -315,7 +416,7 @@ function createMapTileService({
       summary: store.getDashboardSummary()
     });
 
-    return { settings, state };
+    return buildTileDownloadPayload({ settings, state });
   }
 
   async function refreshOfflineDownloadState() {
@@ -333,18 +434,24 @@ function createMapTileService({
       state = started.state;
     }
 
-    return {
-      settings,
-      state
-    };
+    if (shouldAutoStartOfflinePackageRefresh(getOfflineTilePackageState(), settings, state)) {
+      const refreshed = await startOfflinePackageRefresh({ source: 'auto' });
+      state = refreshed.state;
+    }
+
+    return buildTileDownloadPayload({ settings, state });
   }
 
   async function startOfflineDownload(options = {}) {
+    if (activePackageRefreshRun) {
+      throw new Error('Trwa pobieranie nowej wersji mapy. Zaczekaj na zakonczenie albo wstrzymaj odswiezanie.');
+    }
+
     if (activeDownloadRun) {
-      return {
+      return buildTileDownloadPayload({
         settings: store.getOfflineTileSettings(),
         state: getOfflineDownloadState()
-      };
+      });
     }
 
     const settings = normalizeOfflineTileSettings(store.getOfflineTileSettings());
@@ -361,10 +468,7 @@ function createMapTileService({
         message: 'Pobieranie nie zostalo uruchomione, bo wlaczona jest symulacja braku internetu.',
         summary: store.getDashboardSummary()
       });
-      return {
-        settings,
-        state
-      };
+      return buildTileDownloadPayload({ settings, state });
     }
     const shouldResetServerRejectedTiles = options.resetServerRejectedTiles !== false;
     const serverRejectedTileAttempts = shouldResetServerRejectedTiles
@@ -384,6 +488,31 @@ function createMapTileService({
   }
 
   async function pauseOfflineDownload() {
+    if (activePackageRefreshRun) {
+      activePackageRefreshRun.cancelled = true;
+      const nextPackageState = updateOfflineTilePackageState({
+        refresh: {
+          ...getOfflineTilePackageState().refresh,
+          phase: 'paused',
+          speedBps: 0,
+          updatedAt: new Date().toISOString()
+        }
+      });
+
+      sendOperationStatus({
+        type: 'tiles-refresh',
+        status: 'pausing',
+        message: 'Zatrzymywanie pobierania nowej wersji mapy offline.',
+        summary: store.getDashboardSummary()
+      });
+
+      return buildTileDownloadPayload({
+        settings: store.getOfflineTileSettings(),
+        state: getOfflineDownloadState(),
+        packageState: nextPackageState
+      });
+    }
+
     if (!activeDownloadRun) {
       const state = updateOfflineState({
         phase: lastPersistedState.phase === 'completed' ? 'completed' : 'paused',
@@ -391,10 +520,10 @@ function createMapTileService({
         speedBps: 0,
         updatedAt: new Date().toISOString()
       }, { force: true });
-      return {
+      return buildTileDownloadPayload({
         settings: store.getOfflineTileSettings(),
         state
-      };
+      });
     }
 
     activeDownloadRun.cancelled = true;
@@ -412,20 +541,33 @@ function createMapTileService({
       summary: store.getDashboardSummary()
     });
 
-    return {
+    return buildTileDownloadPayload({
       settings: store.getOfflineTileSettings(),
       state
-    };
+    });
   }
 
   async function deleteOfflinePackageTiles() {
-    if (activeDownloadRun) {
+    if (activeDownloadRun || activePackageRefreshRun) {
       throw new Error('Zatrzymaj pobieranie offline przed usunieciem paczki.');
     }
 
     const settings = normalizeOfflineTileSettings(store.getOfflineTileSettings());
-    const plan = await buildOfflineDownloadPlan(settings);
-    const removed = await deleteTiles(plan.tiles);
+    const removed = await deleteDirectoryTiles(getActiveCacheRoot())
+      .then(async (activeRemoved) => {
+        const refreshRemoved = await deleteDirectoryTiles(getRefreshCacheRoot());
+        const previousRemoved = await deleteDirectoryTiles(getPreviousCacheRoot());
+        return {
+          tiles: activeRemoved.tiles + refreshRemoved.tiles + previousRemoved.tiles,
+          bytes: activeRemoved.bytes + refreshRemoved.bytes + previousRemoved.bytes
+        };
+      });
+    updateOfflineTilePackageState({
+      activePackageUpdatedAt: null,
+      refresh: {
+        ...DEFAULT_OFFLINE_TILE_REFRESH_STATE
+      }
+    });
     const state = await rebuildOfflineDownloadOverview({ settings });
 
     sendOperationStatus({
@@ -438,15 +580,14 @@ function createMapTileService({
     });
 
     return {
-      settings,
-      state,
+      ...buildTileDownloadPayload({ settings, state }),
       removedTiles: removed.tiles,
       removedBytes: removed.bytes
     };
   }
 
   async function deleteExtraCachedTiles() {
-    if (activeDownloadRun) {
+    if (activeDownloadRun || activePackageRefreshRun) {
       throw new Error('Zatrzymaj pobieranie offline przed usunieciem dodatkowych kafelkow.');
     }
 
@@ -455,7 +596,7 @@ function createMapTileService({
     const planTileKeys = new Set(plan.tiles.map((tile) => buildTileKey(tile)));
     const extraTiles = [];
 
-    scanCachedTileEntries(cacheRoot, (entry) => {
+    scanCachedTileEntries(getActiveCacheRoot(), (entry) => {
       if (planTileKeys.has(buildTileKey(entry))) {
         return;
       }
@@ -475,8 +616,7 @@ function createMapTileService({
     });
 
     return {
-      settings,
-      state,
+      ...buildTileDownloadPayload({ settings, state }),
       removedTiles: removed.tiles,
       removedBytes: removed.bytes
     };
@@ -486,9 +626,390 @@ function createMapTileService({
     return normalizeOfflineTileState(lastPersistedState);
   }
 
+  function getOfflineTilePackageState() {
+    packageState = normalizeOfflineTilePackageState(packageState);
+    return packageState;
+  }
+
+  function updateOfflineTilePackageState(patch = {}) {
+    packageState = normalizeOfflineTilePackageState({
+      ...getOfflineTilePackageState(),
+      ...patch,
+      refresh: patch.refresh
+        ? {
+            ...getOfflineTilePackageState().refresh,
+            ...patch.refresh
+          }
+        : getOfflineTilePackageState().refresh
+    });
+    pendingPackageStatePatch = packageState;
+
+    const shouldForce = packageState.refresh.phase !== 'downloading' && packageState.refresh.phase !== 'switching';
+    const now = Date.now();
+    if (shouldForce || now - lastPackageStateFlushAt >= OFFLINE_PACKAGE_STATE_FLUSH_INTERVAL_MS) {
+      flushOfflineTilePackageState();
+    } else if (!pendingPackageStateFlush) {
+      pendingPackageStateFlush = setTimeout(() => {
+        pendingPackageStateFlush = null;
+        flushOfflineTilePackageState();
+      }, OFFLINE_PACKAGE_STATE_FLUSH_INTERVAL_MS);
+    }
+
+    emitTileDownloadState({
+      settings: store.getOfflineTileSettings(),
+      state: getOfflineDownloadState(),
+      packageState
+    });
+    return packageState;
+  }
+
+  function flushOfflineTilePackageState() {
+    if (!pendingPackageStatePatch) {
+      return;
+    }
+
+    lastPackageStateFlushAt = Date.now();
+    packageState = normalizeOfflineTilePackageState(pendingPackageStatePatch);
+    pendingPackageStatePatch = null;
+    store.setSetting(OFFLINE_TILE_PACKAGE_STATE_SETTING_KEY, JSON.stringify(packageState));
+  }
+
+  function hasActiveOfflinePackage() {
+    const activeState = getOfflineDownloadState();
+    return Boolean(
+      getOfflineTilePackageState().activePackageUpdatedAt
+      || (activeState.totalTiles > 0 && activeState.downloadedTiles > 0)
+    );
+  }
+
+  function shouldAutoStartOfflinePackageRefresh(currentPackageState, settings, currentState = getOfflineDownloadState()) {
+    if (settings?.autoDownload !== true || settings?.simulateNoInternet === true) {
+      return false;
+    }
+
+    if (activeDownloadRun || activePackageRefreshRun) {
+      return false;
+    }
+
+    if (
+      currentPackageState?.refresh?.phase === 'downloading'
+      || currentPackageState?.refresh?.phase === 'switching'
+      || currentPackageState?.refresh?.phase === 'paused'
+    ) {
+      return false;
+    }
+
+    if (!hasActiveOfflinePackage()) {
+      return false;
+    }
+
+    if (currentState.phase === 'downloading' || currentState.phase === 'pausing') {
+      return false;
+    }
+
+    return currentPackageState?.isRefreshDue === true;
+  }
+
+  async function maybeStartScheduledPackageRefresh() {
+    const settings = normalizeOfflineTileSettings(store.getOfflineTileSettings());
+    const state = getOfflineDownloadState();
+    if (!shouldAutoStartOfflinePackageRefresh(getOfflineTilePackageState(), settings, state)) {
+      return false;
+    }
+
+    await startOfflinePackageRefresh({ source: 'auto' });
+    return true;
+  }
+
   function isInternetSimulationEnabled() {
     const settings = store?.getOfflineTileSettings?.();
     return normalizeOfflineTileSettings(settings).simulateNoInternet === true;
+  }
+
+  async function startOfflinePackageRefresh(options = {}) {
+    if (activeDownloadRun) {
+      throw new Error('Najpierw zakoncz zwykle pobieranie offline.');
+    }
+
+    if (activePackageRefreshRun) {
+      return buildTileDownloadPayload({
+        settings: store.getOfflineTileSettings(),
+        state: getOfflineDownloadState()
+      });
+    }
+
+    const settings = normalizeOfflineTileSettings(store.getOfflineTileSettings());
+    if (settings.simulateNoInternet) {
+      throw new Error('Wylacz symulacje braku internetu przed pobraniem nowej wersji mapy.');
+    }
+
+    if (!hasActiveOfflinePackage()) {
+      throw new Error('Najpierw pobierz aktualna paczke offline, zanim uruchomisz nowa wersje mapy.');
+    }
+
+    const targetRoot = getRefreshCacheRoot();
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+    fs.mkdirSync(targetRoot, { recursive: true });
+
+    const { plan, cacheSummary } = await buildOfflinePlanMetrics(settings, {
+      serverRejectedTileAttempts: {},
+      packageRoot: targetRoot,
+      extraRoot: targetRoot
+    });
+    const totalTiles = plan.tiles.length;
+    const { missingTiles, cachedTiles } = cacheSummary;
+    const startedAt = new Date().toISOString();
+
+    updateOfflineTilePackageState({
+      refresh: {
+        phase: missingTiles.length > 0 ? 'downloading' : 'switching',
+        totalTiles,
+        downloadedTiles: cachedTiles,
+        failedTiles: 0,
+        bytesDownloaded: 0,
+        speedBps: 0,
+        startedAt,
+        updatedAt: startedAt,
+        completedAt: null,
+        lastError: null
+      }
+    });
+
+    sendOperationStatus({
+      type: 'tiles-refresh',
+      status: missingTiles.length > 0 ? 'started' : 'switching',
+      message: options.source === 'auto'
+        ? 'Rozpoczeto automatyczne pobieranie nowej wersji mapy offline.'
+        : 'Rozpoczeto pobieranie nowej wersji mapy offline.',
+      summary: store.getDashboardSummary()
+    });
+
+    if (missingTiles.length === 0) {
+      await finalizeOfflinePackageRefreshRun({
+        cancelled: false,
+        targetRoot,
+        downloadedTiles: cachedTiles,
+        failedTiles: 0,
+        bytesDownloaded: 0,
+        speedSamples: [],
+        totalPackageBytes: cacheSummary.actualPackageBytes
+      }, totalTiles);
+      return buildTileDownloadPayload({
+        settings,
+        state: getOfflineDownloadState()
+      });
+    }
+
+    const run = {
+      cancelled: false,
+      targetRoot,
+      queue: missingTiles,
+      speedSamples: [],
+      downloadedTiles: cachedTiles,
+      failedTiles: 0,
+      bytesDownloaded: 0,
+      totalPackageBytes: cacheSummary.actualPackageBytes
+    };
+    activePackageRefreshRun = run;
+    const workerCount = Math.min(settings.concurrency, Math.max(1, missingTiles.length));
+    const workers = Array.from({ length: workerCount }, () => runOfflinePackageRefreshWorker(run, totalTiles));
+
+    Promise.all(workers)
+      .then(() => finalizeOfflinePackageRefreshRun(run, totalTiles))
+      .catch((error) => finalizeOfflinePackageRefreshRun(run, totalTiles, error));
+
+    return buildTileDownloadPayload({
+      settings,
+      state: getOfflineDownloadState()
+    });
+  }
+
+  async function runOfflinePackageRefreshWorker(run, totalTiles) {
+    while (!run.cancelled) {
+      const tile = run.queue.shift();
+      if (!tile) {
+        return;
+      }
+
+      try {
+        const cachePath = buildCachePath(tile, run.targetRoot);
+        const cached = await readCachedTile(cachePath);
+        if (cached) {
+          run.downloadedTiles += 1;
+          run.totalPackageBytes += cached.buffer.length || 0;
+          updateOfflinePackageRefreshProgress(run, totalTiles, 0);
+          continue;
+        }
+
+        const downloaded = await downloadAndCacheTile(tile, cachePath, { priority: 'background' });
+        const downloadedBytes = downloaded?.buffer?.length || 0;
+        run.downloadedTiles += 1;
+        run.bytesDownloaded += downloadedBytes;
+        run.totalPackageBytes += downloadedBytes;
+        updateOfflinePackageRefreshProgress(run, totalTiles, downloadedBytes);
+      } catch (error) {
+        run.failedTiles += 1;
+        updateOfflineTilePackageState({
+          refresh: {
+            phase: 'downloading',
+            totalTiles,
+            downloadedTiles: run.downloadedTiles,
+            failedTiles: run.failedTiles,
+            bytesDownloaded: run.bytesDownloaded,
+            speedBps: calculateSpeedBps(run.speedSamples),
+            startedAt: getOfflineTilePackageState().refresh.startedAt,
+            updatedAt: new Date().toISOString(),
+            completedAt: null,
+            lastError: error.message
+          }
+        });
+      }
+    }
+  }
+
+  function updateOfflinePackageRefreshProgress(run, totalTiles, downloadedBytes) {
+    const now = Date.now();
+    if (downloadedBytes > 0) {
+      run.speedSamples.push({
+        at: now,
+        bytes: downloadedBytes
+      });
+    }
+    while (run.speedSamples.length > 0 && now - run.speedSamples[0].at > SPEED_WINDOW_MS) {
+      run.speedSamples.shift();
+    }
+
+    updateOfflineTilePackageState({
+      refresh: {
+        phase: 'downloading',
+        totalTiles,
+        downloadedTiles: run.downloadedTiles,
+        failedTiles: run.failedTiles,
+        bytesDownloaded: run.bytesDownloaded,
+        speedBps: calculateSpeedBps(run.speedSamples),
+        startedAt: getOfflineTilePackageState().refresh.startedAt,
+        updatedAt: new Date().toISOString(),
+        completedAt: null,
+        lastError: null
+      }
+    });
+  }
+
+  async function finalizeOfflinePackageRefreshRun(run, totalTiles, error = null) {
+    if (activePackageRefreshRun === run) {
+      activePackageRefreshRun = null;
+    }
+
+    const completedAt = new Date().toISOString();
+    if (error) {
+      log.error('Offline map refresh failed', error);
+      updateOfflineTilePackageState({
+        refresh: {
+          phase: 'failed',
+          totalTiles,
+          downloadedTiles: run.downloadedTiles,
+          failedTiles: run.failedTiles,
+          bytesDownloaded: run.bytesDownloaded,
+          speedBps: 0,
+          startedAt: getOfflineTilePackageState().refresh.startedAt,
+          updatedAt: completedAt,
+          completedAt: null,
+          lastError: error.message
+        }
+      });
+      sendOperationStatus({
+        type: 'tiles-refresh',
+        status: 'failed',
+        message: `Pobieranie nowej wersji mapy offline nie powiodlo sie: ${error.message}`,
+        summary: store.getDashboardSummary()
+      });
+      return;
+    }
+
+    if (run.cancelled) {
+      updateOfflineTilePackageState({
+        refresh: {
+          phase: 'paused',
+          totalTiles,
+          downloadedTiles: run.downloadedTiles,
+          failedTiles: run.failedTiles,
+          bytesDownloaded: run.bytesDownloaded,
+          speedBps: 0,
+          startedAt: getOfflineTilePackageState().refresh.startedAt,
+          updatedAt: completedAt,
+          completedAt: null,
+          lastError: null
+        }
+      });
+      sendOperationStatus({
+        type: 'tiles-refresh',
+        status: 'paused',
+        message: 'Pobieranie nowej wersji mapy offline zatrzymane.',
+        summary: store.getDashboardSummary()
+      });
+      return;
+    }
+
+    updateOfflineTilePackageState({
+      refresh: {
+        phase: 'switching',
+        totalTiles,
+        downloadedTiles: run.downloadedTiles,
+        failedTiles: run.failedTiles,
+        bytesDownloaded: run.bytesDownloaded,
+        speedBps: 0,
+        startedAt: getOfflineTilePackageState().refresh.startedAt,
+        updatedAt: completedAt,
+        completedAt,
+        lastError: null
+      }
+    });
+
+    await switchOfflineTilePackages(completedAt);
+    await rebuildOfflineDownloadOverview({ settings: store.getOfflineTileSettings() });
+
+    sendOperationStatus({
+      type: 'tiles-refresh',
+      status: 'completed',
+      message: 'Nowa wersja mapy offline zostala pobrana i aktywowana automatycznie.',
+      summary: store.getDashboardSummary()
+    });
+  }
+
+  async function switchOfflineTilePackages(completedAt) {
+    const activeRoot = getActiveCacheRoot();
+    const refreshRoot = getRefreshCacheRoot();
+    const previousRoot = getPreviousCacheRoot();
+
+    fs.rmSync(previousRoot, { recursive: true, force: true });
+    if (fs.existsSync(activeRoot)) {
+      fs.renameSync(activeRoot, previousRoot);
+    }
+    fs.renameSync(refreshRoot, activeRoot);
+    fs.rmSync(previousRoot, { recursive: true, force: true });
+
+    memoryCache.clear();
+    packageState = updateOfflineTilePackageState({
+      activeRevision: getOfflineTilePackageState().activeRevision + 1,
+      activePackageUpdatedAt: completedAt,
+      lastRefreshCompletedAt: completedAt,
+      refresh: {
+        ...DEFAULT_OFFLINE_TILE_REFRESH_STATE,
+        phase: 'completed',
+        completedAt,
+        updatedAt: completedAt
+      }
+    });
+  }
+
+  async function deleteDirectoryTiles(rootPath) {
+    const tiles = [];
+    scanCachedTileEntries(rootPath, (entry) => {
+      tiles.push(entry);
+    });
+    const removed = await deleteTiles(tiles);
+    fs.rmSync(rootPath, { recursive: true, force: true });
+    return removed;
   }
 
   async function deleteTiles(tilesOrEntries = []) {
@@ -589,8 +1110,8 @@ function createMapTileService({
       .replace('{y}', String(tile.y));
   }
 
-  function buildCachePath(tile) {
-    return path.join(cacheRoot, String(tile.z), String(tile.x), `${tile.y}.png`);
+  function buildCachePath(tile, rootPath = getActiveCacheRoot()) {
+    return path.join(rootPath, String(tile.z), String(tile.x), `${tile.y}.png`);
   }
 
   function parseTileRequest(urlString) {
@@ -642,7 +1163,9 @@ function createMapTileService({
     const previousState = store.getOfflineTileDownloadState();
     const serverRejectedTileAttempts = getServerRejectedTileAttempts(previousState.planSummary);
     const { plan, cacheSummary } = await buildOfflinePlanMetrics(settings, {
-      serverRejectedTileAttempts
+      serverRejectedTileAttempts,
+      packageRoot: getActiveCacheRoot(),
+      extraRoot: getActiveCacheRoot()
     });
     const { cachedTiles } = cacheSummary;
 
@@ -675,7 +1198,9 @@ function createMapTileService({
     const previousState = getOfflineDownloadState();
     const serverRejectedTileAttempts = getServerRejectedTileAttempts(previousState.planSummary);
     const { plan, cacheSummary } = await buildOfflinePlanMetrics(settings, {
-      serverRejectedTileAttempts
+      serverRejectedTileAttempts,
+      packageRoot: getActiveCacheRoot(),
+      extraRoot: getActiveCacheRoot()
     });
     const cachedTiles = preserveRuntimeState
       ? previousState.downloadedTiles
@@ -758,7 +1283,11 @@ function createMapTileService({
     const cacheSummary = inspectOfflinePlanCache(
       plan.tiles,
       plan.summary?.countsByZoom,
-      getBlockedTileKeySet(options.serverRejectedTileAttempts)
+      getBlockedTileKeySet(options.serverRejectedTileAttempts),
+      {
+        packageRoot: options.packageRoot || getActiveCacheRoot(),
+        extraRoot: options.extraRoot || options.packageRoot || getActiveCacheRoot()
+      }
     );
     return { plan, cacheSummary };
   }
@@ -803,10 +1332,10 @@ function createMapTileService({
     });
 
     if (missingTiles.length === 0) {
-      return {
+      return buildTileDownloadPayload({
         settings,
         state: initialState
-      };
+      });
     }
 
     const run = {
@@ -832,10 +1361,10 @@ function createMapTileService({
       .then(() => finalizeOfflineDownloadRun(run, totalTiles))
       .catch((error) => finalizeOfflineDownloadRun(run, totalTiles, error));
 
-    return {
+    return buildTileDownloadPayload({
       settings,
       state: getOfflineDownloadState()
-    };
+    });
   }
 
   async function runDownloadWorker(run, totalTiles) {
@@ -963,6 +1492,12 @@ function createMapTileService({
       return nextState;
     }
 
+    if (phase === 'completed') {
+      updateOfflineTilePackageState({
+        activePackageUpdatedAt: completedAt
+      });
+    }
+
     sendOperationStatus({
       type: 'tiles',
       status: phase,
@@ -1064,7 +1599,7 @@ function createMapTileService({
     const persistedState = store.saveOfflineTileDownloadState(pendingOfflineStatePatch);
     pendingOfflineStatePatch = null;
     lastPersistedState = normalizeOfflineTileState(persistedState);
-    sendTileDownloadState({
+    emitTileDownloadState({
       settings: store.getOfflineTileSettings(),
       state: lastPersistedState
     });
@@ -1160,7 +1695,9 @@ function createMapTileService({
     }
   }
 
-  function inspectOfflinePlanCache(tiles, countsByZoom = {}, blockedTileKeys = new Set()) {
+  function inspectOfflinePlanCache(tiles, countsByZoom = {}, blockedTileKeys = new Set(), options = {}) {
+    const packageRoot = options.packageRoot || getActiveCacheRoot();
+    const extraRoot = options.extraRoot || packageRoot;
     const missingTiles = [];
     let cachedTiles = 0;
     let actualPackageBytes = 0;
@@ -1172,7 +1709,7 @@ function createMapTileService({
     for (const tile of tiles) {
       const tileKey = buildTileKey(tile);
       planTileKeys.add(tileKey);
-      const cachePath = buildCachePath(tile);
+      const cachePath = buildCachePath(tile, packageRoot);
       if (!fs.existsSync(cachePath)) {
         if (blockedTileKeys.has(tileKey)) {
           blockedTilesCount += 1;
@@ -1208,7 +1745,7 @@ function createMapTileService({
     }
 
     let extraCachedBytes = 0;
-    scanCachedTileEntries(cacheRoot, (entry) => {
+    scanCachedTileEntries(extraRoot, (entry) => {
       if (planTileKeys.has(buildTileKey(entry))) {
         return;
       }
@@ -1262,6 +1799,7 @@ function createMapTileService({
     saveOfflineDownloadSettings,
     resetOfflineDownloadSettings,
     startOfflineDownload,
+    startOfflinePackageRefresh,
     pauseOfflineDownload,
     deleteOfflinePackageTiles,
     deleteExtraCachedTiles,
@@ -1336,6 +1874,80 @@ function normalizeOfflineTileState(input = {}) {
     lastError: input.lastError || null,
     planSummary: input.planSummary && typeof input.planSummary === 'object' ? input.planSummary : null
   };
+}
+
+const DEFAULT_OFFLINE_TILE_REFRESH_STATE = Object.freeze({
+  phase: 'idle',
+  totalTiles: 0,
+  downloadedTiles: 0,
+  failedTiles: 0,
+  bytesDownloaded: 0,
+  speedBps: 0,
+  startedAt: null,
+  updatedAt: null,
+  completedAt: null,
+  lastError: null
+});
+
+const DEFAULT_OFFLINE_TILE_PACKAGE_STATE = Object.freeze({
+  activeRevision: 1,
+  activePackageUpdatedAt: null,
+  lastRefreshCompletedAt: null,
+  refresh: DEFAULT_OFFLINE_TILE_REFRESH_STATE
+});
+
+function normalizeOfflineTileRefreshState(input = {}) {
+  return {
+    phase: String(input.phase || DEFAULT_OFFLINE_TILE_REFRESH_STATE.phase),
+    totalTiles: Math.max(0, Number(input.totalTiles || 0)),
+    downloadedTiles: Math.max(0, Number(input.downloadedTiles || 0)),
+    failedTiles: Math.max(0, Number(input.failedTiles || 0)),
+    bytesDownloaded: Math.max(0, Number(input.bytesDownloaded || 0)),
+    speedBps: Math.max(0, Number(input.speedBps || 0)),
+    startedAt: input.startedAt || null,
+    updatedAt: input.updatedAt || null,
+    completedAt: input.completedAt || null,
+    lastError: input.lastError || null
+  };
+}
+
+function normalizeOfflineTilePackageState(input = {}) {
+  const activeRevision = Math.max(1, Math.round(Number(input.activeRevision || DEFAULT_OFFLINE_TILE_PACKAGE_STATE.activeRevision)));
+  const activePackageUpdatedAt = input.activePackageUpdatedAt || null;
+  const lastRefreshCompletedAt = input.lastRefreshCompletedAt || null;
+  let nextRefreshDueAt = null;
+  if (activePackageUpdatedAt) {
+    const activeTimestamp = new Date(activePackageUpdatedAt).getTime();
+    if (Number.isFinite(activeTimestamp)) {
+      nextRefreshDueAt = new Date(activeTimestamp + OFFLINE_TILE_REFRESH_INTERVAL_MS).toISOString();
+    }
+  }
+
+  return {
+    activeRevision,
+    activePackageUpdatedAt,
+    lastRefreshCompletedAt,
+    nextRefreshDueAt,
+    isRefreshDue: Boolean(nextRefreshDueAt && Date.now() >= new Date(nextRefreshDueAt).getTime()),
+    refresh: normalizeOfflineTileRefreshState(input.refresh || {})
+  };
+}
+
+function readOfflineTilePackageState(store) {
+  if (!store?.getSetting) {
+    return DEFAULT_OFFLINE_TILE_PACKAGE_STATE;
+  }
+
+  try {
+    const rawValue = store.getSetting(OFFLINE_TILE_PACKAGE_STATE_SETTING_KEY);
+    if (!rawValue) {
+      return DEFAULT_OFFLINE_TILE_PACKAGE_STATE;
+    }
+
+    return normalizeOfflineTilePackageState(JSON.parse(rawValue));
+  } catch (_error) {
+    return DEFAULT_OFFLINE_TILE_PACKAGE_STATE;
+  }
 }
 
 function shouldRefreshStoredOfflineMetrics(state, settings) {

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('appApi', {
   saveTileDownloadSettings: (payload) => ipcRenderer.invoke('tiles:saveSettings', payload),
   resetTileDownloadSettings: () => ipcRenderer.invoke('tiles:resetSettings'),
   startTileDownload: () => ipcRenderer.invoke('tiles:startDownload'),
+  startTileRefreshDownload: () => ipcRenderer.invoke('tiles:startRefreshDownload'),
   pauseTileDownload: () => ipcRenderer.invoke('tiles:pauseDownload'),
   deleteOfflinePackageTiles: () => ipcRenderer.invoke('tiles:deleteOfflinePackage'),
   deleteExtraCachedTiles: () => ipcRenderer.invoke('tiles:deleteExtraTiles'),
