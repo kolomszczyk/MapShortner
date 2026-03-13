@@ -238,7 +238,7 @@ function renderPeopleRows(people) {
         >
           <span class="person-row-title">${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</span>
           <span class="person-row-copy person-row-meta">
-            Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
+            ID: ${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))} • Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}
           </span>
         </button>
       `;

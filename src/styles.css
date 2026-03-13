@@ -449,6 +449,12 @@ textarea {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
+.map-info-view.map-info-view-overlap-list {
+  gap: 10px;
+  min-height: 100%;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .map-info-view.map-info-view-colors {
   gap: 10px;
   min-height: 100%;
@@ -567,6 +573,12 @@ textarea {
   margin-top: 0;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.map-selection-cards.map-selection-cards-overlap-list {
+  margin-top: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .map-selection-cards .empty-state {
@@ -2542,6 +2554,11 @@ body.map-page .service-map {
 
 .compact-list {
   max-height: 420px;
+}
+
+.map-overlap-results-list {
+  height: 100%;
+  max-height: none;
 }
 
 .point-card,

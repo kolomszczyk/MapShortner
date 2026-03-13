@@ -265,6 +265,8 @@ let mapTimeColorAsyncPersistFrame = 0;
 let hoverTilePrefetchTimer = 0;
 let lastQueuedHoverTilePrefetchKey = '';
 let activeTilePackageRevision = 1;
+let overlapSelectionBypassSourceRowId = null;
+let isSelectionOverlapChooserActive = false;
 
 function endTimeColorChartDragState(options = {}) {
   const shouldCommit = Boolean(options?.commit);
@@ -608,6 +610,30 @@ function handleSelectionPanelClick(event) {
     return;
   }
 
+  const overlapPersonButton = event.target.closest('[data-map-overlap-source-row-id]');
+  if (overlapPersonButton && infoPanelMode === 'selection') {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sourceRowId = overlapPersonButton.getAttribute('data-map-overlap-source-row-id');
+    const normalizedSourceRowId = String(sourceRowId || '').trim();
+    if (!normalizedSourceRowId) {
+      return;
+    }
+
+    const person = findPersonBySourceRowId(normalizedSourceRowId);
+    if (!person) {
+      return;
+    }
+
+    focusSelectionOnMap(person);
+    void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
+      panelMode: 'selection',
+      bypassOverlapSelection: true
+    });
+    return;
+  }
+
   const filterResultButton = event.target.closest('[data-map-filter-source-row-id]');
   if (filterResultButton && infoPanelMode === 'filter') {
     const sourceRowId = filterResultButton.getAttribute('data-map-filter-source-row-id');
@@ -946,7 +972,7 @@ function syncSelectionBookmarkUiState() {
 
   const isSelectionPanelActive = infoPanelMode === 'selection';
   const isPersonMode = selectionPanelState.kind === 'person' || selectionPanelState.kind === 'person-loading';
-  const shouldShowActions = isSelectionPanelActive && isPersonMode;
+  const shouldShowActions = isSelectionPanelActive && isPersonMode && !isSelectionOverlapChooserActive;
 
   selectionActionsEl.hidden = !shouldShowActions;
   selectionBookmarkButtonEl.disabled = !shouldShowActions || selectionPanelState.kind !== 'person';
@@ -3795,7 +3821,8 @@ function buildNavigationHistoryState({
   historyIndex = personSelectionHistory.index,
   isSettingsPanelOpen = isSettingsOpen,
   infoMode = infoPanelMode,
-  navigationId = navigationHistoryState.currentId
+  navigationId = navigationHistoryState.currentId,
+  preferPersonDetails = false
 } = {}) {
   return {
     kind: MAP_NAVIGATION_HISTORY_STATE_KIND,
@@ -3803,7 +3830,8 @@ function buildNavigationHistoryState({
     historyIndex: Number.isInteger(historyIndex) ? historyIndex : -1,
     infoPanelMode: normalizeInfoPanelMode(infoMode),
     isSettingsOpen: Boolean(isSettingsPanelOpen),
-    navigationId: Number.isInteger(navigationId) && navigationId >= 0 ? navigationId : 0
+    navigationId: Number.isInteger(navigationId) && navigationId >= 0 ? navigationId : 0,
+    preferPersonDetails: Boolean(preferPersonDetails)
   };
 }
 
@@ -3811,14 +3839,16 @@ function replaceCurrentNavigationState({
   sourceRowId = getCurrentSelectedPersonSourceRowId(),
   historyIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1,
   isSettingsPanelOpen = isSettingsOpen,
-  infoMode = infoPanelMode
+  infoMode = infoPanelMode,
+  preferPersonDetails = false
 } = {}) {
   const nextState = buildNavigationHistoryState({
     sourceRowId,
     historyIndex,
     isSettingsPanelOpen,
     infoMode,
-    navigationId: navigationHistoryState.currentId
+    navigationId: navigationHistoryState.currentId,
+    preferPersonDetails
   });
 
   history.replaceState(nextState, document.title);
@@ -3832,7 +3862,8 @@ function pushCurrentNavigationState({
   sourceRowId = getCurrentSelectedPersonSourceRowId(),
   historyIndex = sourceRowId ? Math.max(personSelectionHistory.index, 0) : -1,
   isSettingsPanelOpen = isSettingsOpen,
-  infoMode = infoPanelMode
+  infoMode = infoPanelMode,
+  preferPersonDetails = false
 } = {}) {
   const nextNavigationId = navigationHistoryState.currentId + 1;
   const nextState = buildNavigationHistoryState({
@@ -3840,7 +3871,8 @@ function pushCurrentNavigationState({
     historyIndex,
     isSettingsPanelOpen,
     infoMode,
-    navigationId: nextNavigationId
+    navigationId: nextNavigationId,
+    preferPersonDetails
   });
 
   history.pushState(nextState, document.title);
@@ -3947,21 +3979,24 @@ function handlePersonSelectionPopState(event) {
 
       focusSelectionOnMap(fallbackPerson);
       void selectPersonPoint(fallbackPerson, visiblePeopleMarkers.get(buildPersonKey(fallbackPerson)) || null, {
-        historyMode: 'restore'
+        historyMode: 'restore',
+        bypassOverlapSelection: Boolean(state.preferPersonDetails)
       });
       return;
     }
 
     focusSelectionOnMap(hiddenPerson);
     void selectPersonPoint(hiddenPerson, getPersonMarkerBySourceRowId(sourceRowId), {
-      historyMode: 'restore'
+      historyMode: 'restore',
+      bypassOverlapSelection: Boolean(state.preferPersonDetails)
     });
     return;
   }
 
   focusSelectionOnMap(person);
   void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
-    historyMode: 'restore'
+    historyMode: 'restore',
+    bypassOverlapSelection: Boolean(state.preferPersonDetails)
   });
 }
 
@@ -4617,6 +4652,9 @@ async function selectPersonPoint(person, marker, options = {}) {
   selectionRequestToken += 1;
   const requestToken = selectionRequestToken;
   cacheKnownPeople([person]);
+  overlapSelectionBypassSourceRowId = options.bypassOverlapSelection === true
+    ? String(person?.sourceRowId || '').trim() || null
+    : null;
   const panelStateChanged = applySelectionPanelState(options.panelMode);
 
   saveLastSelectedPersonId(person.sourceRowId);
@@ -4625,12 +4663,14 @@ async function selectPersonPoint(person, marker, options = {}) {
     if (personHistoryChanged || panelStateChanged) {
       pushCurrentNavigationState({
         sourceRowId: person.sourceRowId,
-        historyIndex: personSelectionHistory.index
+        historyIndex: personSelectionHistory.index,
+        preferPersonDetails: options.bypassOverlapSelection === true
       });
     } else {
       replaceCurrentNavigationState({
         sourceRowId: person.sourceRowId,
-        historyIndex: personSelectionHistory.index
+        historyIndex: personSelectionHistory.index,
+        preferPersonDetails: options.bypassOverlapSelection === true
       });
     }
   }
@@ -4771,6 +4811,7 @@ function renderEmptySelection() {
 
 function paintEmptySelection() {
   clearHoveredPersonSourceRowId();
+  isSelectionOverlapChooserActive = false;
   syncOverviewSpacing(false);
   overviewDefaultEls.forEach((element) => {
     element.hidden = true;
@@ -4802,20 +4843,33 @@ function renderPersonSelectionState(person) {
 
 function paintPersonSelectionState(person) {
   clearHoveredPersonSourceRowId();
-  syncOverviewSpacing(false);
+  const overlappingPeopleCard = buildSelectionOverlappingPeopleCard(person);
+  isSelectionOverlapChooserActive = Boolean(overlappingPeopleCard);
+  syncOverviewSpacing(false, false, false, false, false, Boolean(overlappingPeopleCard));
+
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
+  selectionTitleEl.textContent = overlappingPeopleCard
+    ? 'Wybór osoby'
+    : (person.fullName || person.companyName || 'Wybrana osoba');
   selectionCopyEl.textContent = '';
   selectionCopyEl.hidden = true;
-  selectionMetaEl.innerHTML = renderKeyValueList([
-    { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
-    { label: 'Telefon', value: person.phone || 'Brak' },
-    { label: 'E-mail', value: person.email || 'Brak' },
-    { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
-    { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) }
-  ]);
-  selectionMetaEl.hidden = false;
-  selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
+
+  if (overlappingPeopleCard) {
+    selectionMetaEl.innerHTML = '';
+    selectionMetaEl.hidden = true;
+    selectionExtraEl.innerHTML = overlappingPeopleCard;
+  } else {
+    selectionMetaEl.innerHTML = renderKeyValueList([
+      { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
+      { label: 'Telefon', value: person.phone || 'Brak' },
+      { label: 'E-mail', value: person.email || 'Brak' },
+      { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
+      { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) }
+    ]);
+    selectionMetaEl.hidden = false;
+    selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
+  }
+
   selectionExtraEl.hidden = false;
   syncSelectionActionColor(person);
   setMapSelectionBookmarkActive(person?.isBookmarked === true);
@@ -4837,12 +4891,30 @@ function renderPersonSelection(details) {
 
 function paintPersonSelection(details) {
   clearHoveredPersonSourceRowId();
-  syncOverviewSpacing(false);
   const person = details.person;
+  const overlappingPeopleCard = buildSelectionOverlappingPeopleCard(person);
+  isSelectionOverlapChooserActive = Boolean(overlappingPeopleCard);
+  syncOverviewSpacing(false, false, false, false, false, Boolean(overlappingPeopleCard));
+
   selectionHeaderEl.hidden = false;
-  selectionTitleEl.textContent = person.fullName || person.companyName || 'Wybrana osoba';
+  selectionTitleEl.textContent = overlappingPeopleCard
+    ? 'Wybór osoby'
+    : (person.fullName || person.companyName || 'Wybrana osoba');
   selectionCopyEl.textContent = '';
   selectionCopyEl.hidden = true;
+
+  syncSelectionActionColor(person);
+  setMapSelectionBookmarkActive(person?.isBookmarked === true);
+  syncSelectionBookmarkUiState();
+
+  if (overlappingPeopleCard) {
+    selectionMetaEl.innerHTML = '';
+    selectionMetaEl.hidden = true;
+    selectionExtraEl.innerHTML = overlappingPeopleCard;
+    selectionExtraEl.hidden = false;
+    return;
+  }
+
   selectionMetaEl.innerHTML = renderKeyValueList([
     { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
     { label: 'Telefon', value: person.phone || 'Brak' },
@@ -4853,9 +4925,6 @@ function paintPersonSelection(details) {
     ...buildPersonPrimaryDetailItems(person)
   ]);
   selectionMetaEl.hidden = false;
-  syncSelectionActionColor(person);
-  setMapSelectionBookmarkActive(person?.isBookmarked === true);
-  syncSelectionBookmarkUiState();
 
   const cards = [];
 
@@ -4935,6 +5004,57 @@ function paintPersonSelection(details) {
   selectionExtraEl.hidden = false;
 }
 
+function buildSelectionOverlappingPeopleCard(person) {
+  const normalizedSourceRowId = String(person?.sourceRowId || '').trim();
+  if (normalizedSourceRowId && overlapSelectionBypassSourceRowId === normalizedSourceRowId) {
+    return '';
+  }
+
+  const overlappingPeople = getVisiblePeopleWithOverlappingMarkers(person)
+    .filter((entry) => entry?.sourceRowId)
+    .sort((left, right) => {
+      const leftName = String(left.fullName || left.companyName || '').trim();
+      const rightName = String(right.fullName || right.companyName || '').trim();
+      return leftName.localeCompare(rightName, 'pl', { sensitivity: 'base' });
+    });
+
+  if (overlappingPeople.length <= 1) {
+    return '';
+  }
+
+  return `
+      <div class="vertical-list map-tool-results-list map-overlap-results-list">
+        ${overlappingPeople
+          .map((entry) => {
+            const displayName = escapeHtml(entry.fullName || entry.companyName || 'Bez nazwy');
+            const sourceRowId = escapeHtml(String(entry.sourceRowId));
+            const isVisibleOnMap = allPeople.some((personEntry) => personEntry.sourceRowId === entry.sourceRowId);
+            const locationLabel = Number.isFinite(entry.lat) && Number.isFinite(entry.lng)
+              ? isVisibleOnMap
+                ? 'Widoczna na mapie'
+                : 'Poza bieżącym filtrem mapy'
+              : 'Brak współrzędnych';
+
+            return `
+              <button
+                type="button"
+                class="person-row map-history-row"
+                data-map-overlap-source-row-id="${sourceRowId}"
+                data-map-hover-source-row-id="${sourceRowId}"
+              >
+                <div class="list-card-heading">
+                  <strong>${displayName}</strong>
+                  ${renderMapPersonRowTools(entry, { isVisibleOnMap: true, isCurrent: false })}
+                </div>
+                <span>${renderPersonMetaLine(entry, locationLabel)}</span>
+              </button>
+            `;
+          })
+          .join('')}
+      </div>
+  `;
+}
+
 function buildPersonPrimaryDetailItems(person) {
   const raw = person.raw || {};
   const producer = person.deviceVendor || pickRecordValue(raw, ['Producent']);
@@ -5005,6 +5125,7 @@ function renderCustomPointSelection(point) {
 
 function paintCustomPointSelection(point) {
   clearHoveredPersonSourceRowId();
+  isSelectionOverlapChooserActive = false;
   syncOverviewSpacing(false);
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = point.label || 'Punkt lokalny';
@@ -5596,8 +5717,7 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
-          <span>${escapeHtml(locationLabel)}</span>
+          <span>${renderPersonMetaLine(person, locationLabel)}</span>
         </button>
       `;
     })
@@ -5733,8 +5853,7 @@ function renderPersonListRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
-          <span>${escapeHtml(locationLabel)}</span>
+          <span>${renderPersonMetaLine(person, locationLabel)}</span>
         </button>
       `;
     })
@@ -7936,11 +8055,24 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+          <span>${renderPersonMetaLine(person, isVisibleOnMap ? 'Widoczna na mapie' : 'Poza bieżącym filtrem mapy')}</span>
         </button>
       `;
     })
     .join('');
+}
+
+function renderPersonMetaLine(person, locationLabel = null) {
+  const parts = [
+    `ID: ${escapeHtml(String(person?.sourceRowId || person?.id || 'Brak'))}`,
+    `Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}`
+  ];
+
+  if (locationLabel) {
+    parts.push(escapeHtml(locationLabel));
+  }
+
+  return parts.join(' • ');
 }
 
 function renderMapPersonRowTools(person, options = {}) {
@@ -8177,7 +8309,14 @@ function paintHistorySelection() {
                   })
                 : ''}
             </div>
-            <span>Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}</span>
+            <span>${person
+              ? renderPersonMetaLine(
+                  person,
+                  allPeople.some((entry) => entry.sourceRowId === sourceRowId)
+                    ? 'Widoczna na mapie'
+                    : 'Poza bieżącym filtrem mapy'
+                )
+              : `ID: ${escapeHtml(String(sourceRowId || 'Brak'))} • Ostatnia wizyta: Brak`}</span>
           </button>
         `;
       })
@@ -8192,7 +8331,8 @@ function syncOverviewSpacing(
   isFilterMode = false,
   isSearchMode = false,
   isColorsMode = false,
-  isListMode = false
+  isListMode = false,
+  isOverlapListMode = false
 ) {
   overviewViewEl?.classList.toggle('map-info-view-history', Boolean(isHistoryMode));
   overviewViewEl?.classList.toggle('map-info-view-filter', Boolean(isFilterMode));
@@ -8204,6 +8344,8 @@ function syncOverviewSpacing(
   selectionExtraEl?.classList.toggle('map-selection-cards-search', Boolean(isSearchMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-colors', Boolean(isColorsMode));
   selectionExtraEl?.classList.toggle('map-selection-cards-list', Boolean(isListMode));
+  overviewViewEl?.classList.toggle('map-info-view-overlap-list', Boolean(isOverlapListMode));
+  selectionExtraEl?.classList.toggle('map-selection-cards-overlap-list', Boolean(isOverlapListMode));
 }
 
 function bindHoverTrackingToRenderedPersonLists() {
