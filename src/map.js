@@ -14,6 +14,7 @@ import { initDashboardPanel } from './dashboard-panel.js';
 initShell('map');
 
 const mapEl = document.getElementById('service-map');
+const mapCanvasPanelEl = document.querySelector('.map-canvas-panel');
 const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
@@ -104,6 +105,7 @@ const HOVERED_PERSON_PREVIEW_PAN_DURATION_MS = 560;
 const HOVERED_PERSON_RESTORE_PAN_DURATION_MS = 420;
 const LAST_SELECTED_PERSON_STORAGE_KEY = 'map:lastSelectedPersonId';
 const LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY = 'people:lastSelectedPersonDetails';
+const LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY = 'map:lastSelectedPersonRestoreState';
 const PERSON_SELECTION_HISTORY_STORAGE_KEY = 'map:personSelectionHistory';
 const MAX_PERSON_SELECTION_HISTORY_ENTRIES = 100;
 const MAP_NAVIGATION_HISTORY_STATE_KIND = 'map-navigation';
@@ -267,6 +269,7 @@ let lastQueuedHoverTilePrefetchKey = '';
 let activeTilePackageRevision = 1;
 let overlapSelectionBypassSourceRowId = null;
 let isSelectionOverlapChooserActive = false;
+let mapToastListEl = null;
 
 function endTimeColorChartDragState(options = {}) {
   const shouldCommit = Boolean(options?.commit);
@@ -537,6 +540,14 @@ settingsButtonEl?.addEventListener('click', () => {
 });
 
 mapEl?.addEventListener('click', (event) => {
+  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
+  if (copyPersonIdControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
+    return;
+  }
+
   const popupPersonEntry = event.target.closest('[data-map-popup-person-source-row-id]');
   if (!popupPersonEntry) {
     return;
@@ -550,6 +561,14 @@ mapEl?.addEventListener('click', (event) => {
 
 mapEl?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+
+  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
+  if (copyPersonIdControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
     return;
   }
 
@@ -610,12 +629,44 @@ function handleSelectionPanelClick(event) {
     return;
   }
 
+  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
+  if (copyPersonIdControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
+    return;
+  }
+
   const overlapPersonButton = event.target.closest('[data-map-overlap-source-row-id]');
   if (overlapPersonButton && infoPanelMode === 'selection') {
     event.preventDefault();
     event.stopPropagation();
 
     const sourceRowId = overlapPersonButton.getAttribute('data-map-overlap-source-row-id');
+    const normalizedSourceRowId = String(sourceRowId || '').trim();
+    if (!normalizedSourceRowId) {
+      return;
+    }
+
+    const person = findPersonBySourceRowId(normalizedSourceRowId);
+    if (!person) {
+      return;
+    }
+
+    focusSelectionOnMap(person);
+    void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
+      panelMode: 'selection',
+      bypassOverlapSelection: true
+    });
+    return;
+  }
+
+  const sameLocationPersonButton = event.target.closest('[data-map-same-location-source-row-id]');
+  if (sameLocationPersonButton && infoPanelMode === 'selection') {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sourceRowId = sameLocationPersonButton.getAttribute('data-map-same-location-source-row-id');
     const normalizedSourceRowId = String(sourceRowId || '').trim();
     if (!normalizedSourceRowId) {
       return;
@@ -644,7 +695,8 @@ function handleSelectionPanelClick(event) {
 
     focusSelectionOnMap(person);
     void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
-      panelMode: 'selection'
+      panelMode: 'selection',
+      bypassOverlapSelection: true
     });
     return;
   }
@@ -660,7 +712,8 @@ function handleSelectionPanelClick(event) {
     const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || searchResult;
     focusSelectionOnMap(mapPerson);
     void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection'
+      panelMode: 'selection',
+      bypassOverlapSelection: true
     });
     return;
   }
@@ -676,7 +729,8 @@ function handleSelectionPanelClick(event) {
     const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
     focusSelectionOnMap(mapPerson);
     void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection'
+      panelMode: 'selection',
+      bypassOverlapSelection: true
     });
     return;
   }
@@ -692,7 +746,8 @@ function handleSelectionPanelClick(event) {
     const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
     focusSelectionOnMap(mapPerson);
     void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection'
+      panelMode: 'selection',
+      bypassOverlapSelection: true
     });
     return;
   }
@@ -858,7 +913,8 @@ function handleSelectionPanelClick(event) {
 
     focusSelectionOnMap(person);
     void selectPersonPoint(person, getPersonMarkerBySourceRowId(sourceRowId), {
-      panelMode: 'selection'
+      panelMode: 'selection',
+      bypassOverlapSelection: true
     });
   }
 
@@ -901,6 +957,7 @@ function handleSelectionPanelClick(event) {
       const persistedState = result?.isBookmarked === true;
       syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
       refreshPeopleListPanelsAfterBookmarkToggle();
+      showBookmarkToggleToast(persistedState, sourceRowId);
     } catch (error) {
       bookmarkElement.setAttribute('data-map-person-bookmarked', String(isBookmarked));
       bookmarkElement.classList.toggle('is-active', isBookmarked);
@@ -951,6 +1008,27 @@ function setMapSelectionBookmarkActive(isActive) {
 
   selectionBookmarkIconEl.classList.toggle('fa-regular', !nextState);
   selectionBookmarkIconEl.classList.toggle('fa-solid', nextState);
+}
+
+function showBookmarkToggleToast(isBookmarked, sourceRowId = '') {
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  const person = normalizedSourceRowId
+    ? allPeople.find((entry) => entry?.sourceRowId === normalizedSourceRowId)
+      || findPersonBySourceRowId(normalizedSourceRowId)
+      || knownPeopleBySourceRowId.get(normalizedSourceRowId)
+    : null;
+  const personSuffix = person ? ` ${getMapPersonDisplayName(person)}` : '';
+
+  showMapToast({
+    message: isBookmarked === true
+      ? `Dodano do zakładek${personSuffix}`
+      : `Usunięto z zakładek${personSuffix}`,
+    type: 'info'
+  });
+}
+
+function getMapPersonDisplayName(person) {
+  return String(person?.fullName || person?.companyName || 'Osoba').trim() || 'Osoba';
 }
 
 function resolveSelectedPersonSourceRowId() {
@@ -1105,6 +1183,7 @@ selectionBookmarkButtonEl?.addEventListener('click', async () => {
     const persistedState = result?.isBookmarked === true;
     setMapSelectionBookmarkActive(persistedState);
     syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
+    showBookmarkToggleToast(persistedState, sourceRowId);
 
     if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === sourceRowId) {
       selectionPanelState.details.person.isBookmarked = persistedState;
@@ -1869,14 +1948,23 @@ async function loadPoints(options = {}) {
       ? resolveVisiblePersonSelection(allPeople)
       : resolveCurrentPersonSelection(allPeople)
     : preservedSearchSelection;
+  const lastSelectedRestoreState = readLastSelectedPersonRestoreState();
 
   clearActiveSelection({ resetPanel: shouldAutoSelectPerson ? !nextPerson : false });
 
   if (nextPerson) {
+    const shouldPreferPersonDetails = Boolean(
+      lastSelectedRestoreState
+      && lastSelectedRestoreState.sourceRowId === String(nextPerson.sourceRowId)
+      && lastSelectedRestoreState.preferPersonDetails
+    );
     if (!preserveViewport) {
       focusSelectionOnMap(nextPerson);
     }
-    void selectPersonPoint(nextPerson, null, { historyMode: 'restore' });
+    void selectPersonPoint(nextPerson, null, {
+      historyMode: 'restore',
+      bypassOverlapSelection: shouldPreferPersonDetails
+    });
   }
 
   if (infoPanelMode === 'history') {
@@ -4324,6 +4412,47 @@ function saveLastSelectedPersonId(sourceRowId) {
   }
 }
 
+function readLastSelectedPersonRestoreState() {
+  try {
+    const raw = window.localStorage.getItem(LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    const sourceRowId = String(parsed?.sourceRowId || '').trim();
+    if (!sourceRowId) {
+      return null;
+    }
+
+    return {
+      sourceRowId,
+      preferPersonDetails: parsed?.preferPersonDetails === true
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function saveLastSelectedPersonRestoreState(sourceRowId, preferPersonDetails) {
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  if (!normalizedSourceRowId) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY,
+      JSON.stringify({
+        sourceRowId: normalizedSourceRowId,
+        preferPersonDetails: preferPersonDetails === true
+      })
+    );
+  } catch (_error) {
+    // Ignore storage failures and keep the current session working.
+  }
+}
+
 function saveLastSelectedPersonDetails(details) {
   if (!details?.person?.sourceRowId) {
     return;
@@ -4337,6 +4466,180 @@ function saveLastSelectedPersonDetails(details) {
   } catch (_error) {
     // Ignore storage failures and keep the current session working.
   }
+}
+
+async function copyTextToClipboard(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return false;
+  }
+
+  let didCopy = false;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      didCopy = true;
+    }
+  } catch (_error) {
+    // Fallback below.
+  }
+
+  if (!didCopy) {
+    try {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.setAttribute('readonly', 'readonly');
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      input.style.pointerEvents = 'none';
+      document.body.appendChild(input);
+      input.focus();
+      input.select();
+      didCopy = document.execCommand('copy');
+      document.body.removeChild(input);
+    } catch (_error) {
+      didCopy = false;
+    }
+  }
+
+  showMapToast({
+    message: didCopy
+      ? `Skopiowano ID ${text}`
+      : 'Nie udalo sie skopiowac',
+    type: didCopy ? 'success' : 'error'
+  });
+  return didCopy;
+}
+
+function formatMapToastExecutionTime(value) {
+  const candidateDate = value instanceof Date
+    ? value
+    : new Date(value ?? Date.now());
+  if (!Number.isFinite(candidateDate.getTime())) {
+    return '';
+  }
+
+  return candidateDate.toLocaleTimeString('pl-PL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
+function ensureMapToastListElement() {
+  if (mapToastListEl) {
+    return mapToastListEl;
+  }
+
+  const host = mapEl || mapCanvasPanelEl || mapBoardEl;
+  if (!host) {
+    return null;
+  }
+
+  const listElement = document.createElement('div');
+  listElement.className = 'map-toast-list';
+  listElement.setAttribute('aria-live', 'polite');
+  listElement.setAttribute('aria-atomic', 'false');
+  host.appendChild(listElement);
+  mapToastListEl = listElement;
+  return mapToastListEl;
+}
+
+function showMapToast(options = {}) {
+  const toastListElement = ensureMapToastListElement();
+  if (!toastListElement) {
+    return;
+  }
+
+  const normalizedMessage = String(options?.message || 'Wykonano akcje');
+  const normalizedType = String(options?.type || 'success').toLowerCase();
+  const durationMs = Number.isFinite(options?.durationMs)
+    ? Math.max(800, Math.round(options.durationMs))
+    : 5000;
+  const executionMomentLabel = formatMapToastExecutionTime(options?.executedAt);
+
+  const toastItemEl = document.createElement('div');
+  toastItemEl.className = 'map-toast';
+  toastItemEl.setAttribute('role', 'status');
+
+  if (normalizedType === 'error') {
+    toastItemEl.classList.add('is-error');
+  } else if (normalizedType === 'info') {
+    toastItemEl.classList.add('is-info');
+  } else {
+    toastItemEl.classList.add('is-success');
+  }
+
+  const toastBodyEl = document.createElement('div');
+  toastBodyEl.className = 'map-toast-body';
+
+  const toastMessageEl = document.createElement('div');
+  toastMessageEl.className = 'map-toast-message';
+  toastMessageEl.textContent = normalizedMessage;
+
+  const toastTimeEl = document.createElement('div');
+  toastTimeEl.className = 'map-toast-time';
+  toastTimeEl.textContent = executionMomentLabel;
+
+  toastBodyEl.append(toastMessageEl);
+  if (executionMomentLabel) {
+    toastBodyEl.append(toastTimeEl);
+  }
+
+  const closeControlEl = document.createElement('button');
+  closeControlEl.type = 'button';
+  closeControlEl.className = 'map-toast-close';
+  closeControlEl.setAttribute('aria-label', 'Zamknij powiadomienie');
+  closeControlEl.innerHTML = '<span class="map-toast-close-icon">×</span>';
+
+  toastItemEl.append(toastBodyEl, closeControlEl);
+
+  toastListElement.append(toastItemEl);
+  if (toastListElement.childElementCount > 6) {
+    toastListElement.firstElementChild?.remove();
+  }
+
+  window.requestAnimationFrame(() => {
+    toastItemEl.classList.add('is-visible');
+  });
+
+  const startedAt = Date.now();
+  const updateToastCountdown = () => {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = Math.max(0, durationMs - elapsedMs);
+
+    const progressRatio = durationMs > 0
+      ? Math.min(1, Math.max(0, elapsedMs / durationMs))
+      : 1;
+    closeControlEl.style.setProperty('--toast-close-progress', String(progressRatio));
+  };
+
+  const removeToastWithFade = () => {
+    toastItemEl.classList.remove('is-visible');
+    window.setTimeout(() => {
+      if (toastItemEl.parentElement) {
+        toastItemEl.remove();
+      }
+    }, 220);
+  };
+
+  updateToastCountdown();
+  const countdownTimer = window.setInterval(updateToastCountdown, 200);
+
+  const hideTimer = window.setTimeout(() => {
+    window.clearInterval(countdownTimer);
+    removeToastWithFade();
+  }, durationMs);
+
+  closeControlEl.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    window.clearTimeout(hideTimer);
+    window.clearInterval(countdownTimer);
+    removeToastWithFade();
+  });
 }
 
 function openSelectionPanelForSourceRowId(sourceRowId) {
@@ -4354,7 +4657,8 @@ function openSelectionPanelForSourceRowId(sourceRowId) {
   openInfoPanelMode('selection');
   focusSelectionOnMap(person);
   void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
-    panelMode: 'selection'
+    panelMode: 'selection',
+    bypassOverlapSelection: true
   });
 }
 
@@ -4658,6 +4962,13 @@ async function selectPersonPoint(person, marker, options = {}) {
   const panelStateChanged = applySelectionPanelState(options.panelMode);
 
   saveLastSelectedPersonId(person.sourceRowId);
+  saveLastSelectedPersonRestoreState(person.sourceRowId, options.bypassOverlapSelection === true);
+  if (options.historyMode !== 'restore') {
+    showMapToast({
+      message: `Zaznaczono osobe: ${getMapPersonDisplayName(person)}`,
+      type: 'info'
+    });
+  }
   if (options.historyMode !== 'restore') {
     const personHistoryChanged = recordPersonSelectionHistory(person.sourceRowId);
     if (personHistoryChanged || panelStateChanged) {
@@ -4859,13 +5170,12 @@ function paintPersonSelectionState(person) {
     selectionMetaEl.hidden = true;
     selectionExtraEl.innerHTML = overlappingPeopleCard;
   } else {
-    selectionMetaEl.innerHTML = renderKeyValueList([
-      { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
+    selectionMetaEl.innerHTML = `${renderPersonIdKeyValueRow(person)}${renderKeyValueList([
       { label: 'Telefon', value: person.phone || 'Brak' },
       { label: 'E-mail', value: person.email || 'Brak' },
       { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
       { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) }
-    ]);
+    ])}`;
     selectionMetaEl.hidden = false;
     selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
   }
@@ -4915,15 +5225,14 @@ function paintPersonSelection(details) {
     return;
   }
 
-  selectionMetaEl.innerHTML = renderKeyValueList([
-    { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
+  selectionMetaEl.innerHTML = `${renderPersonIdKeyValueRow(person)}${renderKeyValueList([
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
     { label: 'Adres', value: person.addressText || person.routeAddress || 'Brak' },
     { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
     { label: 'Ostatnia wpłata', value: formatDate(person.lastPaymentAt) },
     ...buildPersonPrimaryDetailItems(person)
-  ]);
+  ])}`;
   selectionMetaEl.hidden = false;
 
   const cards = [];
@@ -4959,6 +5268,52 @@ function paintPersonSelection(details) {
         `
       )
     );
+  }
+
+  const sameLocationPeople = getVisiblePeopleWithOverlappingMarkers(person)
+    .filter((entry) => entry?.sourceRowId && entry.sourceRowId !== person.sourceRowId)
+    .sort((left, right) => {
+      const leftName = String(left.fullName || left.companyName || '').trim();
+      const rightName = String(right.fullName || right.companyName || '').trim();
+      return leftName.localeCompare(rightName, 'pl', { sensitivity: 'base' });
+    });
+
+  if (sameLocationPeople.length > 0) {
+    cards.push(`
+      <article class="list-card">
+        <div class="list-card-heading">
+          <strong>Osoby w tej samej lokalizacji</strong>
+        </div>
+        <div class="vertical-list map-tool-results-list compact-list">
+          ${sameLocationPeople
+            .map((entry) => {
+              const sourceRowId = escapeHtml(String(entry.sourceRowId));
+              const isVisibleOnMap = allPeople.some((personEntry) => personEntry.sourceRowId === entry.sourceRowId);
+              const locationLabel = Number.isFinite(entry.lat) && Number.isFinite(entry.lng)
+                ? isVisibleOnMap
+                  ? 'Widoczna na mapie'
+                  : 'Poza bieżącym filtrem mapy'
+                : 'Brak współrzędnych';
+
+              return `
+                <button
+                  type="button"
+                  class="person-row map-history-row"
+                  data-map-same-location-source-row-id="${sourceRowId}"
+                  data-map-hover-source-row-id="${sourceRowId}"
+                >
+                  <div class="list-card-heading">
+                    <strong>${escapeHtml(entry.fullName || entry.companyName || 'Bez nazwy')}</strong>
+                    ${renderMapPersonRowTools(entry, { isVisibleOnMap: true, isCurrent: false })}
+                  </div>
+                  ${renderPersonMetaLine(entry, locationLabel)}
+                </button>
+              `;
+            })
+            .join('')}
+        </div>
+      </article>
+    `);
   }
 
   if (details.notes.length > 0) {
@@ -5046,7 +5401,7 @@ function buildSelectionOverlappingPeopleCard(person) {
                   <strong>${displayName}</strong>
                   ${renderMapPersonRowTools(entry, { isVisibleOnMap: true, isCurrent: false })}
                 </div>
-                <span>${renderPersonMetaLine(entry, locationLabel)}</span>
+                ${renderPersonMetaLine(entry, locationLabel)}
               </button>
             `;
           })
@@ -5223,7 +5578,7 @@ function buildPersonPopupHtml(person) {
                           aria-label="Przejdz do osoby ${displayName}"
                         >
                           <strong>${displayName}</strong>
-                          <span>ID: ${personId}</span>
+                          <span>ID: ${personId} <span class="map-person-id-copy" data-map-copy-person-id="${personId}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>
                           <span>Wizyta: ${lastVisitAt} • Wplata: ${lastPaymentAt}</span>
                         </div>
                       `;
@@ -5247,7 +5602,7 @@ function buildPersonPopupHtml(person) {
       aria-label="Przejdz do osoby ${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}"
     >
       <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
-      <span>ID: ${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))}</span>
+      <span>ID: ${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))} <span class="map-person-id-copy" data-map-copy-person-id="${escapeHtml(String(person.sourceRowId || person.id || 'Brak'))}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>
       <span>${escapeHtml(person.routeAddress || person.addressText || 'Brak adresu')}</span>
       <span>Wizyta: ${escapeHtml(formatDate(person.lastVisitAt))} • Wplata: ${escapeHtml(formatDate(person.lastPaymentAt))}</span>
     </div>
@@ -5717,7 +6072,7 @@ function renderPersonSearchRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>${renderPersonMetaLine(person, locationLabel)}</span>
+          ${renderPersonMetaLine(person, locationLabel)}
         </button>
       `;
     })
@@ -5853,7 +6208,7 @@ function renderPersonListRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>${renderPersonMetaLine(person, locationLabel)}</span>
+          ${renderPersonMetaLine(person, locationLabel)}
         </button>
       `;
     })
@@ -5983,8 +6338,7 @@ function renderBookmarkedPersonListRows(people, currentSelectedPersonId = null) 
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
-          <span>${escapeHtml(locationLabel)}</span>
+          ${renderPersonMetaLine(person, locationLabel)}
         </button>
       `;
     })
@@ -8055,7 +8409,7 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
             <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
             ${renderMapPersonRowTools(person, { isVisibleOnMap, isCurrent })}
           </div>
-          <span>${renderPersonMetaLine(person, isVisibleOnMap ? 'Widoczna na mapie' : 'Poza bieżącym filtrem mapy')}</span>
+          ${renderPersonMetaLine(person, isVisibleOnMap ? 'Widoczna na mapie' : 'Poza bieżącym filtrem mapy')}
         </button>
       `;
     })
@@ -8063,8 +8417,9 @@ function renderMapDateFilterRows(people, currentSelectedPersonId = null) {
 }
 
 function renderPersonMetaLine(person, locationLabel = null) {
+  const personId = String(person?.sourceRowId || person?.id || 'Brak');
   const parts = [
-    `ID: ${escapeHtml(String(person?.sourceRowId || person?.id || 'Brak'))}`,
+    `<span class="map-person-meta-id">ID: ${escapeHtml(personId)} <span class="map-person-id-copy" data-map-copy-person-id="${escapeHtml(personId)}" role="button" tabindex="0" aria-label="Kopiuj ID"><i class="fa-regular fa-copy" aria-hidden="true"></i></span></span>`,
     `Ostatnia wizyta: ${escapeHtml(formatDate(person?.lastVisitAt))}`
   ];
 
@@ -8072,7 +8427,30 @@ function renderPersonMetaLine(person, locationLabel = null) {
     parts.push(escapeHtml(locationLabel));
   }
 
-  return parts.join(' • ');
+  return `<span class="map-person-meta-line">${parts.join(' • ')}</span>`;
+}
+
+function renderPersonIdKeyValueRow(person) {
+  const personId = String(person?.sourceRowId || person?.id || 'Brak');
+  return `
+    <div class="kv-row">
+      <span class="kv-label">ID</span>
+      <span class="kv-value">
+        <span class="map-kv-id-wrap">
+          <span>${escapeHtml(personId)}</span>
+          <span
+            class="map-person-id-copy"
+            data-map-copy-person-id="${escapeHtml(personId)}"
+            role="button"
+            tabindex="0"
+            aria-label="Kopiuj ID"
+          >
+            <i class="fa-regular fa-copy" aria-hidden="true"></i>
+          </span>
+        </span>
+      </span>
+    </div>
+  `;
 }
 
 function renderMapPersonRowTools(person, options = {}) {
@@ -8309,14 +8687,14 @@ function paintHistorySelection() {
                   })
                 : ''}
             </div>
-            <span>${person
+            ${person
               ? renderPersonMetaLine(
                   person,
                   allPeople.some((entry) => entry.sourceRowId === sourceRowId)
                     ? 'Widoczna na mapie'
                     : 'Poza bieżącym filtrem mapy'
                 )
-              : `ID: ${escapeHtml(String(sourceRowId || 'Brak'))} • Ostatnia wizyta: Brak`}</span>
+              : `<span class="map-person-meta-line"><span class="map-person-meta-id">ID: ${escapeHtml(String(sourceRowId || 'Brak'))}</span> • Ostatnia wizyta: Brak</span>`}
           </button>
         `;
       })

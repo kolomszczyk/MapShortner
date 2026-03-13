@@ -386,6 +386,139 @@ textarea {
   backdrop-filter: blur(10px);
 }
 
+.map-toast-list {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1301;
+  width: min(320px, calc(100% - 32px));
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.map-toast {
+  --toast-close-ring: rgba(46, 111, 74, 0.3);
+  --toast-close-progress: 0;
+  min-width: 164px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(46, 111, 74, 0.34);
+  background: linear-gradient(180deg, rgba(237, 243, 234, 0.96) 0%, rgba(225, 237, 228, 0.95) 100%);
+  color: var(--success);
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: pre-line;
+  box-shadow: 0 10px 24px rgba(46, 111, 74, 0.16);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.map-toast.is-success {
+  --toast-close-ring: rgba(46, 111, 74, 0.34);
+  border-color: rgba(46, 111, 74, 0.34);
+  background: linear-gradient(180deg, rgba(237, 243, 234, 0.96) 0%, rgba(225, 237, 228, 0.95) 100%);
+  color: var(--success);
+}
+
+.map-toast.is-error {
+  --toast-close-ring: rgba(140, 101, 24, 0.34);
+  border-color: rgba(140, 101, 24, 0.34);
+  background: linear-gradient(180deg, rgba(251, 246, 235, 0.96) 0%, rgba(247, 238, 219, 0.95) 100%);
+  color: var(--warning);
+}
+
+.map-toast.is-info {
+  --toast-close-ring: rgba(48, 67, 54, 0.3);
+  border-color: var(--line-strong);
+  background: linear-gradient(180deg, rgba(247, 250, 245, 0.96) 0%, rgba(239, 245, 236, 0.95) 100%);
+  color: var(--accent-strong);
+}
+
+.map-toast-body {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.map-toast-message,
+.map-toast-time {
+  overflow-wrap: anywhere;
+}
+
+.map-toast-time {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.map-toast-close {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border-radius: 999px;
+  padding: 0;
+  border: 1px solid rgba(48, 67, 54, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  cursor: pointer;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.map-toast-close::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    var(--toast-close-ring) calc((1 - var(--toast-close-progress)) * 360deg),
+    rgba(48, 67, 54, 0.1) 0deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%);
+  mask: radial-gradient(circle, transparent 58%, #000 60%);
+  pointer-events: none;
+}
+
+.map-toast-close:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.map-toast-close:focus-visible {
+  outline: none;
+  border-color: rgba(77, 176, 111, 0.44);
+  box-shadow: 0 0 0 3px rgba(77, 176, 111, 0.16);
+}
+
+.map-toast-close-icon {
+  position: relative;
+  z-index: 1;
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 700;
+  color: #1f3426;
+  opacity: 1;
+}
+
+.map-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .map-info-panel {
   display: grid;
   height: 100vh;
@@ -2620,6 +2753,42 @@ body.map-page .service-map {
 .person-row-copy {
   color: var(--muted);
   line-height: 1.45;
+}
+
+.map-person-meta-line {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.map-person-meta-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-kv-id-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-person-id-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid rgba(48, 67, 54, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.map-person-id-copy:hover {
+  color: var(--text);
+  border-color: rgba(48, 67, 54, 0.26);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .person-row-meta {
