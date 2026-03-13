@@ -113,9 +113,68 @@ const DEFAULT_OFFLINE_TILE_DOWNLOAD_STATE = Object.freeze({
   lastError: null,
   planSummary: null
 });
+const OFFLINE_TILE_PACKAGE_STATE_SETTING_KEY = 'offlineTilePackageState';
+const OFFLINE_TILE_REFRESH_INTERVAL_MS = 90 * 24 * 60 * 60 * 1000;
+const DEFAULT_OFFLINE_TILE_REFRESH_STATE = Object.freeze({
+  phase: 'idle',
+  totalTiles: 0,
+  downloadedTiles: 0,
+  failedTiles: 0,
+  bytesDownloaded: 0,
+  speedBps: 0,
+  startedAt: null,
+  updatedAt: null,
+  completedAt: null,
+  lastError: null
+});
+const DEFAULT_OFFLINE_TILE_PACKAGE_STATE = Object.freeze({
+  activeRevision: 1,
+  activePackageUpdatedAt: null,
+  lastRefreshCompletedAt: null,
+  refresh: DEFAULT_OFFLINE_TILE_REFRESH_STATE
+});
 
 function closeStore(db) {
   db.close();
+}
+
+function normalizeOfflineTileRefreshState(input = {}) {
+  return {
+    phase: String(input.phase || DEFAULT_OFFLINE_TILE_REFRESH_STATE.phase),
+    totalTiles: Math.max(0, Number(input.totalTiles || 0)),
+    downloadedTiles: Math.max(0, Number(input.downloadedTiles || 0)),
+    failedTiles: Math.max(0, Number(input.failedTiles || 0)),
+    bytesDownloaded: Math.max(0, Number(input.bytesDownloaded || 0)),
+    speedBps: Math.max(0, Number(input.speedBps || 0)),
+    startedAt: input.startedAt || null,
+    updatedAt: input.updatedAt || null,
+    completedAt: input.completedAt || null,
+    lastError: input.lastError || null
+  };
+}
+
+function normalizeOfflineTilePackageState(input = {}) {
+  const activeRevision = Math.max(1, Math.round(Number(input.activeRevision || DEFAULT_OFFLINE_TILE_PACKAGE_STATE.activeRevision)));
+  const activePackageUpdatedAt = input.activePackageUpdatedAt || null;
+  const lastRefreshCompletedAt = input.lastRefreshCompletedAt || null;
+  const nextRefreshDueAt = activePackageUpdatedAt
+    ? new Date(new Date(activePackageUpdatedAt).getTime() + OFFLINE_TILE_REFRESH_INTERVAL_MS).toISOString()
+    : null;
+
+  return {
+    activeRevision,
+    activePackageUpdatedAt,
+    lastRefreshCompletedAt,
+    nextRefreshDueAt,
+    isRefreshDue: Boolean(nextRefreshDueAt && Date.now() >= new Date(nextRefreshDueAt).getTime()),
+    refresh: normalizeOfflineTileRefreshState(input.refresh || {})
+  };
+}
+
+function getOfflineTilePackageState(db) {
+  return normalizeOfflineTilePackageState(
+    safeJsonParse(getSetting(db, OFFLINE_TILE_PACKAGE_STATE_SETTING_KEY), DEFAULT_OFFLINE_TILE_PACKAGE_STATE)
+  );
 }
 
 function exportSnapshot(db, targetPath) {
@@ -1125,7 +1184,8 @@ function getDashboardSummary(db) {
     },
     offlineTiles: {
       settings: getOfflineTileSettings(db),
-      state: getOfflineTileDownloadState(db)
+      state: getOfflineTileDownloadState(db),
+      packageState: getOfflineTilePackageState(db)
     }
   };
 }

@@ -57,6 +57,9 @@ export function initDashboardPanel({
   let lastUpdaterState = null;
   let lastUpdaterLogKey = null;
   let lastTileDownloadPayload = null;
+  let operationLogEntries = [];
+  let operationLogEntryIds = new Set();
+  let localOperationLogEntrySequence = 0;
   let runtimeMeta = {
     version: null,
     isDevMode: false
@@ -83,7 +86,10 @@ export function initDashboardPanel({
     if (payload?.summary) {
       renderSummary(payload.summary);
     }
-    appendLog(payload?.message || 'Zdarzenie systemowe.');
+  });
+
+  window.appApi.onOperationLogEntry((entry) => {
+    appendOperationLogEntry(entry);
   });
 
   if (hasTileDownloadSection()) {
@@ -401,6 +407,7 @@ export function initDashboardPanel({
     syncUpdaterControls(data.updater);
     renderUpdaterDetails(data.updater);
     lastUpdaterLogKey = getUpdaterLogKey(data.updater);
+    renderOperationLogHistory(data.operationLogHistory);
     setAccessPasswordStatus(Boolean(data.passwordConfigured));
     apiKeyInput.value = data.summary?.settings?.googleMapsApiKey || '';
     if (!apiKeyInput.value && data.googleMapsConfigured) {
@@ -415,7 +422,7 @@ export function initDashboardPanel({
       }
     }
     if (readyMessage) {
-      appendLog(readyMessage);
+      appendLog(readyMessage, { persist: false });
     }
   }
 
@@ -667,7 +674,10 @@ export function initDashboardPanel({
       target.textContent = `${formatDecimal(progressPercent, 1)}%`;
     });
     tileDownloadSpeedEls.forEach((target) => {
-      target.textContent = state.speedBps > 0 ? `${formatBytes(state.speedBps)}/s` : 'Brak transferu';
+      target.textContent = formatTileDownloadSpeedLabel(state, {
+        totalTiles,
+        downloadedTiles
+      });
     });
     tileDownloadCountsEls.forEach((target) => {
       target.textContent = `${formatNumber(downloadedTiles)} / ${formatNumber(totalTiles)}`;
@@ -723,17 +733,132 @@ export function initDashboardPanel({
     }
   }
 
-  function appendLog(message) {
+  function formatTileDownloadSpeedLabel(state = {}, metrics = {}) {
+    const speedBps = Number(state.speedBps || 0);
+    if (speedBps > 0) {
+      return `${formatBytes(speedBps)}/s`;
+    }
+    return '0 B/s';
+  }
+
+  function renderOperationLogHistory(entries = []) {
+    const historyEntries = Array.isArray(entries) ? entries : [];
+    const mergedEntries = dedupeOperationLogEntries([
+      ...operationLogEntries,
+      ...historyEntries
+    ]);
+
+    operationLogEntries = [];
+    operationLogEntryIds = new Set();
+
+    if (operationLogEl) {
+      operationLogEl.replaceChildren();
+    }
+
+    for (const entry of mergedEntries) {
+      appendOperationLogEntry(entry, { prepend: false });
+    }
+  }
+
+  function appendOperationLogEntry(entry, options = {}) {
+    const normalizedEntry = normalizeOperationLogEntry(entry);
+    if (!normalizedEntry || operationLogEntryIds.has(normalizedEntry.id)) {
+      return;
+    }
+
+    operationLogEntryIds.add(normalizedEntry.id);
+    if (options.prepend === false) {
+      operationLogEntries.push(normalizedEntry);
+    } else {
+      operationLogEntries.unshift(normalizedEntry);
+    }
+    if (operationLogEntries.length > 300) {
+      const removedEntries = operationLogEntries.splice(300);
+      for (const removedEntry of removedEntries) {
+        operationLogEntryIds.delete(removedEntry.id);
+      }
+    }
+
     if (!operationLogEl) {
       return;
     }
 
     const item = document.createElement('li');
-    item.textContent = `${new Date().toLocaleTimeString('pl-PL')}: ${message}`;
-    operationLogEl.prepend(item);
-    while (operationLogEl.children.length > 16) {
+    item.textContent = `${formatDateTime(normalizedEntry.createdAt)}: ${normalizedEntry.message}`;
+    if (options.prepend === false) {
+      operationLogEl.append(item);
+    } else {
+      operationLogEl.prepend(item);
+    }
+    while (operationLogEl.children.length > 300) {
       operationLogEl.removeChild(operationLogEl.lastElementChild);
     }
+  }
+
+  function appendLog(message, options = {}) {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) {
+      return;
+    }
+
+    if (options.persist === false) {
+      appendOperationLogEntry({
+        id: buildLocalOperationLogEntryId(),
+        createdAt: new Date().toISOString(),
+        message: normalizedMessage
+      });
+      return;
+    }
+
+    void window.appApi.addOperationLogEntry({
+      message: normalizedMessage
+    }).catch((error) => {
+      console.error('Failed to persist operation log entry', error);
+      appendOperationLogEntry({
+        id: buildLocalOperationLogEntryId(),
+        createdAt: new Date().toISOString(),
+        message: normalizedMessage
+      });
+    });
+  }
+
+  function buildLocalOperationLogEntryId() {
+    localOperationLogEntrySequence += 1;
+    return `local-${Date.now().toString(36)}-${localOperationLogEntrySequence.toString(36)}`;
+  }
+
+  function normalizeOperationLogEntry(entry) {
+    const message = String(entry?.message || '').trim();
+    if (!message) {
+      return null;
+    }
+
+    return {
+      id: String(entry?.id || buildLocalOperationLogEntryId()),
+      createdAt: String(entry?.createdAt || '').trim() || new Date().toISOString(),
+      message
+    };
+  }
+
+  function dedupeOperationLogEntries(entries) {
+    const uniqueEntries = [];
+    const seenEntryIds = new Set();
+
+    for (const entry of entries) {
+      const normalizedEntry = normalizeOperationLogEntry(entry);
+      if (!normalizedEntry || seenEntryIds.has(normalizedEntry.id)) {
+        continue;
+      }
+
+      seenEntryIds.add(normalizedEntry.id);
+      uniqueEntries.push(normalizedEntry);
+
+      if (uniqueEntries.length >= 300) {
+        break;
+      }
+    }
+
+    return uniqueEntries;
   }
 
   function getUpdaterLogKey(state) {

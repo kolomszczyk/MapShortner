@@ -1130,6 +1130,17 @@ textarea {
   color: var(--muted);
 }
 
+.log-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.log-list-scroll {
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
 .meta-list li,
 .log-list li {
   line-height: 1.7;

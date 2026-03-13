@@ -4,6 +4,7 @@ const runtimeMeta = ipcRenderer.sendSync('app:getRuntimeMetaSync');
 contextBridge.exposeInMainWorld('appApi', {
   runtimeMeta,
   getBootstrap: () => ipcRenderer.invoke('app:getBootstrap'),
+  addOperationLogEntry: (payload) => ipcRenderer.invoke('app:addOperationLogEntry', payload),
   getUpdaterState: () => ipcRenderer.invoke('updater:getState'),
   showUpdateAnnouncement: () => ipcRenderer.invoke('updater:showAnnouncement'),
   hideUpdateAnnouncement: () => ipcRenderer.invoke('updater:hideAnnouncement'),
@@ -47,6 +48,9 @@ contextBridge.exposeInMainWorld('appApi', {
   },
   onOperationStatus: (callback) => {
     ipcRenderer.on('app:operationStatus', (_event, payload) => callback(payload));
+  },
+  onOperationLogEntry: (callback) => {
+    ipcRenderer.on('app:operationLogEntry', (_event, payload) => callback(payload));
   },
   onTileDownloadState: (callback) => {
     ipcRenderer.on('tiles:state', (_event, payload) => callback(payload));

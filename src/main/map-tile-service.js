@@ -20,6 +20,12 @@ const PREFETCH_HOVER_RADIUS_METERS = 200;
 const FOREGROUND_PRIORITY_POLL_MS = 120;
 const FOREGROUND_PRIORITY_IDLE_GRACE_MS = 350;
 const TILE_FALLBACK_MAX_ZOOM_DELTA = 6;
+const OFFLINE_TILE_REFRESH_INTERVAL_MS = 90 * 24 * 60 * 60 * 1000;
+const OFFLINE_TILE_PACKAGE_STATE_SETTING_KEY = 'offlineTilePackageState';
+const ACTIVE_TILE_PACKAGE_DIRNAME = 'active';
+const REFRESH_TILE_PACKAGE_DIRNAME = 'refresh';
+const PREVIOUS_TILE_PACKAGE_DIRNAME = 'previous';
+const LEGACY_TILE_PACKAGE_DIRNAME = 'legacy';
 
 const OFFLINE_TILE_DEFAULTS = Object.freeze({
   z12RadiusKm: 15,
@@ -766,11 +772,12 @@ function createMapTileService({
     completedMessage
   }) {
     const { missingTiles, cachedTiles, blockedTilesCount } = cacheSummary;
+    const totalTiles = plan.tiles.length;
     const startedAt = new Date().toISOString();
     const initialState = updateOfflineState({
       phase: missingTiles.length > 0 ? 'downloading' : (blockedTilesCount > 0 ? 'idle' : 'completed'),
       pauseReason: null,
-      totalTiles: plan.tiles.length,
+      totalTiles,
       downloadedTiles: cachedTiles,
       failedTiles: 0,
       bytesDownloaded: 0,
@@ -819,11 +826,11 @@ function createMapTileService({
 
     activeDownloadRun = run;
     const workerCount = Math.min(settings.concurrency, Math.max(1, missingTiles.length));
-    const workers = Array.from({ length: workerCount }, () => runDownloadWorker(run, plan.tiles.length));
+    const workers = Array.from({ length: workerCount }, () => runDownloadWorker(run, totalTiles));
 
     Promise.all(workers)
-      .then(() => finalizeOfflineDownloadRun(run, plan.tiles.length))
-      .catch((error) => finalizeOfflineDownloadRun(run, plan.tiles.length, error));
+      .then(() => finalizeOfflineDownloadRun(run, totalTiles))
+      .catch((error) => finalizeOfflineDownloadRun(run, totalTiles, error));
 
     return {
       settings,

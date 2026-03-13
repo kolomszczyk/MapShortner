@@ -29,6 +29,9 @@ const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
 const WINDOW_STATE_SETTING_KEY = 'windowState';
 const MAP_SELECTION_HISTORY_SETTING_KEY = 'mapPersonSelectionHistory';
 const MAP_SELECTION_HISTORY_LIMIT = 100;
+const OPERATION_LOG_HISTORY_SETTING_KEY = 'operationLogHistory';
+const OPERATION_LOG_HISTORY_LIMIT = 300;
+const OPERATION_LOG_HISTORY_PERSIST_DELAY_MS = 1200;
 const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
 const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
@@ -43,6 +46,9 @@ const WINDOW_MIN_HEIGHT = 760;
 const isDevMode = process.argv.includes('--dev') || process.argv.includes('dev');
 let mapTileService = null;
 let persistWindowStateTimer = null;
+let operationLogHistory = null;
+let operationLogEntrySequence = 0;
+let persistOperationLogHistoryTimer = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -127,6 +133,121 @@ function sendUpdateStatus(message) {
   sendToRenderer('updater:status', message);
 }
 
+function buildOperationLogEntryId() {
+  operationLogEntrySequence += 1;
+  return `${Date.now().toString(36)}-${operationLogEntrySequence.toString(36)}`;
+}
+
+function normalizeOperationLogEntry(payload) {
+  const message = String(payload?.message || '').trim();
+  if (!message) {
+    return null;
+  }
+
+  const createdAt = String(payload?.createdAt || '').trim() || new Date().toISOString();
+
+  return {
+    id: String(payload?.id || buildOperationLogEntryId()),
+    createdAt,
+    type: payload?.type ? String(payload.type) : null,
+    status: payload?.status ? String(payload.status) : null,
+    source: payload?.source ? String(payload.source) : null,
+    reason: payload?.reason ? String(payload.reason) : null,
+    message
+  };
+}
+
+function readOperationLogHistory() {
+  if (Array.isArray(operationLogHistory)) {
+    return operationLogHistory;
+  }
+
+  if (!store) {
+    operationLogHistory = [];
+    return operationLogHistory;
+  }
+
+  try {
+    const rawValue = store.getSetting(OPERATION_LOG_HISTORY_SETTING_KEY);
+    if (!rawValue) {
+      operationLogHistory = [];
+      return operationLogHistory;
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    operationLogHistory = Array.isArray(parsedValue)
+      ? parsedValue
+          .map((entry) => normalizeOperationLogEntry(entry))
+          .filter(Boolean)
+          .slice(0, OPERATION_LOG_HISTORY_LIMIT)
+      : [];
+  } catch (error) {
+    log.warn('Failed to load operation log history', error);
+    operationLogHistory = [];
+  }
+
+  return operationLogHistory;
+}
+
+function persistOperationLogHistory() {
+  if (!store) {
+    return;
+  }
+
+  try {
+    store.setSetting(
+      OPERATION_LOG_HISTORY_SETTING_KEY,
+      JSON.stringify(readOperationLogHistory().slice(0, OPERATION_LOG_HISTORY_LIMIT))
+    );
+  } catch (error) {
+    log.warn('Failed to persist operation log history', error);
+  }
+}
+
+function flushOperationLogHistoryPersistence() {
+  if (persistOperationLogHistoryTimer) {
+    clearTimeout(persistOperationLogHistoryTimer);
+    persistOperationLogHistoryTimer = null;
+  }
+  persistOperationLogHistory();
+}
+
+function queueOperationLogHistoryPersistence() {
+  if (persistOperationLogHistoryTimer) {
+    return;
+  }
+
+  persistOperationLogHistoryTimer = setTimeout(() => {
+    persistOperationLogHistoryTimer = null;
+    persistOperationLogHistory();
+  }, OPERATION_LOG_HISTORY_PERSIST_DELAY_MS);
+}
+
+function getOperationLogHistory() {
+  return readOperationLogHistory().map((entry) => ({ ...entry }));
+}
+
+function resetCachedStoreState() {
+  flushOperationLogHistoryPersistence();
+  operationLogHistory = null;
+}
+
+function recordOperationLogEntry(payload) {
+  const entry = normalizeOperationLogEntry(payload);
+  if (!entry) {
+    return null;
+  }
+
+  const history = readOperationLogHistory();
+  history.unshift(entry);
+  if (history.length > OPERATION_LOG_HISTORY_LIMIT) {
+    history.length = OPERATION_LOG_HISTORY_LIMIT;
+  }
+  queueOperationLogHistoryPersistence();
+  sendToRenderer('app:operationLogEntry', entry);
+  return entry;
+}
+
 function getUpdaterState() {
   return { ...updaterState };
 }
@@ -158,7 +279,8 @@ function hideUpdateAnnouncement() {
 }
 
 function sendOperationStatus(payload) {
-  sendToRenderer('app:operationStatus', payload);
+  const entry = recordOperationLogEntry(payload);
+  sendToRenderer('app:operationStatus', entry ? { ...payload, ...entry } : payload);
 }
 
 function sendTileDownloadState(payload) {
@@ -1226,6 +1348,7 @@ async function importTrasaFile(trasaPath, options = {}) {
     });
 
     store = createDataStore(app);
+    resetCachedStoreState();
 
     const googleMapsApiKey = loadGoogleMapsApiKey();
     if (googleMapsApiKey) {
@@ -1262,6 +1385,7 @@ async function importTrasaFile(trasaPath, options = {}) {
       fs.copyFileSync(backupPath, targetDbPath);
     }
     store = createDataStore(app);
+    resetCachedStoreState();
     if (accessDbPathOverride) {
       store.setSetting('accessDbPath', accessDbPathOverride);
     }
@@ -1331,6 +1455,7 @@ async function runFirstLaunchSetup() {
 
 app.whenReady().then(async () => {
   store = createDataStore(app);
+  resetCachedStoreState();
   mapTileService = createMapTileService({
     app,
     log,
@@ -1381,6 +1506,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  flushOperationLogHistoryPersistence();
   persistWindowState();
   if (accessReimportInterval) {
     clearInterval(accessReimportInterval);
@@ -1406,8 +1532,11 @@ ipcMain.handle('app:getBootstrap', async () => ({
   passwordConfigured: Boolean(loadAccessPassword()),
   googleMapsConfigured: Boolean(loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey')),
   summary: store.getDashboardSummary(),
-  updater: getUpdaterState()
+  updater: getUpdaterState(),
+  operationLogHistory: getOperationLogHistory()
 }));
+
+ipcMain.handle('app:addOperationLogEntry', async (_event, payload = {}) => recordOperationLogEntry(payload));
 
 ipcMain.on('app:getRuntimeMetaSync', (event) => {
   event.returnValue = {
