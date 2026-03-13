@@ -29,6 +29,21 @@
                 <div class="map-selection-header" data-map-selection-header hidden>
                   <div>
                     <h1 data-map-selection-title></h1>
+                    <div class="map-selection-actions" aria-label="Akcje osoby" data-map-selection-actions>
+                      <button
+                        type="button"
+                        class="button-muted map-selection-action-button"
+                        title="Zakladka"
+                        aria-label="Zakladka"
+                        aria-pressed="false"
+                        data-map-selection-bookmark
+                      >
+                        <i class="fa-regular fa-bookmark" aria-hidden="true" data-map-selection-bookmark-icon></i>
+                      </button>
+                      <button type="button" class="button-muted map-selection-action-button" title="Baza danych" aria-label="Baza danych">
+                        <i class="fa-solid fa-database" aria-hidden="true"></i>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -522,6 +537,16 @@
                 type="button"
               >
                 <i class="fa-solid fa-list" aria-hidden="true"></i>
+              </button>
+              <button
+                class="map-tool-button"
+                aria-label="Zaznaczone osoby"
+                title="Zaznaczone osoby"
+                aria-pressed="false"
+                data-map-tool="bookmarked"
+                type="button"
+              >
+                <i class="fa-solid fa-bookmark" aria-hidden="true"></i>
               </button>
               <button
                 class="map-tool-button map-tool-button-settings"

@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('appApi', {
   getTableRows: (payload) => ipcRenderer.invoke('data:getTableRows', payload),
   listPeople: (payload) => ipcRenderer.invoke('people:list', payload),
   getPersonDetails: (sourceRowId) => ipcRenderer.invoke('people:getDetails', sourceRowId),
+  setPersonBookmark: (payload) => ipcRenderer.invoke('people:setBookmark', payload),
   getMapPoints: (payload) => ipcRenderer.invoke('map:getPoints', payload),
   getMapDateFilterOptions: () => ipcRenderer.invoke('map:getDateFilterOptions'),
   getMapSelectionHistory: () => ipcRenderer.invoke('map:getSelectionHistory'),

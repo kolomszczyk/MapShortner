@@ -1734,6 +1734,7 @@ ipcMain.handle('data:getTables', () => store.getImportTables());
 ipcMain.handle('data:getTableRows', (_event, input) => store.getTableRows(input));
 ipcMain.handle('people:list', (_event, input) => store.searchPeople(input));
 ipcMain.handle('people:getDetails', (_event, sourceRowId) => store.getPersonDetails(sourceRowId));
+ipcMain.handle('people:setBookmark', (_event, payload = {}) => store.setPersonBookmark(payload));
 ipcMain.handle('map:getPoints', (_event, input) => store.listMapPoints(input));
 ipcMain.handle('map:getDateFilterOptions', () => store.listMapDateFilterOptions());
 ipcMain.handle('map:getSelectionHistory', () => readMapSelectionHistory());

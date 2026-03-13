@@ -468,6 +468,34 @@ textarea {
   display: block;
 }
 
+.map-selection-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.map-selection-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.map-selection-action-button:hover:not(:disabled) {
+  transform: none;
+}
+
+.map-selection-action-button.is-active {
+  color: var(--accent-strong);
+  border-color: rgba(46, 111, 74, 0.3);
+  background: rgba(226, 242, 231, 0.92);
+}
+
 .map-selection-cards {
   margin-top: 4px;
 }
@@ -2538,6 +2566,28 @@ body.map-page .service-map {
 .person-row-title,
 .detail-title {
   font-weight: 700;
+}
+
+.person-detail-actions {
+  display: flex;
+  gap: 8px;
+  margin: -6px 0 2px;
+}
+
+.person-detail-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.person-detail-action-button:hover:not(:disabled) {
+  transform: none;
 }
 
 .person-row-copy {

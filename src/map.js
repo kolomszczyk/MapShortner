@@ -24,6 +24,7 @@ const historyButtonEl = document.querySelector('[data-map-tool="history"]');
 const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
 const colorsButtonEl = document.querySelector('[data-map-tool="colors"]');
 const listButtonEl = document.querySelector('[data-map-tool="list"]');
+const bookmarkedButtonEl = document.querySelector('[data-map-tool="bookmarked"]');
 const settingsButtonEl = document.querySelector('[data-map-tool="settings"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
@@ -32,9 +33,12 @@ const overviewImportedAtEl = document.querySelector('[data-map-overview-imported
 const overviewDefaultEls = document.querySelectorAll('[data-map-overview-default]');
 const selectionHeaderEl = document.querySelector('[data-map-selection-header]');
 const selectionTitleEl = document.querySelector('[data-map-selection-title]');
+const selectionActionsEl = document.querySelector('[data-map-selection-actions]');
 const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
 const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
+const selectionBookmarkButtonEl = document.querySelector('[data-map-selection-bookmark]');
+const selectionBookmarkIconEl = document.querySelector('[data-map-selection-bookmark-icon]');
 const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
 
 const PERSON_LOCATION_MARKER_OPACITY = 0.5;
@@ -150,7 +154,7 @@ const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
 const DEFAULT_INFO_PANEL_MODE = 'selection';
 const SETTINGS_PANEL_STORAGE_STATE = 'settings';
-const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter', 'colors', 'list'];
+const INFO_PANEL_MODES = ['selection', 'search', 'history', 'filter', 'colors', 'list', 'bookmarked'];
 const MONTH_LABELS = ['Styczen', 'Luty', 'Marzec', 'Kwiecien', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpien', 'Wrzesien', 'Pazdziernik', 'Listopad', 'Grudzien'];
 const EARLIEST_COMPARABLE_DATE = '0001-01-01';
 const LATEST_COMPARABLE_DATE = '9999-12-31';
@@ -223,8 +227,17 @@ let personListState = {
   hasMore: false,
   renderedCount: 0
 };
+let bookmarkedPersonListState = {
+  results: [],
+  total: 0,
+  isLoading: false,
+  hasLoaded: false,
+  hasMore: false,
+  renderedCount: 0
+};
 let mapSearchRowHeight = MAP_PERSON_SEARCH_ESTIMATED_ROW_HEIGHT_PX;
 let mapListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
+let mapBookmarkedListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
 let mapDateFilterRenderedCount = 0;
 let mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
 let mapTimeColorDateMatchModeAsyncPersistFrame = 0;
@@ -498,6 +511,10 @@ listButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('list');
 });
 
+bookmarkedButtonEl?.addEventListener('click', () => {
+  openInfoPanelMode('bookmarked');
+});
+
 historyButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('history');
 });
@@ -588,6 +605,22 @@ function handleSelectionPanelClick(event) {
   if (listResultButton && infoPanelMode === 'list') {
     const sourceRowId = listResultButton.getAttribute('data-map-list-source-row-id');
     const listResult = personListState.results.find((entry) => entry.sourceRowId === sourceRowId);
+    if (!listResult) {
+      return;
+    }
+
+    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
+    focusSelectionOnMap(mapPerson);
+    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+      panelMode: 'selection'
+    });
+    return;
+  }
+
+  const bookmarkedResultButton = event.target.closest('[data-map-bookmarked-source-row-id]');
+  if (bookmarkedResultButton && infoPanelMode === 'bookmarked') {
+    const sourceRowId = bookmarkedResultButton.getAttribute('data-map-bookmarked-source-row-id');
+    const listResult = bookmarkedPersonListState.results.find((entry) => entry.sourceRowId === sourceRowId);
     if (!listResult) {
       return;
     }
@@ -781,6 +814,121 @@ function handleSelectionPanelClick(event) {
     history.forward();
   }
 }
+
+function setMapSelectionBookmarkActive(isActive) {
+  if (!selectionBookmarkButtonEl) {
+    return;
+  }
+
+  const nextState = isActive === true;
+  selectionBookmarkButtonEl.classList.toggle('is-active', nextState);
+  selectionBookmarkButtonEl.setAttribute('aria-pressed', String(nextState));
+
+  if (!selectionBookmarkIconEl) {
+    return;
+  }
+
+  selectionBookmarkIconEl.classList.toggle('fa-regular', !nextState);
+  selectionBookmarkIconEl.classList.toggle('fa-solid', nextState);
+}
+
+function resolveSelectedPersonSourceRowId() {
+  if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId) {
+    return String(selectionPanelState.details.person.sourceRowId);
+  }
+
+  if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId) {
+    return String(selectionPanelState.person.sourceRowId);
+  }
+
+  return '';
+}
+
+function syncSelectionBookmarkUiState() {
+  if (!selectionActionsEl || !selectionBookmarkButtonEl) {
+    return;
+  }
+
+  const isSelectionPanelActive = infoPanelMode === 'selection';
+  const isPersonMode = selectionPanelState.kind === 'person' || selectionPanelState.kind === 'person-loading';
+  const shouldShowActions = isSelectionPanelActive && isPersonMode;
+
+  selectionActionsEl.hidden = !shouldShowActions;
+  selectionBookmarkButtonEl.disabled = !shouldShowActions || selectionPanelState.kind !== 'person';
+
+  if (!shouldShowActions) {
+    setMapSelectionBookmarkActive(false);
+  }
+}
+
+function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  if (!normalizedSourceRowId) {
+    return;
+  }
+
+  allPeople = allPeople.map((person) => {
+    if (person?.sourceRowId !== normalizedSourceRowId) {
+      return person;
+    }
+
+    return {
+      ...person,
+      isBookmarked
+    };
+  });
+
+  const knownPerson = knownPeopleBySourceRowId.get(normalizedSourceRowId);
+  if (knownPerson) {
+    knownPeopleBySourceRowId.set(normalizedSourceRowId, {
+      ...knownPerson,
+      isBookmarked
+    });
+  }
+
+  syncBookmarkedPersonListStateFromVisiblePeople();
+
+  if (infoPanelMode === 'bookmarked' && bookmarkedPersonListState.hasLoaded) {
+    paintBookmarkedListPanel();
+  }
+}
+
+selectionBookmarkButtonEl?.addEventListener('click', async () => {
+  const sourceRowId = resolveSelectedPersonSourceRowId();
+  if (!sourceRowId || !window.appApi?.setPersonBookmark) {
+    return;
+  }
+
+  const currentActive = selectionBookmarkButtonEl.classList.contains('is-active');
+  const nextState = !currentActive;
+  setMapSelectionBookmarkActive(nextState);
+  selectionBookmarkButtonEl.disabled = true;
+
+  try {
+    const result = await window.appApi.setPersonBookmark({
+      sourceRowId,
+      isBookmarked: nextState
+    });
+    const persistedState = result?.isBookmarked === true;
+    setMapSelectionBookmarkActive(persistedState);
+    syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
+
+    if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === sourceRowId) {
+      selectionPanelState.details.person.isBookmarked = persistedState;
+    }
+
+    if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId === sourceRowId) {
+      selectionPanelState.person.isBookmarked = persistedState;
+    }
+  } catch (error) {
+    setMapSelectionBookmarkActive(currentActive);
+  }
+
+  syncSelectionBookmarkUiState();
+});
+
+setMapSelectionBookmarkActive(false);
+syncSelectionBookmarkUiState();
 
 selectionExtraEl?.addEventListener('click', handleSelectionPanelClick);
 selectionMetaEl?.addEventListener('click', handleSelectionPanelClick);
@@ -1513,8 +1661,10 @@ async function loadPoints(options = {}) {
   mapDateFilterRenderedCount = 0;
   mapDateFilterRowHeight = MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX;
   mapListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
+  mapBookmarkedListRowHeight = MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX;
   cacheKnownPeople(allPeople);
   syncPersonListStateFromVisiblePeople();
+  syncBookmarkedPersonListStateFromVisiblePeople();
   const activeSelectedPersonSourceRowId = activeSelection?.type === 'person' && activeSelection.key
     ? activeSelection.key.replace(/^person:/, '')
     : null;
@@ -1559,6 +1709,10 @@ async function loadPoints(options = {}) {
 
   if (infoPanelMode === 'list' && personListState.hasLoaded) {
     paintListPanel();
+  }
+
+  if (infoPanelMode === 'bookmarked' && bookmarkedPersonListState.hasLoaded) {
+    paintBookmarkedListPanel();
   }
 
   shouldRestoreMapViewportOnNextLoad = false;
@@ -4202,6 +4356,10 @@ function setActiveSelection(nextSelection) {
   if (infoPanelMode === 'list') {
     paintListPanel();
   }
+
+  if (infoPanelMode === 'bookmarked') {
+    paintBookmarkedListPanel();
+  }
 }
 
 function clearActiveSelection(options = {}) {
@@ -4223,6 +4381,10 @@ function clearActiveSelection(options = {}) {
 
   if (infoPanelMode === 'list') {
     paintListPanel();
+  }
+
+  if (infoPanelMode === 'bookmarked') {
+    paintBookmarkedListPanel();
   }
 
   if (options.resetPanel !== false) {
@@ -4286,6 +4448,7 @@ function paintEmptySelection() {
   selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = '';
   selectionExtraEl.hidden = true;
+  syncSelectionBookmarkUiState();
 }
 
 function renderPersonSelectionState(person) {
@@ -4318,6 +4481,8 @@ function paintPersonSelectionState(person) {
   selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = '<p class="empty-state">Ładowanie pełnych informacji o osobie...</p>';
   selectionExtraEl.hidden = false;
+  setMapSelectionBookmarkActive(person?.isBookmarked === true);
+  syncSelectionBookmarkUiState();
 }
 
 function renderPersonSelection(details) {
@@ -4351,6 +4516,8 @@ function paintPersonSelection(details) {
     ...buildPersonPrimaryDetailItems(person)
   ]);
   selectionMetaEl.hidden = false;
+  setMapSelectionBookmarkActive(person?.isBookmarked === true);
+  syncSelectionBookmarkUiState();
 
   const cards = [];
 
@@ -4515,6 +4682,7 @@ function paintCustomPointSelection(point) {
   selectionMetaEl.hidden = false;
   selectionExtraEl.innerHTML = '<p class="empty-state">Ten punkt nie ma jeszcze dodatkowych notatek.</p>';
   selectionExtraEl.hidden = false;
+  syncSelectionBookmarkUiState();
 }
 
 function formatCoordinate(value) {
@@ -4737,6 +4905,8 @@ function setInfoPanelMode(mode, options = {}) {
 }
 
 function renderCurrentInfoPanel() {
+  syncSelectionBookmarkUiState();
+
   if (infoPanelMode === 'history') {
     paintHistorySelection();
     return;
@@ -4773,6 +4943,14 @@ function renderCurrentInfoPanel() {
     return;
   }
 
+  if (infoPanelMode === 'bookmarked') {
+    if (!bookmarkedPersonListState.hasLoaded) {
+      syncBookmarkedPersonListStateFromVisiblePeople({ preserveRenderedCount: false });
+    }
+    paintBookmarkedListPanel();
+    return;
+  }
+
   paintSelectionPanelState();
 }
 
@@ -4789,6 +4967,7 @@ function syncInfoToolButtons() {
   const isFilterMode = shouldHighlightInfoMode && infoPanelMode === 'filter';
   const isColorsMode = shouldHighlightInfoMode && infoPanelMode === 'colors';
   const isListMode = shouldHighlightInfoMode && infoPanelMode === 'list';
+  const isBookmarkedMode = shouldHighlightInfoMode && infoPanelMode === 'bookmarked';
 
   selectionButtonEl?.classList.toggle('is-active', isSelectionMode);
   selectionButtonEl?.setAttribute('aria-pressed', String(isSelectionMode));
@@ -4807,6 +4986,9 @@ function syncInfoToolButtons() {
 
   listButtonEl?.classList.toggle('is-active', isListMode);
   listButtonEl?.setAttribute('aria-pressed', String(isListMode));
+
+  bookmarkedButtonEl?.classList.toggle('is-active', isBookmarkedMode);
+  bookmarkedButtonEl?.setAttribute('aria-pressed', String(isBookmarkedMode));
 
   settingsButtonEl?.classList.toggle('is-active', isSettingsMode);
   settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsMode));
@@ -5146,6 +5328,114 @@ function syncPersonListStateFromVisiblePeople(options = {}) {
     hasMore: nextRenderedCount < allPeople.length,
     renderedCount: nextRenderedCount
   };
+}
+
+function getBookmarkedVisiblePeople() {
+  return allPeople.filter((person) => person?.isBookmarked === true);
+}
+
+function syncBookmarkedPersonListStateFromVisiblePeople(options = {}) {
+  const preserveRenderedCount = options.preserveRenderedCount !== false;
+  const bookmarkedPeople = getBookmarkedVisiblePeople();
+  const total = bookmarkedPeople.length;
+  const nextRenderedCount = total === 0
+    ? 0
+    : Math.min(
+        total,
+        Math.max(
+          preserveRenderedCount ? Number(bookmarkedPersonListState.renderedCount || 0) : 0,
+          MAP_PERSON_LIST_BATCH_SIZE
+        )
+      );
+
+  bookmarkedPersonListState = {
+    results: bookmarkedPeople.slice(0, nextRenderedCount),
+    total,
+    isLoading: false,
+    hasLoaded: true,
+    hasMore: nextRenderedCount < total,
+    renderedCount: nextRenderedCount
+  };
+}
+
+function paintBookmarkedListPanel() {
+  clearHoveredPersonSourceRowId();
+  syncOverviewSpacing(false, false, false, false, true);
+  overviewDefaultEls.forEach((element) => {
+    element.hidden = true;
+  });
+
+  const savedCountLabel = (isMapPointsLoading && !bookmarkedPersonListState.hasLoaded)
+    ? 'Ładowanie...'
+    : bookmarkedPersonListState.total === 1
+      ? '1 osoba zapisana'
+      : `${formatNumber(bookmarkedPersonListState.total)} osób zapisanych`;
+
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Zaznaczone osoby';
+  selectionCopyEl.hidden = true;
+  selectionMetaEl.innerHTML = `
+    <div class="list-panel-summary">
+      <strong class="filter-panel-count list-panel-count-bookmarked">${escapeHtml(savedCountLabel)}</strong>
+      <p class="copy list-panel-copy">To jest lista zapisanych osób.</p>
+    </div>
+  `;
+  selectionMetaEl.hidden = false;
+  selectionExtraEl.innerHTML = `
+    <div class="vertical-list map-tool-results-list" data-map-bookmarked-list-results>
+      ${renderBookmarkedPersonListResults()}
+    </div>
+  `;
+  bindHoverTrackingToRenderedPersonLists();
+  bindLazyLoadingToRenderedBookmarkedPersonListResults();
+  selectionExtraEl.hidden = false;
+
+  const resultsList = selectionExtraEl?.querySelector('[data-map-bookmarked-list-results]');
+  if (resultsList && bookmarkedPersonListState.hasLoaded && bookmarkedPersonListState.results.length > 0) {
+    syncMapBookmarkedListResultsTail(resultsList);
+    updateMapBookmarkedListRowHeight(resultsList);
+  }
+}
+
+function renderBookmarkedPersonListResults() {
+  if (isMapPointsLoading && !bookmarkedPersonListState.hasLoaded) {
+    return '<p class="empty-state">Ładowanie zapisanych osób...</p>';
+  }
+
+  if (bookmarkedPersonListState.results.length === 0) {
+    return '<p class="empty-state">Brak zapisanych osób.</p>';
+  }
+
+  return renderBookmarkedPersonListRows(bookmarkedPersonListState.results, getCurrentSelectedPersonSourceRowId());
+}
+
+function renderBookmarkedPersonListRows(people, currentSelectedPersonId = null) {
+  return people
+    .map((person) => {
+      const isVisibleOnMap = allPeople.some((entry) => entry.sourceRowId === person.sourceRowId);
+      const isCurrent = person.sourceRowId === currentSelectedPersonId;
+      const locationLabel = Number.isFinite(person.lat) && Number.isFinite(person.lng)
+        ? isVisibleOnMap
+          ? 'Widoczna na mapie'
+          : 'Poza bieżącym filtrem mapy'
+        : 'Brak współrzędnych';
+
+      return `
+        <button
+          type="button"
+          class="person-row map-history-row${isCurrent ? ' is-current' : ''}"
+          data-map-bookmarked-source-row-id="${escapeHtml(person.sourceRowId)}"
+          data-map-hover-source-row-id="${escapeHtml(person.sourceRowId)}"
+        >
+          <div class="list-card-heading">
+            <strong>${escapeHtml(person.fullName || person.companyName || 'Bez nazwy')}</strong>
+          </div>
+          <span>Ostatnia wizyta: ${escapeHtml(formatDate(person.lastVisitAt))}</span>
+          <span>${escapeHtml(locationLabel)}</span>
+        </button>
+      `;
+    })
+    .join('');
 }
 
 function paintTimeColorPanel() {
@@ -7493,6 +7783,18 @@ function bindLazyLoadingToRenderedPersonListResults() {
   });
 }
 
+function bindLazyLoadingToRenderedBookmarkedPersonListResults() {
+  const listElement = selectionExtraEl?.querySelector('[data-map-bookmarked-list-results]');
+  if (!listElement || listElement.dataset.lazyLoadingBound === 'true') {
+    return;
+  }
+
+  listElement.dataset.lazyLoadingBound = 'true';
+  listElement.addEventListener('scroll', () => {
+    void maybeLoadMoreBookmarkedPersonListResults(listElement);
+  });
+}
+
 function bindLazyLoadingToRenderedMapDateFilterResults() {
   const listElement = selectionExtraEl?.querySelector('[data-map-date-filter-results]');
   if (!listElement || listElement.dataset.lazyLoadingBound === 'true') {
@@ -7570,6 +7872,20 @@ async function maybeLoadMorePersonListResults(listElement) {
   appendPersonListResults();
 }
 
+async function maybeLoadMoreBookmarkedPersonListResults(listElement) {
+  if (infoPanelMode !== 'bookmarked' || !bookmarkedPersonListState.hasMore) {
+    return;
+  }
+
+  const loadedContentHeight = bookmarkedPersonListState.results.length * getMapBookmarkedListRowStride();
+  const viewportBottom = listElement.scrollTop + listElement.clientHeight;
+  if (viewportBottom + MAP_PERSON_LIST_SCROLL_THRESHOLD_PX < loadedContentHeight) {
+    return;
+  }
+
+  appendBookmarkedPersonListResults();
+}
+
 function appendPersonSearchResults(items) {
   const listElement = selectionExtraEl?.querySelector('[data-map-person-search-results]');
   if (!listElement) {
@@ -7623,6 +7939,43 @@ function appendPersonListResults() {
   syncHoveredPersonListRows();
 }
 
+function appendBookmarkedPersonListResults() {
+  const listElement = selectionExtraEl?.querySelector('[data-map-bookmarked-list-results]');
+  if (!listElement) {
+    paintBookmarkedListPanel();
+    return;
+  }
+
+  const bookmarkedPeople = getBookmarkedVisiblePeople();
+  const nextRenderedCount = Math.min(
+    bookmarkedPeople.length,
+    bookmarkedPersonListState.renderedCount + MAP_PERSON_LIST_BATCH_SIZE
+  );
+  const items = bookmarkedPeople.slice(bookmarkedPersonListState.renderedCount, nextRenderedCount);
+  if (items.length === 0) {
+    return;
+  }
+
+  bookmarkedPersonListState = {
+    ...bookmarkedPersonListState,
+    results: bookmarkedPeople.slice(0, nextRenderedCount),
+    total: bookmarkedPeople.length,
+    isLoading: false,
+    hasLoaded: true,
+    hasMore: nextRenderedCount < bookmarkedPeople.length,
+    renderedCount: nextRenderedCount
+  };
+  removeMapBookmarkedListResultsTail(listElement);
+  listElement.insertAdjacentHTML(
+    'beforeend',
+    renderBookmarkedPersonListRows(items, getCurrentSelectedPersonSourceRowId())
+  );
+  syncMapBookmarkedListResultsTail(listElement);
+  updateMapBookmarkedListRowHeight(listElement);
+  updateMapBookmarkedListCountLabel();
+  syncHoveredPersonListRows();
+}
+
 function updateMapSearchCountLabel() {
   const counterEl = selectionMetaEl?.querySelector('.search-panel-count');
   if (!counterEl) {
@@ -7643,6 +7996,17 @@ function updateMapListCountLabel() {
   counterEl.textContent = personListState.total === 1
     ? '1 osoba została wyszukana'
     : `${formatNumber(personListState.total)} osób zostało wyszukanych`;
+}
+
+function updateMapBookmarkedListCountLabel() {
+  const counterEl = selectionMetaEl?.querySelector('.list-panel-count-bookmarked');
+  if (!counterEl) {
+    return;
+  }
+
+  counterEl.textContent = bookmarkedPersonListState.total === 1
+    ? '1 osoba zapisana'
+    : `${formatNumber(bookmarkedPersonListState.total)} osób zapisanych`;
 }
 
 function showMapSearchLoadingState(listElement) {
@@ -7670,6 +8034,10 @@ function removeMapListResultsTail(listElement) {
   listElement.querySelector('[data-map-list-results-spacer]')?.remove();
 }
 
+function removeMapBookmarkedListResultsTail(listElement) {
+  listElement.querySelector('[data-map-bookmarked-results-spacer]')?.remove();
+}
+
 function syncMapSearchResultsTail(listElement) {
   removeMapSearchResultsTail(listElement);
   if (personSearchState.isLoading && personSearchState.hasLoaded) {
@@ -7681,6 +8049,11 @@ function syncMapSearchResultsTail(listElement) {
 function syncMapListResultsTail(listElement) {
   removeMapListResultsTail(listElement);
   appendMapListResultsSpacer(listElement);
+}
+
+function syncMapBookmarkedListResultsTail(listElement) {
+  removeMapBookmarkedListResultsTail(listElement);
+  appendMapBookmarkedListResultsSpacer(listElement);
 }
 
 function appendMapSearchResultsSpacer(listElement) {
@@ -7707,6 +8080,20 @@ function appendMapListResultsSpacer(listElement) {
   spacer.className = 'results-spacer';
   spacer.dataset.mapListResultsSpacer = 'true';
   spacer.style.height = `${Math.round(remainingCount * getMapListRowStride())}px`;
+  spacer.setAttribute('aria-hidden', 'true');
+  listElement.appendChild(spacer);
+}
+
+function appendMapBookmarkedListResultsSpacer(listElement) {
+  const remainingCount = Math.max(0, bookmarkedPersonListState.total - bookmarkedPersonListState.results.length);
+  if (remainingCount <= 0) {
+    return;
+  }
+
+  const spacer = document.createElement('div');
+  spacer.className = 'results-spacer';
+  spacer.dataset.mapBookmarkedResultsSpacer = 'true';
+  spacer.style.height = `${Math.round(remainingCount * getMapBookmarkedListRowStride())}px`;
   spacer.setAttribute('aria-hidden', 'true');
   listElement.appendChild(spacer);
 }
@@ -7751,6 +8138,27 @@ function updateMapListRowHeight(listElement) {
 
 function getMapListRowStride() {
   return mapListRowHeight + MAP_PERSON_LIST_ROW_GAP_PX;
+}
+
+function updateMapBookmarkedListRowHeight(listElement) {
+  const rows = Array.from(listElement.querySelectorAll('.person-row'));
+  if (rows.length === 0) {
+    return;
+  }
+
+  const nextHeight = Math.round(rows.reduce((sum, row) => sum + row.offsetHeight, 0) / rows.length);
+  if (Number.isFinite(nextHeight) && nextHeight > 0 && nextHeight !== mapBookmarkedListRowHeight) {
+    mapBookmarkedListRowHeight = nextHeight;
+    const spacer = listElement.querySelector('[data-map-bookmarked-results-spacer]');
+    if (spacer) {
+      const remainingCount = Math.max(0, bookmarkedPersonListState.total - bookmarkedPersonListState.results.length);
+      spacer.style.height = `${Math.round(remainingCount * getMapBookmarkedListRowStride())}px`;
+    }
+  }
+}
+
+function getMapBookmarkedListRowStride() {
+  return mapBookmarkedListRowHeight + MAP_PERSON_LIST_ROW_GAP_PX;
 }
 
 function removeMapDateFilterResultsTail(listElement) {

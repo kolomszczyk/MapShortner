@@ -74,6 +74,7 @@ function createDataStore(app) {
     listPeople: (input) => listPeople(db, input),
     searchPeople: (input) => searchPeople(db, input),
     getPersonDetails: (sourceRowId) => getPersonDetails(db, sourceRowId),
+    setPersonBookmark: (payload) => setPersonBookmark(db, payload),
     listMapPoints: (input) => listMapPoints(db, input),
     listMapDateFilterOptions: () => listMapDateFilterOptions(db),
     listPendingGeocodes: (limit) => listPendingGeocodes(db, limit),
@@ -213,6 +214,15 @@ function initSchema(db) {
       lng REAL NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS person_bookmarks (
+      source_row_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_person_bookmarks_updated
+      ON person_bookmarks(updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS offline_tile_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1401,11 +1411,13 @@ function getPersonDetails(db, sourceRowId) {
   const personRaw = safeJsonParse(person.raw_json, {});
   const normalizedPerson = normalizePeopleRow(person);
   const normalizedNotesSummary = stripHtml(pickValue(personRaw, 'Uwagi')) || normalizedPerson.notesSummary;
+  const isBookmarked = getPersonBookmarkState(db, sourceRowId);
 
   return {
     person: {
       ...normalizedPerson,
       notesSummary: normalizedNotesSummary,
+      isBookmarked,
       raw: personRaw
     },
     serviceCards: serviceCards.map((row) => ({
@@ -1420,6 +1432,47 @@ function getPersonDetails(db, sourceRowId) {
       raw: safeJsonParse(row.rawJson, {})
     })),
     notes: listNotes(db, 'person', sourceRowId)
+  };
+}
+
+function getPersonBookmarkState(db, sourceRowId) {
+  const normalizedSourceRowId = String(sourceRowId || '').trim();
+  if (!normalizedSourceRowId) {
+    return false;
+  }
+
+  const row = db.prepare(`
+    SELECT 1 AS isBookmarked
+    FROM person_bookmarks
+    WHERE source_row_id = ?
+    LIMIT 1
+  `).get(normalizedSourceRowId);
+
+  return row?.isBookmarked === 1;
+}
+
+function setPersonBookmark(db, payload = {}) {
+  const sourceRowId = String(payload.sourceRowId || '').trim();
+  if (!sourceRowId) {
+    throw new Error('Brak identyfikatora osoby do zapisania zakladki.');
+  }
+
+  const isBookmarked = payload.isBookmarked === true;
+  if (isBookmarked) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO person_bookmarks(source_row_id, created_at, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(source_row_id) DO UPDATE SET
+        updated_at = excluded.updated_at
+    `).run(sourceRowId, now, now);
+  } else {
+    db.prepare('DELETE FROM person_bookmarks WHERE source_row_id = ?').run(sourceRowId);
+  }
+
+  return {
+    sourceRowId,
+    isBookmarked: getPersonBookmarkState(db, sourceRowId)
   };
 }
 
@@ -1457,7 +1510,12 @@ function listMapPoints(db, input = {}) {
       last_visit_at AS lastVisitAt,
       last_payment_at AS lastPaymentAt,
       planned_visit_at AS plannedVisitAt,
-      total_paid AS totalPaid
+      total_paid AS totalPaid,
+      EXISTS(
+        SELECT 1
+        FROM person_bookmarks
+        WHERE person_bookmarks.source_row_id = people_cache.source_row_id
+      ) AS isBookmarked
     FROM people_cache
     ${whereClause}
     ORDER BY full_name COLLATE NOCASE ASC
@@ -1813,7 +1871,8 @@ function normalizePeopleRow(row) {
     deviceVendor: row.deviceVendor || row.device_vendor || null,
     deviceModel: row.deviceModel || row.device_model || null,
     totalPaid: row.totalPaid == null ? null : Number(row.totalPaid),
-    notesSummary: row.notesSummary || row.notes_summary || null
+    notesSummary: row.notesSummary || row.notes_summary || null,
+    isBookmarked: row.isBookmarked === true || row.isBookmarked === 1 || row.is_bookmarked === 1
   };
 }
 
