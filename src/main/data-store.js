@@ -1398,10 +1398,15 @@ function getPersonDetails(db, sourceRowId) {
     LIMIT 50
   `).all(sourceRowId);
 
+  const personRaw = safeJsonParse(person.raw_json, {});
+  const normalizedPerson = normalizePeopleRow(person);
+  const normalizedNotesSummary = stripHtml(pickValue(personRaw, 'Uwagi')) || normalizedPerson.notesSummary;
+
   return {
     person: {
-      ...normalizePeopleRow(person),
-      raw: safeJsonParse(person.raw_json, {})
+      ...normalizedPerson,
+      notesSummary: normalizedNotesSummary,
+      raw: personRaw
     },
     serviceCards: serviceCards.map((row) => ({
       sourceRowId: row.sourceRowId,
@@ -1984,11 +1989,25 @@ function stripHtml(value) {
   if (!value) {
     return null;
   }
-  return String(value)
+
+  const normalizedText = String(value)
+    .replace(/\r\n?/g, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/<\/p\s*>/gi, '\n')
+    .replace(/<\/div\s*>/gi, '\n')
+    .replace(/<\/li\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '');
+
+  const lines = normalizedText
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return lines.join('\n\n');
 }
 
 function toNumber(value) {

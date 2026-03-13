@@ -24,6 +24,7 @@ const historyButtonEl = document.querySelector('[data-map-tool="history"]');
 const filterButtonEl = document.querySelector('[data-map-tool="filter"]');
 const colorsButtonEl = document.querySelector('[data-map-tool="colors"]');
 const listButtonEl = document.querySelector('[data-map-tool="list"]');
+const settingsButtonEl = document.querySelector('[data-map-tool="settings"]');
 const overviewViewEl = document.querySelector('[data-map-view="overview"]');
 const settingsViewEl = document.querySelector('[data-map-view="settings"]');
 const overviewAccessPathEl = document.querySelector('[data-map-overview-access-path]');
@@ -143,6 +144,7 @@ const MAP_DATE_FILTER_STORAGE_KEY = 'map:dateFilterState';
 const MAP_PERSON_SEARCH_QUERY_STORAGE_KEY = 'map:personSearchQuery';
 const MAP_TIME_COLOR_DATE_MATCH_MODE_STORAGE_KEY = 'map:timeColorDateMatchMode';
 const MAP_TIME_COLOR_RANGES_STORAGE_KEY = 'map:timeColorRanges';
+const MAP_TIME_COLOR_RANGES_RESET_MIGRATION_STORAGE_KEY = 'map:timeColorRangesResetMigration:2026-03-default-thresholds';
 const RAW_FIELDS_EXPANDED_STORAGE_KEY = 'person:rawFieldsExpanded';
 const LEGACY_MAP_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'map:rawFieldsExpanded';
 const LEGACY_PEOPLE_RAW_FIELDS_EXPANDED_STORAGE_KEY = 'people:rawFieldsExpanded';
@@ -506,6 +508,10 @@ filterButtonEl?.addEventListener('click', () => {
 
 colorsButtonEl?.addEventListener('click', () => {
   openInfoPanelMode('colors');
+});
+
+settingsButtonEl?.addEventListener('click', () => {
+  toggleSettingsPanel();
 });
 
 selectionExtraEl?.addEventListener('pointerdown', (event) => {
@@ -1709,7 +1715,7 @@ function normalizeDateInputValue(value) {
 
 function createDefaultMapTimeColorRanges() {
   return normalizeMapTimeColorRanges(
-    [0, 1, 2, 3, 4, 5].map((index) => buildDefaultMapTimeColorRange(index)),
+    [0, 1, 2, 3, 4].map((index) => buildDefaultMapTimeColorRange(index)),
     { allowEmpty: true }
   );
 }
@@ -1886,7 +1892,7 @@ function buildDefaultMapTimeColorRange(index = 0, options = {}) {
       mode: 'days',
       dateField: 'lastPaymentAt',
       daysFrom: '',
-      daysTo: '50',
+      daysTo: '100',
       dateFromMonthDraft: '',
       dateToMonthDraft: '',
       dateFrom: '',
@@ -1897,8 +1903,8 @@ function buildDefaultMapTimeColorRange(index = 0, options = {}) {
       color: '#e3b341',
       mode: 'days',
       dateField: 'lastPaymentAt',
-      daysFrom: '51',
-      daysTo: '100',
+      daysFrom: '100',
+      daysTo: '400',
       dateFromMonthDraft: '',
       dateToMonthDraft: '',
       dateFrom: '',
@@ -1909,8 +1915,8 @@ function buildDefaultMapTimeColorRange(index = 0, options = {}) {
       color: '#d65f4a',
       mode: 'days',
       dateField: 'lastPaymentAt',
-      daysFrom: '101',
-      daysTo: '299',
+      daysFrom: '401',
+      daysTo: '',
       dateFromMonthDraft: '',
       dateToMonthDraft: '',
       dateFrom: '',
@@ -3785,6 +3791,12 @@ function persistMapPersonSearchQuery() {
 
 function readStoredMapTimeColorRanges() {
   try {
+    if (shouldForceResetStoredMapTimeColorRanges()) {
+      const defaultRanges = createDefaultMapTimeColorRanges();
+      window.localStorage.setItem(MAP_TIME_COLOR_RANGES_STORAGE_KEY, JSON.stringify(defaultRanges));
+      return defaultRanges;
+    }
+
     const raw = window.localStorage.getItem(MAP_TIME_COLOR_RANGES_STORAGE_KEY);
     if (!raw) {
       return createDefaultMapTimeColorRanges();
@@ -3793,6 +3805,20 @@ function readStoredMapTimeColorRanges() {
     return normalizeMapTimeColorRanges(JSON.parse(raw), { allowEmpty: true });
   } catch (_error) {
     return createDefaultMapTimeColorRanges();
+  }
+}
+
+function shouldForceResetStoredMapTimeColorRanges() {
+  try {
+    const migrationApplied = window.localStorage.getItem(MAP_TIME_COLOR_RANGES_RESET_MIGRATION_STORAGE_KEY) === '1';
+    if (migrationApplied) {
+      return false;
+    }
+
+    window.localStorage.setItem(MAP_TIME_COLOR_RANGES_RESET_MIGRATION_STORAGE_KEY, '1');
+    return true;
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -4283,6 +4309,7 @@ function paintPersonSelectionState(person) {
   selectionCopyEl.textContent = '';
   selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
     { label: 'Ostatnia wizyta', value: formatDate(person.lastVisitAt) },
@@ -4315,6 +4342,7 @@ function paintPersonSelection(details) {
   selectionCopyEl.textContent = '';
   selectionCopyEl.hidden = true;
   selectionMetaEl.innerHTML = renderKeyValueList([
+    { label: 'ID', value: person.sourceRowId || person.id || 'Brak' },
     { label: 'Telefon', value: person.phone || 'Brak' },
     { label: 'E-mail', value: person.email || 'Brak' },
     { label: 'Adres', value: person.addressText || person.routeAddress || 'Brak' },
@@ -4389,7 +4417,7 @@ function paintPersonSelection(details) {
             ${areMapRawFieldsExpanded ? 'Ukryj' : 'Pokaż'}
           </button>
         </div>
-        <div class="kv-grid kv-grid-compact"${areMapRawFieldsExpanded ? '' : ' hidden'}>
+        <div class="kv-grid kv-grid-compact raw-fields-grid"${areMapRawFieldsExpanded ? '' : ' hidden'}>
           ${renderRecordFields(details.person.raw)}
         </div>
       </article>
@@ -4754,6 +4782,7 @@ function normalizeInfoPanelMode(value) {
 
 function syncInfoToolButtons() {
   const shouldHighlightInfoMode = !isSettingsOpen;
+  const isSettingsMode = isSettingsOpen;
   const isSelectionMode = shouldHighlightInfoMode && infoPanelMode === 'selection';
   const isSearchMode = shouldHighlightInfoMode && infoPanelMode === 'search';
   const isHistoryMode = shouldHighlightInfoMode && infoPanelMode === 'history';
@@ -4778,6 +4807,9 @@ function syncInfoToolButtons() {
 
   listButtonEl?.classList.toggle('is-active', isListMode);
   listButtonEl?.setAttribute('aria-pressed', String(isListMode));
+
+  settingsButtonEl?.classList.toggle('is-active', isSettingsMode);
+  settingsButtonEl?.setAttribute('aria-pressed', String(isSettingsMode));
 }
 
 function paintSelectionPanelState() {

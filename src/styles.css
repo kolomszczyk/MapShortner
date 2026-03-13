@@ -634,6 +634,10 @@ textarea {
   transform: none;
 }
 
+.map-tool-button-settings {
+  margin-top: auto;
+}
+
 .map-stats-grid {
   display: grid;
   gap: 12px;
@@ -2618,6 +2622,37 @@ body.map-page .service-map {
 
 .kv-grid-compact .kv-value {
   max-width: 58%;
+}
+
+.raw-fields-grid .kv-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: flex-start;
+}
+
+.raw-fields-grid .kv-label {
+  min-width: 0;
+}
+
+.raw-fields-grid .kv-value {
+  text-align: left;
+  max-width: none;
+  white-space: pre-wrap;
+}
+
+.raw-fields-grid .kv-row.kv-row-notes {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 8px;
+}
+
+.raw-fields-grid .kv-row.kv-row-notes .kv-notes-label {
+  color: var(--muted);
+}
+
+.raw-fields-grid .kv-row.kv-row-notes .kv-notes-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .note-form {

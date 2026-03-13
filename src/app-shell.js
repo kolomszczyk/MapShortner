@@ -384,7 +384,7 @@ export function formatNumber(value) {
 }
 
 export function escapeHtml(value) {
-  return String(value ?? '')
+  return normalizeNbspEntities(String(value ?? ''))
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -449,14 +449,33 @@ export function setButtonBusy(button, busy, busyLabel) {
 }
 
 export function renderKeyValueList(items) {
+  const normalizeClassName = (value) => String(value || '')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => /^[a-z0-9_-]+$/i.test(token));
+
   return items
     .map(
-      (item) => `
-        <div class="kv-row">
+      (item) => {
+        const rowClasses = ['kv-row', ...normalizeClassName(item.rowClassName)].join(' ');
+        const isNotesRow = rowClasses.includes('kv-row-notes');
+
+        if (isNotesRow) {
+          return `
+        <div class="${rowClasses}">
+          <div class="kv-notes-label">${escapeHtml(item.label)}</div>
+          <div class="kv-notes-text">${escapeHtml(item.value ?? 'Brak')}</div>
+        </div>
+      `;
+        }
+
+        return `
+        <div class="${rowClasses}">
           <span class="kv-label">${escapeHtml(item.label)}</span>
           <span class="kv-value">${escapeHtml(item.value ?? 'Brak')}</span>
         </div>
-      `
+      `;
+      }
     )
     .join('');
 }
@@ -504,7 +523,8 @@ export function renderRecordFields(record, options = {}) {
     .filter(([label, value]) => label && (includeEmpty || !isRecordValueEmpty(value)))
     .map(([label, value]) => ({
       label,
-      value: formatRecordValue(value, label)
+      value: formatRecordValue(value, label),
+      rowClassName: isNotesLabel(label) ? 'kv-row-notes' : ''
     }));
 
   return items.length > 0 ? renderKeyValueList(items) : '';
@@ -538,12 +558,21 @@ export function formatRecordValue(value, label = '') {
     return 'Brak';
   }
 
+  const shouldExpandNotesLineBreaks = isNotesLabel(label);
+
   if (looksLikeIsoDate(normalizedValue)) {
     return formatDate(normalizedValue);
   }
 
   if (looksLikeHtml(normalizedValue)) {
-    return stripHtml(normalizedValue) || 'Brak';
+    return stripHtml(normalizedValue, {
+      preserveLineBreaks: shouldExpandNotesLineBreaks,
+      doubleLineBreaks: shouldExpandNotesLineBreaks
+    }) || 'Brak';
+  }
+
+  if (shouldExpandNotesLineBreaks) {
+    return formatTextWithPreservedLineBreaks(normalizedValue, { doubleLineBreaks: true }) || 'Brak';
   }
 
   return normalizedValue.replace(/\s+/g, ' ');
@@ -589,6 +618,11 @@ function isMoneyLabel(label) {
   return normalizedLabel.includes('kwota') || normalizedLabel.includes('suma wplat');
 }
 
+function isNotesLabel(label) {
+  const normalizedLabel = normalizeRecordLabel(label);
+  return normalizedLabel.includes('uwag');
+}
+
 function looksLikeIsoDate(value) {
   return /^\d{4}-\d{2}-\d{2}(t|\s|$)/i.test(value);
 }
@@ -597,8 +631,35 @@ function looksLikeHtml(value) {
   return /<\/?[a-z][\s\S]*>/i.test(value);
 }
 
-function stripHtml(value) {
+function formatTextWithPreservedLineBreaks(value, options = {}) {
+  const doubleLineBreaks = options.doubleLineBreaks === true;
+  const separator = doubleLineBreaks ? '\n\n' : '\n';
+  const lines = normalizeNbspEntities(String(value || ''))
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean);
+
+  return lines.join(separator);
+}
+
+function stripHtml(value, options = {}) {
+  const preserveLineBreaks = options.preserveLineBreaks === true;
+  const doubleLineBreaks = options.doubleLineBreaks === true;
   const container = document.createElement('div');
-  container.innerHTML = value;
-  return (container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim();
+  container.innerHTML = String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6])\s*>/gi, '\n');
+
+  const textContent = container.textContent || container.innerText || '';
+  if (preserveLineBreaks) {
+    return formatTextWithPreservedLineBreaks(textContent, { doubleLineBreaks });
+  }
+
+  return textContent.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeNbspEntities(value) {
+  return String(value || '').replace(/&nbsp;|&#160;|&#xA0;/gi, '\u00A0');
 }

@@ -346,6 +346,7 @@ function renderPersonDetails(details) {
 
   detailTitleEl.textContent = details.person.fullName || 'Szczegoly osoby';
   detailMetaEl.innerHTML = renderKeyValueList([
+    { label: 'ID', value: details.person.sourceRowId || details.person.id || '-' },
     { label: 'Adres', value: details.person.routeAddress || details.person.addressText },
     { label: 'Telefon', value: details.person.phone },
     { label: 'E-mail', value: details.person.email },
