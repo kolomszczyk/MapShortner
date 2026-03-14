@@ -47,6 +47,10 @@ const selectionBookmarkIconEl = document.querySelector('[data-map-selection-book
 const openAccessBoxButtonEl = document.querySelector('[data-open-access-box]');
 const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
 
+if (settingsButtonEl) {
+  settingsButtonEl.hidden = !isDevMode;
+}
+
 const PERSON_LOCATION_MARKER_OPACITY = 0.5;
 const PERSON_LOCATION_HIGHLIGHT_MARKER_OPACITY = 1;
 const DEFAULT_PERSON_MARKER_STYLE = {
@@ -190,7 +194,7 @@ let visibleCustomMarkers = new Map();
 let knownPeopleBySourceRowId = new Map();
 let markerSyncGeneration = 0;
 let resizeTimer;
-let isSettingsOpen = restoredMapPanelState.activePanel === SETTINGS_PANEL_STORAGE_STATE;
+let isSettingsOpen = isDevMode && restoredMapPanelState.activePanel === SETTINGS_PANEL_STORAGE_STATE;
 let activeSelection = null;
 let selectionRequestToken = 0;
 let infoPanelMode = restoredMapPanelState.infoPanelMode;
@@ -1777,26 +1781,57 @@ function getAccessBridgeErrorMessage({ personName, code }) {
 }
 
 async function bootstrap() {
-  const [bootstrapData] = await Promise.all([
-    window.appApi.getBootstrap(),
+  const bootstrapDataPromise = window.appApi.getBootstrap();
+  const deferredInitPromise = Promise.allSettled([
     loadMapDateFilterOptions(),
     loadMapFilterOptions(),
     hydratePersonSelectionHistory()
   ]);
-  renderOverviewSummary(bootstrapData.summary);
-  syncTileLayerRevision(bootstrapData.summary?.offlineTiles?.packageState);
-  initDashboardPanel({
-    root: settingsViewEl,
-    bootstrapData,
-    onSummaryUpdated: renderOverviewSummary,
-    readyMessage: 'Panel dashboardu na mapie gotowy.'
-  });
+
+  await waitForFirstPaintOpportunity();
   buildMap();
   requestAnimationFrame(() => {
     loadPoints().catch((error) => {
       console.error('Map points load failed', error);
     });
   });
+
+  try {
+    const bootstrapData = await bootstrapDataPromise;
+    renderOverviewSummary(bootstrapData.summary);
+    syncTileLayerRevision(bootstrapData.summary?.offlineTiles?.packageState);
+    initDashboardPanel({
+      root: settingsViewEl,
+      bootstrapData,
+      onSummaryUpdated: renderOverviewSummary,
+      readyMessage: 'Panel dashboardu na mapie gotowy.'
+    });
+  } catch (error) {
+    console.error('Map bootstrap load failed', error);
+  }
+
+  void deferredInitPromise.then((results) => {
+    results.forEach((result, index) => {
+      if (result.status !== 'rejected') {
+        return;
+      }
+
+      const labels = ['dateFilterOptions', 'mapFilterOptions', 'selectionHistory'];
+      const taskLabel = labels[index] || `task-${index + 1}`;
+      console.error(`Deferred map init task failed (${taskLabel})`, result.reason);
+    });
+  });
+}
+
+function waitForAnimationFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function waitForFirstPaintOpportunity() {
+  await waitForAnimationFrame();
+  await waitForAnimationFrame();
 }
 
 function buildTileUrlTemplate(revision = activeTilePackageRevision) {
@@ -1816,6 +1851,11 @@ function syncTileLayerRevision(packageState = {}) {
 
 function toggleSettingsPanel(forceState = !isSettingsOpen, options = {}) {
   const nextState = Boolean(forceState);
+
+  if (!isDevMode && nextState) {
+    return false;
+  }
+
   if (isSettingsOpen === nextState) {
     return false;
   }
@@ -5658,12 +5698,12 @@ function paintEmptySelection() {
   isSelectionOverlapChooserActive = false;
   syncOverviewSpacing(false);
   overviewDefaultEls.forEach((element) => {
-    element.hidden = true;
+    element.hidden = false;
   });
-  selectionHeaderEl.hidden = true;
-  selectionTitleEl.textContent = '';
-  selectionCopyEl.textContent = '';
-  selectionCopyEl.hidden = true;
+  selectionHeaderEl.hidden = false;
+  selectionTitleEl.textContent = 'Mapa i filtry';
+  selectionCopyEl.textContent = 'Wybierz osobę na mapie lub użyj panelu po prawej, aby zawęzić widok.';
+  selectionCopyEl.hidden = false;
   selectionMetaEl.innerHTML = '';
   selectionMetaEl.hidden = true;
   selectionExtraEl.innerHTML = '';
