@@ -158,6 +158,25 @@ export function initDashboardPanel({
     });
   });
 
+  root.querySelectorAll('[data-updater-preview-splash]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!runtimeMeta.isDevMode) {
+        return;
+      }
+
+      const scenario = String(button.dataset.updaterPreviewSplash || 'full').trim() || 'full';
+
+      setButtonBusy(button, true, 'Podglad...');
+      try {
+        await window.appApi.previewUpdaterSplash({ scenario });
+      } catch (error) {
+        appendLog(`Nie udalo sie uruchomic podgladu malego okna aktualizacji: ${error.message}`);
+      } finally {
+        setButtonBusy(button, false);
+      }
+    });
+  });
+
   chooseFileBtn?.addEventListener('click', async () => {
     try {
       const result = await window.appApi.pickAccessFile();

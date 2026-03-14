@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aktualizacja aplikacji</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #ebefe6;
+        color: #1f2b1f;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
+      }
+
+      .card {
+        width: min(440px, calc(100vw - 32px));
+        background: #f7faf4;
+        border: 1px solid #d6e0d0;
+        border-radius: 16px;
+        padding: 22px;
+        box-shadow: 0 10px 24px rgba(31, 43, 31, 0.08);
+      }
+
+      .kicker {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #5a6a59;
+      }
+
+      h1 {
+        margin: 8px 0 6px;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      p {
+        margin: 0;
+      }
+
+      .status {
+        margin-top: 8px;
+        color: #2f3b2f;
+        min-height: 40px;
+      }
+
+      .progress-wrap {
+        margin-top: 18px;
+      }
+
+      .progress-track {
+        width: 100%;
+        height: 12px;
+        border-radius: 999px;
+        background: #d8e3d0;
+        overflow: hidden;
+      }
+
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #4a8c4c, #6ca95f);
+        transition: width 180ms linear;
+      }
+
+      .progress-bar.is-indeterminate {
+        animation: pulse 1s ease-in-out infinite alternate;
+      }
+
+      .meta {
+        margin-top: 8px;
+        font-size: 13px;
+        color: #40513f;
+      }
+
+      @keyframes pulse {
+        from {
+          opacity: 0.55;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" role="status" aria-live="polite">
+      <p class="kicker">Elrond</p>
+      <h1 data-updater-splash-phase>Sprawdzanie aktualizacji</h1>
+      <p class="status" data-updater-splash-status>Sprawdzanie aktualizacji...</p>
+      <section class="progress-wrap" data-updater-splash-progress-wrap>
+        <div class="progress-track">
+          <div class="progress-bar" data-updater-splash-progress-bar></div>
+        </div>
+        <p class="meta">Postęp: <strong data-updater-splash-progress-value>...</strong></p>
+      </section>
+    </main>
+    <script src="./updater-splash.js"></script>
+  </body>
+</html>

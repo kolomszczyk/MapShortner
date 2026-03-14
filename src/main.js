@@ -17,6 +17,7 @@ const { openPersonInRunningAccessBridge } = require('./main/accessbrigeladkfjlak
 const { exportTrasaArchive, importTrasaArchive } = require('./main/trasa-service');
 
 let mainWindow;
+let updaterWindow = null;
 let store;
 let autoUpdater = null;
 let exclusiveOperationQueue = Promise.resolve();
@@ -33,11 +34,17 @@ const MAP_SELECTION_HISTORY_LIMIT = 100;
 const OPERATION_LOG_HISTORY_SETTING_KEY = 'operationLogHistory';
 const OPERATION_LOG_HISTORY_LIMIT = 300;
 const OPERATION_LOG_HISTORY_PERSIST_DELAY_MS = 1200;
-const STARTUP_UPDATE_HIDE_DELAY_MS = 900;
-const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 2200;
+const STARTUP_UPDATE_HIDE_DELAY_MS = 120;
+const STARTUP_UPDATE_ERROR_HIDE_DELAY_MS = 180;
 const STARTUP_UPDATE_INSTALL_DELAY_MS = 1200;
 const STARTUP_UPDATE_MAX_BLOCK_MS = 12000;
+const UPDATER_WINDOW_BOUNDS = Object.freeze({
+  width: 520,
+  height: 340
+});
 const DEV_SIMULATED_UPDATE_VERSION = '0.5.99-test';
+const DEV_UPDATER_PREVIEW_FLAG = '--dev-updater-preview';
+const DEV_UPDATER_PREVIEW_SCENARIO_PREFIX = '--dev-updater-preview=';
 const DEFAULT_WINDOW_BOUNDS = Object.freeze({
   width: 1480,
   height: 980
@@ -86,7 +93,7 @@ let resolveStartupUpdateFlowPromise = null;
 let startupUpdateResolutionTimer = null;
 let startupUpdateInstallTimer = null;
 let startupUpdateBlockTimer = null;
-let startupUpdateInstallArmed = false;
+let devUpdaterPreviewInProgress = false;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -136,8 +143,15 @@ function sendToRenderer(channel, payload) {
   }
 }
 
+function sendToUpdaterWindow(channel, payload) {
+  if (updaterWindow && !updaterWindow.isDestroyed()) {
+    updaterWindow.webContents.send(channel, payload);
+  }
+}
+
 function sendUpdateStatus(message) {
   sendToRenderer('updater:status', message);
+  sendToUpdaterWindow('updater:status', message);
 }
 
 function buildOperationLogEntryId() {
@@ -265,6 +279,7 @@ function setUpdaterState(patch) {
     ...patch
   };
   sendToRenderer('updater:state', getUpdaterState());
+  sendToUpdaterWindow('updater:state', getUpdaterState());
 }
 
 function showUpdateAnnouncement() {
@@ -315,14 +330,14 @@ function clearStartupUpdateBlockTimer() {
   }
 }
 
-function resolveStartupUpdateFlow() {
+function resolveStartupUpdateFlow(result = { action: 'continue' }) {
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateBlockTimer();
   const resolve = resolveStartupUpdateFlowPromise;
   resolveStartupUpdateFlowPromise = null;
   startupUpdateFlowPromise = null;
   if (resolve) {
-    resolve();
+    resolve(result);
   }
 }
 
@@ -348,7 +363,6 @@ function releaseStartupUpdateBlock(message, patch = {}) {
     return false;
   }
 
-  startupUpdateInstallArmed = false;
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
@@ -365,7 +379,7 @@ function releaseStartupUpdateBlock(message, patch = {}) {
     source: 'startup',
     ...patch
   });
-  resolveStartupUpdateFlow();
+  resolveStartupUpdateFlow({ action: 'continue' });
 
   return true;
 }
@@ -390,10 +404,6 @@ function installDownloadedUpdate({ version = null, visible = false, source = cur
 
   startupUpdateInstallTimer = setTimeout(() => {
     startupUpdateInstallTimer = null;
-
-    if (source === 'startup' && !startupUpdateInstallArmed) {
-      return;
-    }
 
     sendUpdateStatus('Instalowanie aktualizacji i ponowne uruchamianie...');
     setUpdaterState({
@@ -582,7 +592,7 @@ function simulateUpdaterState(payload = {}) {
 
 async function runStartupUpdateFlow() {
   if (!autoUpdater) {
-    return;
+    return { action: 'continue', reason: 'updater-disabled' };
   }
 
   if (startupUpdateFlowPromise) {
@@ -593,14 +603,13 @@ async function runStartupUpdateFlow() {
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
 
-  startupUpdateInstallArmed = true;
   currentUpdateCheckSource = 'startup';
 
   setUpdaterState({
     phase: 'checking',
     message: 'Sprawdzanie aktualizacji...',
     visible: true,
-    canSkip: true,
+    canSkip: false,
     readyToInstall: false,
     progressPercent: null,
     version: null,
@@ -645,11 +654,7 @@ async function runStartupUpdateFlow() {
 }
 
 function skipStartupUpdateFlow() {
-  const message = updaterState.readyToInstall
-    ? 'Aktualizacja jest juz pobrana i zainstaluje sie po zamknieciu aplikacji.'
-    : 'Aktualizacja zostala pominieta na starcie. Pobieranie moze trwac dalej w tle.';
-
-  return releaseStartupUpdateBlock(message);
+  return false;
 }
 
 function enqueueExclusiveOperation(operation) {
@@ -1092,6 +1097,216 @@ function formatUpdaterError(err) {
   return `Blad aktualizacji: ${message}`;
 }
 
+function waitFor(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getDevUpdaterPreviewScenario() {
+  for (const arg of process.argv) {
+    if (arg === DEV_UPDATER_PREVIEW_FLAG) {
+      return 'full';
+    }
+
+    if (arg.startsWith(DEV_UPDATER_PREVIEW_SCENARIO_PREFIX)) {
+      const scenario = arg.slice(DEV_UPDATER_PREVIEW_SCENARIO_PREFIX.length).trim().toLowerCase();
+      if (scenario) {
+        return scenario;
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeDevUpdaterPreviewScenario(value) {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  if (!normalizedValue) {
+    return 'full';
+  }
+
+  if (normalizedValue === 'up-to-date' || normalizedValue === 'noupdate') {
+    return 'no-update';
+  }
+
+  if (normalizedValue === 'offline' || normalizedValue === 'error') {
+    return 'offline';
+  }
+
+  return normalizedValue;
+}
+
+async function runDevUpdaterPreviewFlow(inputScenario = null) {
+  const scenario = normalizeDevUpdaterPreviewScenario(inputScenario || getDevUpdaterPreviewScenario());
+  if (!isDevMode || !scenario) {
+    return false;
+  }
+
+  currentUpdateCheckSource = 'dev-preview';
+
+  setUpdaterState({
+    phase: 'checking',
+    message: 'DEV PREVIEW: sprawdzanie aktualizacji...',
+    visible: true,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: null,
+    version: null,
+    source: 'dev-preview',
+    announcementAvailable: false,
+    announcementVisible: false,
+    announcementVersion: null,
+    announcementTitle: null,
+    announcementMessage: null,
+    announcementHasSpecialMessage: false
+  });
+  await waitFor(900);
+
+  if (scenario === 'no-update') {
+    setUpdaterState({
+      phase: 'up-to-date',
+      message: 'DEV PREVIEW: brak nowych aktualizacji.',
+      visible: true,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: null,
+      version: null,
+      source: 'dev-preview'
+    });
+    await waitFor(650);
+    setUpdaterState({
+      phase: 'idle',
+      message: getDevModeUpdaterMessage(),
+      visible: false,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: null,
+      version: null,
+      source: 'dev'
+    });
+    return true;
+  }
+
+  if (scenario === 'offline') {
+    setUpdaterState({
+      phase: 'error',
+      message: 'DEV PREVIEW: brak internetu lub blad aktualizacji.',
+      visible: true,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: null,
+      version: null,
+      source: 'dev-preview'
+    });
+    await waitFor(700);
+    setUpdaterState({
+      phase: 'idle',
+      message: getDevModeUpdaterMessage(),
+      visible: false,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent: null,
+      version: null,
+      source: 'dev'
+    });
+    return true;
+  }
+
+  const previewVersion = '0.5.99-dev-preview';
+  setUpdaterState({
+    phase: 'downloading',
+    message: `DEV PREVIEW: pobieranie aktualizacji ${previewVersion}: 0.0%`,
+    visible: true,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: 0,
+    version: previewVersion,
+    source: 'dev-preview',
+    announcementAvailable: true,
+    announcementVisible: true,
+    announcementVersion: previewVersion,
+    announcementTitle: `Nowa wersja ${previewVersion}`,
+    announcementMessage: 'To jest podglad procesu aktualizacji uruchomiony flaga CLI.',
+    announcementHasSpecialMessage: true
+  });
+
+  const sampleProgress = [3.5, 14.2, 27.8, 45.1, 63.4, 79.9, 92.6, 100];
+  for (const progressPercent of sampleProgress) {
+    setUpdaterState({
+      phase: 'downloading',
+      message: `DEV PREVIEW: pobieranie aktualizacji ${previewVersion}: ${progressPercent.toFixed(1)}%`,
+      visible: true,
+      canSkip: false,
+      readyToInstall: false,
+      progressPercent,
+      version: previewVersion,
+      source: 'dev-preview'
+    });
+    await waitFor(260);
+  }
+
+  setUpdaterState({
+    phase: 'downloaded',
+    message: `DEV PREVIEW: aktualizacja ${previewVersion} pobrana.`,
+    visible: true,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: 100,
+    version: previewVersion,
+    source: 'dev-preview'
+  });
+  await waitFor(620);
+
+  setUpdaterState({
+    phase: 'installing',
+    message: 'DEV PREVIEW: instalowanie aktualizacji i restart aplikacji...',
+    visible: true,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: 100,
+    version: previewVersion,
+    source: 'dev-preview'
+  });
+  await waitFor(780);
+
+  setUpdaterState({
+    phase: 'idle',
+    message: getDevModeUpdaterMessage(),
+    visible: false,
+    canSkip: false,
+    readyToInstall: false,
+    progressPercent: null,
+    version: null,
+    source: 'dev',
+    announcementVisible: false
+  });
+
+  return true;
+}
+
+async function previewUpdaterSplashInDev(payload = {}) {
+  if (!isDevMode) {
+    throw new Error('Podglad malego okna aktualizacji jest dostepny tylko w trybie dev.');
+  }
+
+  if (devUpdaterPreviewInProgress) {
+    return false;
+  }
+
+  const scenario = normalizeDevUpdaterPreviewScenario(payload?.scenario || 'full');
+
+  devUpdaterPreviewInProgress = true;
+  try {
+    createUpdaterWindow();
+    await runDevUpdaterPreviewFlow(scenario);
+    closeUpdaterWindow();
+    return true;
+  } finally {
+    devUpdaterPreviewInProgress = false;
+  }
+}
+
 function createWindow() {
   let resolveReady;
   const readyPromise = new Promise((resolve) => {
@@ -1141,6 +1356,58 @@ function createWindow() {
   return readyPromise;
 }
 
+function createUpdaterWindow() {
+  if (updaterWindow && !updaterWindow.isDestroyed()) {
+    return updaterWindow;
+  }
+
+  updaterWindow = new BrowserWindow({
+    width: UPDATER_WINDOW_BOUNDS.width,
+    height: UPDATER_WINDOW_BOUNDS.height,
+    minWidth: UPDATER_WINDOW_BOUNDS.width,
+    minHeight: UPDATER_WINDOW_BOUNDS.height,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    autoHideMenuBar: true,
+    title: 'Aktualizacja aplikacji',
+    show: false,
+    backgroundColor: '#ebefe6',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'updater-splash-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  updaterWindow.removeMenu();
+  updaterWindow.loadFile(path.join(__dirname, 'updater-splash.html'));
+  updaterWindow.once('ready-to-show', () => {
+    if (updaterWindow && !updaterWindow.isDestroyed()) {
+      updaterWindow.show();
+      updaterWindow.focus();
+      updaterWindow.webContents.send('updater:state', getUpdaterState());
+      if (updaterState?.message) {
+        updaterWindow.webContents.send('updater:status', updaterState.message);
+      }
+    }
+  });
+  updaterWindow.on('closed', () => {
+    updaterWindow = null;
+  });
+
+  return updaterWindow;
+}
+
+function closeUpdaterWindow() {
+  if (updaterWindow && !updaterWindow.isDestroyed()) {
+    updaterWindow.close();
+  }
+  updaterWindow = null;
+}
+
 function configureAutoUpdater() {
   ({ autoUpdater } = require('electron-updater'));
   log.transports.file.level = 'info';
@@ -1155,7 +1422,7 @@ function configureAutoUpdater() {
       phase: 'checking',
       message: 'Sprawdzanie aktualizacji...',
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: false,
       readyToInstall: false,
       progressPercent: null,
       source: currentUpdateCheckSource
@@ -1163,13 +1430,12 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
-    const startupFlowActive = currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise);
     const announcement = getReleaseAnnouncement(info);
     sendUpdateStatus(`Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`);
     setUpdaterState({
       phase: 'downloading',
       message: `Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`,
-      visible: false,
+      visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
       canSkip: false,
       readyToInstall: false,
       progressPercent: 0,
@@ -1182,10 +1448,6 @@ function configureAutoUpdater() {
       announcementMessage: announcement.message,
       announcementHasSpecialMessage: announcement.hasSpecialMessage
     });
-
-    if (startupFlowActive) {
-      resolveStartupUpdateFlow();
-    }
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -1215,7 +1477,7 @@ function configureAutoUpdater() {
       phase: 'error',
       message,
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: false,
       progressPercent: null,
       source: currentUpdateCheckSource
     });
@@ -1234,7 +1496,7 @@ function configureAutoUpdater() {
       phase: 'downloading',
       message: `Pobieranie aktualizacji: ${percent}%`,
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
+      canSkip: false,
       readyToInstall: false,
       progressPercent: Number(percent),
       source: currentUpdateCheckSource
@@ -1462,6 +1724,17 @@ async function runFirstLaunchSetup() {
 
 if (hasSingleInstanceLock) {
   app.on('second-instance', () => {
+    if (updaterWindow && !updaterWindow.isDestroyed()) {
+      if (updaterWindow.isMinimized()) {
+        updaterWindow.restore();
+      }
+      if (!updaterWindow.isVisible()) {
+        updaterWindow.show();
+      }
+      updaterWindow.focus();
+      return;
+    }
+
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) {
         mainWindow.restore();
@@ -1490,17 +1763,23 @@ if (hasSingleInstanceLock) {
       sendOperationStatus
     });
     await mapTileService.registerProtocol();
-    const windowReady = createWindow();
+    const devUpdaterPreviewScenario = getDevUpdaterPreviewScenario();
+
     if (!isDevMode) {
       configureAutoUpdater();
+      createUpdaterWindow();
+      await runStartupUpdateFlow();
+      closeUpdaterWindow();
+    } else if (devUpdaterPreviewScenario) {
+      createUpdaterWindow();
+      await runDevUpdaterPreviewFlow();
+      closeUpdaterWindow();
     }
+
+    const windowReady = createWindow();
     await windowReady;
 
     startDevReloadWatcher();
-
-    if (!isDevMode) {
-      await runStartupUpdateFlow();
-    }
 
     try {
       await runFirstLaunchSetup();
@@ -1546,6 +1825,7 @@ app.on('before-quit', () => {
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
+  closeUpdaterWindow();
   if (persistWindowStateTimer) {
     clearTimeout(persistWindowStateTimer);
     persistWindowStateTimer = null;
@@ -1592,6 +1872,7 @@ ipcMain.handle('updater:checkNow', async () => {
 });
 
 ipcMain.handle('updater:simulate', async (_event, payload = {}) => simulateUpdaterState(payload));
+ipcMain.handle('updater:previewSplash', async (_event, payload = {}) => previewUpdaterSplashInDev(payload));
 
 ipcMain.handle('updater:installNow', () => {
   if (!autoUpdater) {
@@ -1613,10 +1894,10 @@ ipcMain.handle('updater:installNow', () => {
 });
 
 ipcMain.handle('updater:skipStartup', async () => {
-  const result = skipStartupUpdateFlow();
-  setUpdaterState({ visible: false, canSkip: false });
-  return result;
+  return skipStartupUpdateFlow();
 });
+
+ipcMain.handle('updaterSplash:getState', async () => getUpdaterState());
 
 ipcMain.handle('settings:saveGoogleMapsApiKey', async (_event, apiKey) => {
   store.setSetting('googleMapsApiKey', apiKey ? String(apiKey).trim() : '');

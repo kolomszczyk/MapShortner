@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('appApi', {
   showUpdateAnnouncement: () => ipcRenderer.invoke('updater:showAnnouncement'),
   hideUpdateAnnouncement: () => ipcRenderer.invoke('updater:hideAnnouncement'),
   checkNow: () => ipcRenderer.invoke('updater:checkNow'),
+  previewUpdaterSplash: (payload) => ipcRenderer.invoke('updater:previewSplash', payload),
   simulateUpdater: (payload) => ipcRenderer.invoke('updater:simulate', payload),
   installNow: () => ipcRenderer.invoke('updater:installNow'),
   skipStartupUpdate: () => ipcRenderer.invoke('updater:skipStartup'),

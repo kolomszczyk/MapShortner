@@ -30,6 +30,29 @@ W trybie dev:
 - zmiany w `src/main.js`, `src/preload.js` i plikach z `src/main/` restartują aplikację automatycznie
 - auto-update jest wyłączony, żeby nie mieszał w lokalnym developmentcie
 
+### 2b) Podglad okna aktualizacji w dev (flaga CLI)
+
+Jesli chcesz podejrzec nowy maly ekran aktualizacji na starcie (bez prawdziwego pobierania release), uzyj flagi:
+
+```bash
+npm run dev -- --dev-updater-preview
+```
+
+Dostepne scenariusze:
+
+```bash
+npm run dev -- --dev-updater-preview=full
+npm run dev -- --dev-updater-preview=no-update
+npm run dev -- --dev-updater-preview=offline
+```
+
+Uwagi:
+- Flaga dziala tylko w trybie dev (`npm run dev`).
+- `full` pokazuje sprawdzanie + pobieranie z procentami + instalowanie (symulacja).
+- `no-update` symuluje brak nowej wersji.
+- `offline` symuluje brak internetu / blad aktualizacji.
+- W tym trybie aplikacja nie pobiera realnej aktualizacji i nie robi restartu systemowego.
+
 ## 3) Publikacja pierwszego release (ręcznie)
 
 Pierwszy release możesz zrobić lokalnie:

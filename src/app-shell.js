@@ -97,7 +97,6 @@ export function initShell(pageId) {
     if (updaterStatusEl && state?.message) {
       updaterStatusEl.textContent = state.message;
     }
-    syncStartupUpdateOverlay(state);
     syncUpdateAnnouncementOverlay(state);
   });
 
@@ -107,7 +106,6 @@ export function initShell(pageId) {
       if (updaterStatusEl && state?.message) {
         updaterStatusEl.textContent = state.message;
       }
-      syncStartupUpdateOverlay(state);
       syncUpdateAnnouncementOverlay(state);
     })
     .catch(() => {});
