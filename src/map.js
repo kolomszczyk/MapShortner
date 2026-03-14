@@ -19,6 +19,7 @@ const mapBoardEl = document.querySelector('.map-board');
 const mapContentGroupEl = document.querySelector('.map-content-group');
 const mapInfoPanelEl = document.querySelector('.map-info-panel');
 const mapDevHudEl = document.querySelector('[data-map-dev-hud]');
+const mapLoadingIndicatorEl = document.querySelector('[data-map-loading-indicator]');
 const selectionButtonEl = document.querySelector('[data-map-tool="selection"]');
 const searchButtonEl = document.querySelector('[data-map-tool="search"]');
 const historyButtonEl = document.querySelector('[data-map-tool="history"]');
@@ -119,6 +120,7 @@ const MAP_PERSON_LIST_SCROLL_THRESHOLD_PX = 120;
 const MAP_PERSON_LIST_ROW_GAP_PX = 10;
 const MAP_PERSON_LIST_ESTIMATED_ROW_HEIGHT_PX = 108;
 const MAP_DATE_FILTER_BATCH_SIZE = 50;
+const MAP_DATE_FILTER_APPLY_DEBOUNCE_MS = 180;
 const MAP_DATE_FILTER_SCROLL_THRESHOLD_PX = 120;
 const MAP_DATE_FILTER_ROW_GAP_PX = 10;
 const MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX = 96;
@@ -207,10 +209,16 @@ let mapDateFilter = mapDateFilterHasInvalidRange
   ? normalizeMapDateFilter({})
   : normalizeMapDateFilter(restoredMapDateFilterState);
 let mapDateFilterOptions = [];
+let mapFilterOptions = {
+  pumpTypes: [],
+  visitTypes: [],
+  regions: []
+};
 let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, mapDateFilter);
 let mapTimeColorRanges = restoredMapTimeColorRanges;
 let mapTimeColorDateMatchMode = restoredMapTimeColorDateMatchMode;
 let mapDateFilterApplyTimer = null;
+let mapDateFilterApplyRequestToken = 0;
 let mapPointsRequestToken = 0;
 let isMapPointsLoading = false;
 let personSearchTimer = null;
@@ -758,12 +766,22 @@ function handleSelectionPanelClick(event) {
     return;
   }
 
+  const resetFilterFieldButton = event.target.closest('[data-map-date-filter-reset-field]');
+  if (resetFilterFieldButton && infoPanelMode === 'filter') {
+    const fieldName = String(resetFilterFieldButton.getAttribute('data-map-date-filter-reset-field') || '').trim();
+    mapDateFilterDraft = resetMapDateFilterDraftField(mapDateFilterDraft, fieldName);
+    mapDateFilterHasInvalidRange = false;
+    persistMapDateFilterState();
+    scheduleMapDateFilterApply({ immediate: true });
+    return;
+  }
+
   const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
   if (resetFilterButton && infoPanelMode === 'filter') {
     mapDateFilterDraft = buildDefaultMapDateFilterDraft();
     mapDateFilterHasInvalidRange = false;
     persistMapDateFilterState();
-    void applyMapDateFilter(buildDefaultMapDateFilterDraft());
+    scheduleMapDateFilterApply({ immediate: true });
     return;
   }
 
@@ -1359,7 +1377,10 @@ selectionExtraEl?.addEventListener('change', (event) => {
     fromMonth: formData.get('fromMonth'),
     fromYear: formData.get('fromYear'),
     toMonth: formData.get('toMonth'),
-    toYear: formData.get('toYear')
+    toYear: formData.get('toYear'),
+    pumpType: formData.get('pumpType'),
+    visitType: formData.get('visitType'),
+    region: formData.get('region')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
   persistMapDateFilterState();
@@ -1537,13 +1558,14 @@ selectionExtraEl?.addEventListener('submit', (event) => {
     fromMonth: formData.get('fromMonth'),
     fromYear: formData.get('fromYear'),
     toMonth: formData.get('toMonth'),
-    toYear: formData.get('toYear')
+    toYear: formData.get('toYear'),
+    pumpType: formData.get('pumpType'),
+    visitType: formData.get('visitType'),
+    region: formData.get('region')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
   persistMapDateFilterState();
-  void applyMapDateFilter({
-    ...mapDateFilterDraft
-  });
+  scheduleMapDateFilterApply({ immediate: true });
 });
 
 selectionExtraEl?.addEventListener('mouseover', (event) => {
@@ -1628,6 +1650,7 @@ window.appApi.onOperationStatus(async (payload) => {
   ) {
     if (payload.type === 'import' || payload.type === 'trasa-import') {
       await loadMapDateFilterOptions();
+      await loadMapFilterOptions();
     }
     await loadPoints();
   }
@@ -1645,6 +1668,7 @@ async function bootstrap() {
   const [bootstrapData] = await Promise.all([
     window.appApi.getBootstrap(),
     loadMapDateFilterOptions(),
+    loadMapFilterOptions(),
     hydratePersonSelectionHistory()
   ]);
   renderOverviewSummary(bootstrapData.summary);
@@ -1899,8 +1923,11 @@ async function loadPoints(options = {}) {
 
   const requestToken = ++mapPointsRequestToken;
   const triggeredBySearchQuery = options.reason === 'person-search';
+  const triggeredByMapFilter = options.reason === 'map-filter';
+  const autoFitToPeople = options.autoFitToPeople === true;
   const shouldRefreshSearchResults = options.refreshSearchResults !== false;
   isMapPointsLoading = true;
+  syncMapLoadingIndicator();
   if (infoPanelMode === 'filter') {
     paintFilterPanel();
   }
@@ -1914,6 +1941,7 @@ async function loadPoints(options = {}) {
   } catch (error) {
     if (requestToken === mapPointsRequestToken) {
       isMapPointsLoading = false;
+      syncMapLoadingIndicator();
       if (infoPanelMode === 'filter') {
         paintFilterPanel();
       }
@@ -1926,7 +1954,8 @@ async function loadPoints(options = {}) {
   }
 
   isMapPointsLoading = false;
-  const shouldAutoSelectPerson = infoPanelMode !== 'filter' && !triggeredBySearchQuery;
+  syncMapLoadingIndicator();
+  const shouldAutoSelectPerson = infoPanelMode !== 'filter' && !triggeredBySearchQuery && !triggeredByMapFilter;
 
   allPeople = payload.people || [];
   allCustomPoints = payload.customPoints || [];
@@ -1944,7 +1973,7 @@ async function loadPoints(options = {}) {
     ? allPeople.find((person) => person.sourceRowId === activeSelectedPersonSourceRowId) || null
     : null;
   const nextPerson = shouldAutoSelectPerson
-    ? hasActiveMapDateFilter() || hasActiveMapPersonSearchFilter()
+    ? hasActiveMapDateFilter() || hasActiveMapAttributeFilters() || hasActiveMapPersonSearchFilter()
       ? resolveVisiblePersonSelection(allPeople)
       : resolveCurrentPersonSelection(allPeople)
     : preservedSearchSelection;
@@ -1999,13 +2028,30 @@ async function loadPoints(options = {}) {
   shouldRestoreMapViewportOnNextLoad = false;
   syncSupplementalPeopleMarkers();
   scheduleVisibleMarkerSync(0);
+
+  if (autoFitToPeople) {
+    fitMapViewportToPeople(allPeople);
+  }
+}
+
+function syncMapLoadingIndicator() {
+  if (!mapLoadingIndicatorEl) {
+    return;
+  }
+
+  mapLoadingIndicatorEl.hidden = !isMapPointsLoading;
 }
 
 function buildMapPointsRequest() {
   const payload = {
-    query: getActiveMapPersonSearchQuery(),
     includeUnresolved: false
   };
+
+  if (hasActiveMapAttributeFilters()) {
+    payload.pumpType = mapDateFilter.pumpType || undefined;
+    payload.visitType = mapDateFilter.visitType || undefined;
+    payload.region = mapDateFilter.region || undefined;
+  }
 
   if (!hasActiveMapDateFilter()) {
     return payload;
@@ -2019,22 +2065,37 @@ function buildMapPointsRequest() {
   };
 }
 
-function scheduleMapDateFilterApply() {
+function scheduleMapDateFilterApply(options = {}) {
+  const immediate = options.immediate === true;
+
   if (mapDateFilterApplyTimer) {
     window.clearTimeout(mapDateFilterApplyTimer);
     mapDateFilterApplyTimer = null;
   }
 
+  const requestToken = ++mapDateFilterApplyRequestToken;
+  const delay = immediate ? 0 : MAP_DATE_FILTER_APPLY_DEBOUNCE_MS;
+
   mapDateFilterApplyTimer = window.setTimeout(() => {
     mapDateFilterApplyTimer = null;
+    if (requestToken !== mapDateFilterApplyRequestToken) {
+      return;
+    }
+
     void applyMapDateFilter({
       ...mapDateFilterDraft
+    }, {
+      requestToken
     });
-  }, 0);
+  }, delay);
 }
 
 function hasActiveMapDateFilter() {
   return Boolean(mapDateFilter.dateFrom || mapDateFilter.dateTo);
+}
+
+function hasActiveMapAttributeFilters() {
+  return Boolean(mapDateFilter.pumpType || mapDateFilter.visitType || mapDateFilter.region);
 }
 
 function getActiveMapPersonSearchQuery() {
@@ -2054,10 +2115,18 @@ function hasMapDateFilterDraftChanges(input = mapDateFilterDraft) {
     || draft.fromYear !== defaultDraft.fromYear
     || draft.toMonth !== defaultDraft.toMonth
     || draft.toYear !== defaultDraft.toYear
+    || draft.pumpType !== defaultDraft.pumpType
+    || draft.visitType !== defaultDraft.visitType
+    || draft.region !== defaultDraft.region
   );
 }
 
-async function applyMapDateFilter(nextFilter) {
+async function applyMapDateFilter(nextFilter, options = {}) {
+  const requestToken = Number(options.requestToken || 0);
+  if (requestToken && requestToken !== mapDateFilterApplyRequestToken) {
+    return;
+  }
+
   const normalizedFilter = normalizeMapDateFilter(nextFilter);
   mapDateFilterDraft = resolveMapDateFilterDraft(nextFilter, normalizedFilter);
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
@@ -2071,7 +2140,11 @@ async function applyMapDateFilter(nextFilter) {
   }
 
   const didChange =
-    normalizedFilter.dateFrom !== mapDateFilter.dateFrom || normalizedFilter.dateTo !== mapDateFilter.dateTo;
+    normalizedFilter.dateFrom !== mapDateFilter.dateFrom
+    || normalizedFilter.dateTo !== mapDateFilter.dateTo
+    || normalizedFilter.pumpType !== mapDateFilter.pumpType
+    || normalizedFilter.visitType !== mapDateFilter.visitType
+    || normalizedFilter.region !== mapDateFilter.region;
 
   mapDateFilter = normalizedFilter;
   syncInfoToolButtons();
@@ -2083,12 +2156,43 @@ async function applyMapDateFilter(nextFilter) {
     return;
   }
 
-  void loadPoints();
+  await loadPoints({
+    reason: 'map-filter',
+    autoFitToPeople: false
+  });
+}
+
+function fitMapViewportToPeople(people = []) {
+  if (!mapInstance || !Array.isArray(people)) {
+    return;
+  }
+
+  const points = people.filter((person) => Number.isFinite(person?.lat) && Number.isFinite(person?.lng));
+  if (points.length === 0) {
+    return;
+  }
+
+  if (points.length === 1) {
+    const singlePoint = points[0];
+    mapInstance.setView([singlePoint.lat, singlePoint.lng], Math.max(12, mapInstance.getZoom()), {
+      animate: true
+    });
+    return;
+  }
+
+  const bounds = L.latLngBounds(points.map((person) => [person.lat, person.lng]));
+  mapInstance.fitBounds(bounds, {
+    padding: [32, 32],
+    maxZoom: 13
+  });
 }
 
 function normalizeMapDateFilter(input = {}) {
   let dateFrom = '';
   let dateTo = '';
+  const pumpType = normalizeMapFilterOptionInputValue(input?.pumpType);
+  const visitType = normalizeMapFilterOptionInputValue(input?.visitType);
+  const region = normalizeMapFilterOptionInputValue(input?.region);
   const normalizedFromMonth = normalizeMonthNumberInputValue(input?.fromMonth);
   const normalizedFromYear = normalizeYearInputValue(input?.fromYear);
   const normalizedToMonth = normalizeMonthNumberInputValue(input?.toMonth);
@@ -2114,8 +2218,15 @@ function normalizeMapDateFilter(input = {}) {
 
   return {
     dateFrom,
-    dateTo
+    dateTo,
+    pumpType,
+    visitType,
+    region
   };
+}
+
+function normalizeMapFilterOptionInputValue(value) {
+  return String(value || '').trim();
 }
 
 function normalizeDateInputValue(value) {
@@ -3066,7 +3177,10 @@ function normalizeMapDateFilterDraft(input = {}) {
     fromMonth: normalizeMonthNumberInputValue(input?.fromMonth),
     fromYear: normalizeYearInputValue(input?.fromYear),
     toMonth: normalizeMonthNumberInputValue(input?.toMonth),
-    toYear: normalizeYearInputValue(input?.toYear)
+    toYear: normalizeYearInputValue(input?.toYear),
+    pumpType: normalizeMapFilterOptionInputValue(input?.pumpType),
+    visitType: normalizeMapFilterOptionInputValue(input?.visitType),
+    region: normalizeMapFilterOptionInputValue(input?.region)
   };
 }
 
@@ -3166,10 +3280,21 @@ function buildMapDateFilterDraft(filter = {}) {
     fromMonth: extractMonthNumberValue(filter.dateFrom),
     fromYear: extractYearValue(filter.dateFrom),
     toMonth: extractMonthNumberValue(filter.dateTo),
-    toYear: extractYearValue(filter.dateTo)
+    toYear: extractYearValue(filter.dateTo),
+    pumpType: normalizeMapFilterOptionInputValue(filter.pumpType),
+    visitType: normalizeMapFilterOptionInputValue(filter.visitType),
+    region: normalizeMapFilterOptionInputValue(filter.region)
   };
 
-  if (draft.fromMonth || draft.fromYear || draft.toMonth || draft.toYear) {
+  if (
+    draft.fromMonth
+    || draft.fromYear
+    || draft.toMonth
+    || draft.toYear
+    || draft.pumpType
+    || draft.visitType
+    || draft.region
+  ) {
     return draft;
   }
 
@@ -3177,18 +3302,74 @@ function buildMapDateFilterDraft(filter = {}) {
 }
 
 function buildDefaultMapDateFilterDraft() {
-  const defaultStartYear = String(new Date().getFullYear() - 10);
+  const defaultFromYear = String(new Date().getFullYear() - 10);
+
   return {
     fromMonth: '',
-    fromYear: defaultStartYear,
+    fromYear: defaultFromYear,
     toMonth: '',
-    toYear: ''
+    toYear: '',
+    pumpType: '',
+    visitType: '',
+    region: ''
   };
+}
+
+function resetMapDateFilterDraftField(currentDraft = mapDateFilterDraft, fieldName = '') {
+  const draft = normalizeMapDateFilterDraft(currentDraft);
+  const defaults = buildDefaultMapDateFilterDraft();
+
+  if (fieldName === 'newestDate') {
+    return {
+      ...draft,
+      toMonth: '',
+      toYear: ''
+    };
+  }
+
+  if (fieldName === 'oldestDate') {
+    return {
+      ...draft,
+      fromMonth: defaults.fromMonth,
+      fromYear: defaults.fromYear
+    };
+  }
+
+  if (fieldName === 'pumpType') {
+    return {
+      ...draft,
+      pumpType: ''
+    };
+  }
+
+  if (fieldName === 'visitType') {
+    return {
+      ...draft,
+      visitType: ''
+    };
+  }
+
+  if (fieldName === 'region') {
+    return {
+      ...draft,
+      region: ''
+    };
+  }
+
+  return draft;
 }
 
 function resolveMapDateFilterDraft(nextFilter = {}, normalizedFilter = mapDateFilter) {
   const nextDraft = normalizeMapDateFilterDraft(nextFilter);
-  if (nextDraft.fromMonth || nextDraft.fromYear || nextDraft.toMonth || nextDraft.toYear) {
+  if (
+    nextDraft.fromMonth
+    || nextDraft.fromYear
+    || nextDraft.toMonth
+    || nextDraft.toYear
+    || nextDraft.pumpType
+    || nextDraft.visitType
+    || nextDraft.region
+  ) {
     return nextDraft;
   }
 
@@ -3234,6 +3415,26 @@ function buildYearOptionsMarkup(selectedValue) {
   return options.join('');
 }
 
+function buildMapFilterSelectOptionsMarkup(values, selectedValue, placeholder) {
+  const normalizedSelectedValue = String(selectedValue || '').trim();
+  const options = [
+    `<option value="">${escapeHtml(placeholder || 'Wszystkie')}</option>`
+  ];
+
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+      return;
+    }
+
+    options.push(
+      `<option value="${escapeHtml(normalizedValue)}"${normalizedValue === normalizedSelectedValue ? ' selected' : ''}>${escapeHtml(normalizedValue)}</option>`
+    );
+  });
+
+  return options.join('');
+}
+
 function getMapDateFilterYears() {
   const years = new Set(
     mapDateFilterOptions
@@ -3258,6 +3459,25 @@ async function loadMapDateFilterOptions() {
 
   if (infoPanelMode === 'colors') {
     paintTimeColorPanel();
+  }
+}
+
+async function loadMapFilterOptions() {
+  const options = await window.appApi.getMapFilterOptions();
+  const toNormalizedList = (values) => Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  )).sort((left, right) => left.localeCompare(right, 'pl'));
+
+  mapFilterOptions = {
+    pumpTypes: toNormalizedList(options?.pumpTypes),
+    visitTypes: toNormalizedList(options?.visitTypes),
+    regions: toNormalizedList(options?.regions)
+  };
+
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
   }
 }
 
@@ -4256,7 +4476,15 @@ function readStoredMapDateFilterState() {
 
     const parsed = JSON.parse(raw);
     const normalized = normalizeMapDateFilterDraft(parsed);
-    return normalized.fromMonth || normalized.fromYear || normalized.toMonth || normalized.toYear
+    return (
+      normalized.fromMonth
+      || normalized.fromYear
+      || normalized.toMonth
+      || normalized.toYear
+      || normalized.pumpType
+      || normalized.visitType
+      || normalized.region
+    )
       ? normalized
       : buildDefaultMapDateFilterDraft();
   } catch (_error) {
@@ -6090,7 +6318,7 @@ function paintListPanel() {
   selectionMetaEl.innerHTML = `
     <div class="list-panel-summary">
       <strong class="filter-panel-count list-panel-count">${escapeHtml(listCountLabel)}</strong>
-      <p class="copy list-panel-copy">Lista pokazuje osoby widoczne po aktualnych regułach wyszukiwania i filtra dat.</p>
+      <p class="copy list-panel-copy">Lista pokazuje osoby po zastosowanych filtrach i frazie wyszukiwania.</p>
     </div>
   `;
   selectionMetaEl.hidden = false;
@@ -6154,6 +6382,24 @@ function renderListAppliedRulesMarkup() {
     );
   }
 
+  if (mapDateFilter.pumpType) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Rodzaj pompy: ${escapeHtml(mapDateFilter.pumpType)}</span>`
+    );
+  }
+
+  if (mapDateFilter.visitType) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Typ wizyty: ${escapeHtml(mapDateFilter.visitType)}</span>`
+    );
+  }
+
+  if (mapDateFilter.region) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Województwo: ${escapeHtml(mapDateFilter.region)}</span>`
+    );
+  }
+
   if (ruleBadges.length === 0) {
     return '';
   }
@@ -6210,10 +6456,12 @@ function renderPersonListRows(people, currentSelectedPersonId = null) {
 
 function syncPersonListStateFromVisiblePeople(options = {}) {
   const preserveRenderedCount = options.preserveRenderedCount !== false;
-  const nextRenderedCount = allPeople.length === 0
+  const listSource = getListVisiblePeople();
+  const total = listSource.length;
+  const nextRenderedCount = total === 0
     ? 0
     : Math.min(
-        allPeople.length,
+        total,
         Math.max(
           preserveRenderedCount ? Number(personListState.renderedCount || 0) : 0,
           MAP_PERSON_LIST_BATCH_SIZE
@@ -6221,13 +6469,59 @@ function syncPersonListStateFromVisiblePeople(options = {}) {
       );
 
   personListState = {
-    results: allPeople.slice(0, nextRenderedCount),
-    total: allPeople.length,
+    results: listSource.slice(0, nextRenderedCount),
+    total,
     isLoading: false,
     hasLoaded: true,
-    hasMore: nextRenderedCount < allPeople.length,
+    hasMore: nextRenderedCount < total,
     renderedCount: nextRenderedCount
   };
+}
+
+function getListVisiblePeople() {
+  const normalizedQuery = normalizeMapListSearchText(getActiveMapPersonSearchQuery());
+  if (!normalizedQuery) {
+    return allPeople;
+  }
+
+  return allPeople.filter((person) => doesPersonMatchListQuery(person, normalizedQuery));
+}
+
+function doesPersonMatchListQuery(person, normalizedQuery) {
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  const searchText = [
+    person?.sourceRowId,
+    person?.fullName,
+    person?.companyName,
+    person?.city,
+    person?.addressText,
+    person?.routeAddress,
+    person?.phone,
+    person?.email,
+    person?.lastVisitAt,
+    person?.lastPaymentAt,
+    person?.plannedVisitAt,
+    person?.deviceVendor,
+    person?.deviceModel,
+    person?.notesSummary
+  ]
+    .filter((value) => value != null && value !== '')
+    .map((value) => normalizeMapListSearchText(value))
+    .join(' ');
+
+  return searchText.includes(normalizedQuery);
+}
+
+function normalizeMapListSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function getBookmarkedVisiblePeople() {
@@ -8294,6 +8588,19 @@ function paintFilterPanel() {
   const isToMonthActive = hasMonthOptions && Boolean(toYear);
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
   const hasDraftChanges = hasMapDateFilterDraftChanges();
+  const defaultDraft = buildDefaultMapDateFilterDraft();
+  const currentPumpType = mapDateFilterDraft.pumpType;
+  const currentVisitType = mapDateFilterDraft.visitType;
+  const currentRegion = mapDateFilterDraft.region;
+  const canResetNewestDate = Boolean(toYear || toMonth);
+  const canResetOldestDate = Boolean(fromMonth || fromYear !== defaultDraft.fromYear);
+  const canResetPumpType = Boolean(currentPumpType);
+  const canResetVisitType = Boolean(currentVisitType);
+  const canResetRegion = Boolean(currentRegion);
+
+  mapDateFilterRenderedCount = allPeople.length > 0
+    ? Math.min(allPeople.length, Math.max(mapDateFilterRenderedCount, MAP_DATE_FILTER_BATCH_SIZE))
+    : 0;
 
   selectionHeaderEl.hidden = false;
   selectionTitleEl.textContent = 'Filtr';
@@ -8312,6 +8619,9 @@ function paintFilterPanel() {
     </div>
   `;
   selectionMetaEl.hidden = false;
+
+  const filterResultsMarkup = renderMapDateFilterResults();
+
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
       <span class="eyebrow filter-panel-subtitle">Sortuj po dacie</span>
@@ -8330,6 +8640,14 @@ function paintFilterPanel() {
               </select>
             </div>
           </div>
+          <button
+            type="button"
+            class="button-muted filter-panel-section-reset"
+            data-map-date-filter-reset-field="newestDate"
+            ${canResetNewestDate ? '' : 'disabled'}
+          >
+            Resetuj
+          </button>
         </div>
         <div class="field filter-date-box">
           <span>Najstarsza data</span>
@@ -8348,23 +8666,72 @@ function paintFilterPanel() {
           <button
             type="button"
             class="button-muted filter-panel-section-reset"
-            data-map-date-filter-reset
-            ${hasDraftChanges ? '' : 'disabled'}
+            data-map-date-filter-reset-field="oldestDate"
+            ${canResetOldestDate ? '' : 'disabled'}
           >
             Resetuj
           </button>
         </div>
       </div>
+
+      <div class="map-filter-divider" aria-hidden="true"></div>
+
+      <label class="field filter-date-box">
+        <span>Rodzaj pompy</span>
+        <div class="select-wrap">
+          <select name="pumpType">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.pumpTypes, currentPumpType, 'Wszystkie rodzaje')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="pumpType"
+          ${canResetPumpType ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <div class="map-filter-divider" aria-hidden="true"></div>
+
+      <label class="field filter-date-box">
+        <span>Typ wizyty</span>
+        <div class="select-wrap">
+          <select name="visitType">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.visitTypes, currentVisitType, 'Wszystkie typy')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="visitType"
+          ${canResetVisitType ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <label class="field filter-date-box">
+        <span>Województwo</span>
+        <div class="select-wrap">
+          <select name="region">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.regions, currentRegion, 'Wszystkie województwa')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="region"
+          ${canResetRegion ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
     </form>
-    <div class="filter-placeholder-stage">
-      <img
-        class="filter-placeholder-image"
-        src="./assets/filter-cat.png"
-        alt="Praca w toku. Kot wie co robi."
-      />
-      <p class="filter-placeholder-copy">Reszta filtrow bedzie wprowadzana krok po kroku.</p>
-    </div>
+
   `;
+
   selectionExtraEl.hidden = false;
 }
 
@@ -8374,9 +8741,7 @@ function renderMapDateFilterResults() {
   }
 
   if (allPeople.length === 0) {
-    return hasActiveMapDateFilter()
-      ? '<p class="empty-state">Brak osób pasujących do wybranego zakresu dat.</p>'
-      : '<p class="empty-state">Brak osób dostępnych na mapie dla bieżących danych.</p>';
+    return '';
   }
 
   return renderMapDateFilterRows(allPeople.slice(0, mapDateFilterRenderedCount), getCurrentSelectedPersonSourceRowId());
@@ -8908,19 +9273,20 @@ function appendPersonListResults() {
     return;
   }
 
-  const nextRenderedCount = Math.min(allPeople.length, personListState.renderedCount + MAP_PERSON_LIST_BATCH_SIZE);
-  const items = allPeople.slice(personListState.renderedCount, nextRenderedCount);
+  const listSource = getListVisiblePeople();
+  const nextRenderedCount = Math.min(listSource.length, personListState.renderedCount + MAP_PERSON_LIST_BATCH_SIZE);
+  const items = listSource.slice(personListState.renderedCount, nextRenderedCount);
   if (items.length === 0) {
     return;
   }
 
   personListState = {
     ...personListState,
-    results: allPeople.slice(0, nextRenderedCount),
-    total: allPeople.length,
+    results: listSource.slice(0, nextRenderedCount),
+    total: listSource.length,
     isLoading: false,
     hasLoaded: true,
-    hasMore: nextRenderedCount < allPeople.length,
+    hasMore: nextRenderedCount < listSource.length,
     renderedCount: nextRenderedCount
   };
   removeMapListResultsTail(listElement);

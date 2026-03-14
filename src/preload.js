@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('appApi', {
   setPersonBookmark: (payload) => ipcRenderer.invoke('people:setBookmark', payload),
   getMapPoints: (payload) => ipcRenderer.invoke('map:getPoints', payload),
   getMapDateFilterOptions: () => ipcRenderer.invoke('map:getDateFilterOptions'),
+  getMapFilterOptions: () => ipcRenderer.invoke('map:getFilterOptions'),
   getMapSelectionHistory: () => ipcRenderer.invoke('map:getSelectionHistory'),
   setMapSelectionHistory: (payload) => ipcRenderer.invoke('map:setSelectionHistory', payload),
   buildRoute: (payload) => ipcRenderer.invoke('route:build', payload),

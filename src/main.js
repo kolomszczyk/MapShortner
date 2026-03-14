@@ -1762,6 +1762,7 @@ ipcMain.handle('people:getDetails', (_event, sourceRowId) => store.getPersonDeta
 ipcMain.handle('people:setBookmark', (_event, payload = {}) => store.setPersonBookmark(payload));
 ipcMain.handle('map:getPoints', (_event, input) => store.listMapPoints(input));
 ipcMain.handle('map:getDateFilterOptions', () => store.listMapDateFilterOptions());
+ipcMain.handle('map:getFilterOptions', () => store.listMapFilterOptions());
 ipcMain.handle('map:getSelectionHistory', () => readMapSelectionHistory());
 ipcMain.handle('map:setSelectionHistory', (_event, payload = {}) => saveMapSelectionHistory(payload));
 

@@ -77,6 +77,7 @@ function createDataStore(app) {
     setPersonBookmark: (payload) => setPersonBookmark(db, payload),
     listMapPoints: (input) => listMapPoints(db, input),
     listMapDateFilterOptions: () => listMapDateFilterOptions(db),
+    listMapFilterOptions: () => listMapFilterOptions(db),
     listPendingGeocodes: (limit) => listPendingGeocodes(db, limit),
     updatePersonCoordinates: (payload) => updatePersonCoordinates(db, payload),
     addNote: (payload) => addNote(db, payload),
@@ -1483,6 +1484,9 @@ function setPersonBookmark(db, payload = {}) {
 
 function listMapPoints(db, input = {}) {
   const query = (input.query || '').trim().toLowerCase();
+  const region = normalizeMapFilterOptionValue(input.region);
+  const pumpType = normalizeMapFilterOptionValue(input.pumpType);
+  const visitType = normalizeMapFilterOptionValue(input.visitType);
   const includeUnresolved = Boolean(input.includeUnresolved);
   const whereFragments = [];
   const params = [];
@@ -1494,6 +1498,28 @@ function listMapPoints(db, input = {}) {
   if (query) {
     whereFragments.push('search_text LIKE ?');
     params.push(`%${query}%`);
+  }
+
+  if (region) {
+    whereFragments.push("LOWER(TRIM(COALESCE(region, ''))) = ?");
+    params.push(region.toLowerCase());
+  }
+
+  if (pumpType) {
+    whereFragments.push("LOWER(TRIM(COALESCE(NULLIF(device_model, ''), NULLIF(device_vendor, ''), ''))) = ?");
+    params.push(pumpType.toLowerCase());
+  }
+
+  if (visitType) {
+    whereFragments.push(`
+      EXISTS(
+        SELECT 1
+        FROM service_cards
+        WHERE TRIM(COALESCE(service_cards.owner_source_row_id, '')) = TRIM(COALESCE(people_cache.source_row_id, ''))
+          AND LOWER(TRIM(COALESCE(service_cards.event_type, ''))) = ?
+      )
+    `);
+    params.push(visitType.toLowerCase());
   }
 
   const whereClause = whereFragments.length > 0 ? `WHERE ${whereFragments.join(' AND ')}` : '';
@@ -1541,6 +1567,43 @@ function listMapDateFilterOptions(db) {
       AND length(last_visit_at) >= 7
     ORDER BY monthKey DESC
   `).all().map((row) => row.monthKey).filter((value) => /^\d{4}-\d{2}$/.test(value));
+}
+
+function listMapFilterOptions(db) {
+  const pumpTypes = db.prepare(`
+    SELECT DISTINCT
+      COALESCE(NULLIF(device_model, ''), NULLIF(device_vendor, '')) AS value
+    FROM people_cache
+    WHERE COALESCE(NULLIF(device_model, ''), NULLIF(device_vendor, '')) IS NOT NULL
+      AND COALESCE(NULLIF(device_model, ''), NULLIF(device_vendor, '')) != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
+  const regions = db.prepare(`
+    SELECT DISTINCT region AS value
+    FROM people_cache
+    WHERE region IS NOT NULL
+      AND region != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
+  const visitTypes = db.prepare(`
+    SELECT DISTINCT event_type AS value
+    FROM service_cards
+    WHERE event_type IS NOT NULL
+      AND event_type != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
+  return {
+    pumpTypes,
+    regions,
+    visitTypes
+  };
+}
+
+function normalizeMapFilterOptionValue(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
 function listPendingGeocodes(db, limit = 50) {
