@@ -220,12 +220,15 @@
                         <textarea class="json-export-area access-vba-snippet" data-access-vba-snippet readonly>Option Compare Database
 Option Explicit
 
+Private Const PERSON_FORM_NAME As String = "Osoby"
+Private Const PERSON_KEY_FIELD As String = "ID"
+
 Public Function OpenEntity(ByVal entityName As String, ByVal recordId As Variant) As String
   On Error GoTo HandleError
 
   Select Case LCase$(Trim$(entityName))
     Case "osoba", "person"
-      OpenEntity = OpenRecordInForm("Osoby", "ID", recordId)
+      OpenEntity = OpenRecordInForm(PERSON_FORM_NAME, PERSON_KEY_FIELD, recordId)
     Case Else
       OpenEntity = "not-found:entity"
   End Select

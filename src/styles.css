@@ -1318,11 +1318,11 @@ textarea {
 }
 
 .map-rule-badges {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
-  justify-content: flex-start;
-  align-items: center;
+  justify-content: stretch;
+  align-items: start;
 }
 
 .map-rule-badge {
@@ -1330,7 +1330,8 @@ textarea {
   padding: 5px 10px;
   font-size: 0.82rem;
   line-height: 1.15;
-  white-space: nowrap;
+  white-space: normal;
+  width: 100%;
 }
 
 .action-row {
@@ -1858,7 +1859,7 @@ textarea {
 .time-color-range-middle-split {
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .time-color-range-middle-side {
@@ -1885,10 +1886,10 @@ textarea {
 
 .time-color-range-middle-side.is-right {
   align-content: start;
-  place-items: start end;
-  padding-left: 16px;
+  place-items: start;
+  padding-left: 0;
   background: transparent;
-  text-align: right;
+  text-align: left;
 }
 
 .time-color-range-middle-date-box {
@@ -1908,8 +1909,8 @@ textarea {
 .time-color-range-middle-days-input {
   width: min(100%, 190px);
   min-width: 0;
-  justify-self: end;
-  text-align: right;
+  justify-self: start;
+  text-align: left;
 }
 
 .time-color-range-bottom {
@@ -2035,8 +2036,17 @@ textarea {
 }
 
 .time-color-range-meta-grid {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.time-color-range-meta-grid > * {
+  width: 100%;
+}
+
+.time-color-range-meta-grid .time-color-range-enabled-toggle,
+.time-color-range-meta-grid .time-color-range-remove {
+  justify-self: stretch;
 }
 
 .time-color-range-color-field .time-color-picker-wrap {
@@ -2308,10 +2318,10 @@ textarea {
 
 .legend-swatches {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, max-content));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px 12px;
-  justify-content: center;
-  justify-items: center;
+  justify-content: stretch;
+  justify-items: stretch;
   align-items: flex-start;
 }
 
@@ -2532,8 +2542,8 @@ textarea {
 .legend-chip {
   display: grid;
   align-items: center;
-  width: fit-content;
-  min-width: 168px;
+  width: min(100%, 430px);
+  min-width: 0;
   min-height: 50px;
   padding: 8px 10px;
   border-radius: 12px;
@@ -2547,21 +2557,60 @@ textarea {
 
 .legend-chip-data {
   display: grid;
-  grid-template-columns: max-content auto max-content auto;
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto auto;
+  gap: 8px 12px;
   align-items: center;
   min-width: 0;
+}
+
+.legend-chip-data > * {
+  width: 100%;
+}
+
+.legend-chip-cell {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.legend-chip-cell-value .legend-value-box {
+  width: 100%;
+}
+
+.legend-chip-cell-swatch,
+.legend-chip-cell-toggle {
+  width: auto;
+}
+
+.legend-chip-cell-swatch .legend-chip-swatch {
+  justify-content: flex-start;
+}
+
+.legend-chip-cell-toggle .legend-chip-toggle {
+  width: auto;
+  justify-self: flex-start;
+}
+
+.legend-chip-cell-value.is-empty {
+  pointer-events: none;
+}
+
+.legend-value-box-empty {
+  min-height: 34px;
+  border-color: transparent;
+  background: transparent;
 }
 
 .legend-value-box {
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 7px 8px;
   border-radius: 8px;
   min-height: 34px;
-  min-width: 4ch;
+  min-width: 0;
   background: rgba(48, 67, 54, 0.09);
   border: 1px solid rgba(48, 67, 54, 0.12);
   overflow: hidden;
@@ -2607,9 +2656,9 @@ textarea {
 .legend-value-input {
   appearance: none;
   -webkit-appearance: none;
-  width: auto;
+  width: 100%;
   height: auto;
-  min-width: 4ch;
+  min-width: 0;
   padding: 0 0 0 14px;
   border: 0;
   margin: 0;
@@ -2623,7 +2672,7 @@ textarea {
   font: inherit;
   font-size: 0.82rem;
   font-weight: 600;
-  text-align: center;
+  text-align: left;
   overflow: visible;
 }
 
@@ -2659,7 +2708,7 @@ textarea {
 
 .legend-chip-swatch {
   display: grid;
-  place-items: center;
+  place-items: start;
 }
 
 .legend-chip-swatch .time-color-menu-trigger {
@@ -2676,7 +2725,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
+  width: auto;
+  min-height: 32px;
   padding: 0 0.68rem;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2686,6 +2736,18 @@ textarea {
   font-weight: 600;
   white-space: nowrap;
   transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+}
+
+@media (max-width: 900px) {
+  .legend-chip {
+    width: 100%;
+  }
+
+  .legend-chip-data {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto auto;
+    align-items: center;
+    gap: 8px;
+  }
 }
 
 .legend-chip-toggle:hover {

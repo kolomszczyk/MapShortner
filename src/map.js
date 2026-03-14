@@ -7235,31 +7235,39 @@ function renderMapTimeColorPreviewMarkup(ranges = mapTimeColorRanges) {
         style="--swatch-fill: ${escapeHtml(range.color)};"
       >
         <div class="legend-chip-data">
-          <div class="legend-value-box">
-            ${renderMapTimeColorPreviewField(range, 'left')}
+          <div class="legend-chip-cell legend-chip-cell-value">
+            <div class="legend-value-box">
+              ${renderMapTimeColorPreviewField(range, 'left')}
+            </div>
           </div>
-          ${isMapTimeColorSpecialMatcherRange(range)
-            ? ''
-            : `
-              <div class="legend-value-box">
-                ${renderMapTimeColorPreviewField(range, 'right')}
-              </div>
-            `}
-          <div class="legend-chip-swatch">
-            ${renderMapTimeColorMenu({
-              color: range.color,
-              fieldAttributes: `data-map-time-color-preview-field="color" data-map-time-color-preview-range-id="${escapeHtml(range.id)}"`,
-              ariaLabel: `Kolor zakresu ${range.label || ''}`,
-              className: 'is-preview'
-            })}
+          <div class="legend-chip-cell legend-chip-cell-value${isMapTimeColorSpecialMatcherRange(range) ? ' is-empty' : ''}">
+            ${isMapTimeColorSpecialMatcherRange(range)
+              ? '<div class="legend-value-box legend-value-box-empty" aria-hidden="true"></div>'
+              : `
+                <div class="legend-value-box">
+                  ${renderMapTimeColorPreviewField(range, 'right')}
+                </div>
+              `}
           </div>
-          <button
-            type="button"
-            class="button-muted legend-chip-toggle"
-            data-map-time-color-preview-disable="${escapeHtml(range.id)}"
-          >
-            Wyłącz
-          </button>
+          <div class="legend-chip-cell legend-chip-cell-swatch">
+            <div class="legend-chip-swatch">
+              ${renderMapTimeColorMenu({
+                color: range.color,
+                fieldAttributes: `data-map-time-color-preview-field="color" data-map-time-color-preview-range-id="${escapeHtml(range.id)}"`,
+                ariaLabel: `Kolor zakresu ${range.label || ''}`,
+                className: 'is-preview'
+              })}
+            </div>
+          </div>
+          <div class="legend-chip-cell legend-chip-cell-toggle">
+            <button
+              type="button"
+              class="button-muted legend-chip-toggle"
+              data-map-time-color-preview-disable="${escapeHtml(range.id)}"
+            >
+              Wyłącz
+            </button>
+          </div>
         </div>
       </div>
     `)
