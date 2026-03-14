@@ -86,6 +86,8 @@ To utworzy tag typu `v0.1.1` i pipeline zbuduje instalatory oraz opublikuje rele
 - Po starcie aplikacja sprawdza, czy na GitHub Releases jest nowsza wersja.
 - Jeśli znajdzie nowszy release, pobierze aktualizację automatycznie.
 - Po zakonczeniu pobierania aplikacja sama uruchomi instalacje i zrobi restart.
+- W malym oknie startowym mozesz kliknac `Pomin pobieranie`, aby od razu przejsc do aplikacji.
+- Po pominieciu aktualizacja moze dokonczyc sie w tle, a instalacje wykonasz po zamknieciu aplikacji lub przyciskiem `Instaluj teraz`.
 
 ## 6) Jak przetestować aktualizację
 

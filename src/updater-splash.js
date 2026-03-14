@@ -3,6 +3,8 @@ const phaseEl = document.querySelector('[data-updater-splash-phase]');
 const progressWrapEl = document.querySelector('[data-updater-splash-progress-wrap]');
 const progressBarEl = document.querySelector('[data-updater-splash-progress-bar]');
 const progressValueEl = document.querySelector('[data-updater-splash-progress-value]');
+const actionsEl = document.querySelector('[data-updater-splash-actions]');
+const skipBtnEl = document.querySelector('[data-updater-splash-skip-btn]');
 
 function render(state = {}) {
   const phase = String(state?.phase || 'checking');
@@ -28,6 +30,14 @@ function render(state = {}) {
     progressWrapEl.hidden = !shouldShowProgress;
   }
 
+  if (actionsEl) {
+    actionsEl.hidden = !Boolean(state?.canSkip);
+  }
+
+  if (skipBtnEl) {
+    skipBtnEl.disabled = false;
+  }
+
   if (progressBarEl) {
     if (phase === 'checking') {
       progressBarEl.style.width = '22%';
@@ -48,6 +58,17 @@ function render(state = {}) {
       progressValueEl.textContent = '...';
     }
   }
+}
+
+if (skipBtnEl) {
+  skipBtnEl.addEventListener('click', async () => {
+    skipBtnEl.disabled = true;
+    try {
+      await window.updaterSplashApi.skipStartup();
+    } catch (_error) {
+      skipBtnEl.disabled = false;
+    }
+  });
 }
 
 window.updaterSplashApi.onStatus((message) => {

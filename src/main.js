@@ -94,6 +94,7 @@ let startupUpdateResolutionTimer = null;
 let startupUpdateInstallTimer = null;
 let startupUpdateBlockTimer = null;
 let devUpdaterPreviewInProgress = false;
+let startupUpdateSkipped = false;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -388,6 +389,7 @@ function installDownloadedUpdate({ version = null, visible = false, source = cur
   clearStartupUpdateInstallTimer();
 
   const versionLabel = version ? ` ${version}` : '';
+  const skippedStartupInstall = source === 'startup' && startupUpdateSkipped;
   const downloadedMessage = `Aktualizacja${versionLabel} pobrana. Za chwile instalacja i restart aplikacji.`;
 
   sendUpdateStatus(downloadedMessage);
@@ -401,6 +403,22 @@ function installDownloadedUpdate({ version = null, visible = false, source = cur
     version,
     source
   });
+
+  if (skippedStartupInstall) {
+    const deferredMessage = `Aktualizacja${versionLabel} pobrana. Instalacja po zamknieciu aplikacji lub przyciskiem "Instaluj teraz".`;
+    sendUpdateStatus(deferredMessage);
+    setUpdaterState({
+      phase: 'downloaded',
+      message: deferredMessage,
+      visible: false,
+      canSkip: false,
+      readyToInstall: true,
+      progressPercent: 100,
+      version,
+      source
+    });
+    return;
+  }
 
   startupUpdateInstallTimer = setTimeout(() => {
     startupUpdateInstallTimer = null;
@@ -602,6 +620,7 @@ async function runStartupUpdateFlow() {
   clearStartupUpdateResolutionTimer();
   clearStartupUpdateInstallTimer();
   clearStartupUpdateBlockTimer();
+  startupUpdateSkipped = false;
 
   currentUpdateCheckSource = 'startup';
 
@@ -609,7 +628,7 @@ async function runStartupUpdateFlow() {
     phase: 'checking',
     message: 'Sprawdzanie aktualizacji...',
     visible: true,
-    canSkip: false,
+    canSkip: true,
     readyToInstall: false,
     progressPercent: null,
     version: null,
@@ -654,7 +673,21 @@ async function runStartupUpdateFlow() {
 }
 
 function skipStartupUpdateFlow() {
-  return false;
+  if (!startupUpdateFlowPromise) {
+    return false;
+  }
+
+  startupUpdateSkipped = true;
+  return releaseStartupUpdateBlock(
+    'Pominieto oczekiwanie na aktualizacje. Aplikacja uruchamia sie od razu.',
+    {
+      phase: 'idle',
+      visible: false,
+      canSkip: false,
+      readyToInstall: false,
+      source: 'startup'
+    }
+  );
 }
 
 function enqueueExclusiveOperation(operation) {
@@ -1321,7 +1354,7 @@ function createWindow() {
     y: windowState.y,
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: ' ',
+    title: 'Elrond',
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#ebefe6',
@@ -1336,7 +1369,7 @@ function createWindow() {
   mainWindow.removeMenu();
   mainWindow.on('page-title-updated', (event) => {
     event.preventDefault();
-    mainWindow.setTitle(' ');
+    mainWindow.setTitle('Elrond');
   });
   mainWindow.on('resize', queueWindowStatePersist);
   mainWindow.on('move', queueWindowStatePersist);
@@ -1366,6 +1399,7 @@ function createUpdaterWindow() {
     height: UPDATER_WINDOW_BOUNDS.height,
     minWidth: UPDATER_WINDOW_BOUNDS.width,
     minHeight: UPDATER_WINDOW_BOUNDS.height,
+    frame: false,
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -1422,7 +1456,7 @@ function configureAutoUpdater() {
       phase: 'checking',
       message: 'Sprawdzanie aktualizacji...',
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: false,
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
       readyToInstall: false,
       progressPercent: null,
       source: currentUpdateCheckSource
@@ -1436,7 +1470,7 @@ function configureAutoUpdater() {
       phase: 'downloading',
       message: `Znaleziono aktualizacje: ${info.version}. Trwa pobieranie...`,
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: false,
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
       readyToInstall: false,
       progressPercent: 0,
       version: info.version,
@@ -1496,7 +1530,7 @@ function configureAutoUpdater() {
       phase: 'downloading',
       message: `Pobieranie aktualizacji: ${percent}%`,
       visible: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
-      canSkip: false,
+      canSkip: currentUpdateCheckSource === 'startup' && Boolean(startupUpdateFlowPromise),
       readyToInstall: false,
       progressPercent: Number(percent),
       source: currentUpdateCheckSource

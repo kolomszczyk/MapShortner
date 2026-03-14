@@ -10,6 +10,8 @@ export function initDashboardPanel({
   const accessPasswordInput = root.querySelector('#access-password');
   const passwordStatusEl = root.querySelector('#password-status');
   const importStatusEl = root.querySelector('#import-status');
+  const accessVbaSnippetEl = root.querySelector('[data-access-vba-snippet]');
+  const accessVbaCopyBtn = root.querySelector('[data-access-vba-copy]');
   const checkBtn = root.querySelector('#check-btn');
   const showUpdateMessageBtn = root.querySelector('#show-update-message-btn');
   const installBtn = root.querySelector('#install-btn');
@@ -102,6 +104,24 @@ export function initDashboardPanel({
       renderTileDownloadSection(payload);
     });
   }
+
+  accessVbaCopyBtn?.addEventListener('click', async () => {
+    const snippetText = String(accessVbaSnippetEl?.value || '').trim();
+    if (!snippetText) {
+      appendLog('Brak kodu VBA do skopiowania.');
+      return;
+    }
+
+    setButtonBusy(accessVbaCopyBtn, true, '...');
+    try {
+      await copyTextToClipboard(snippetText);
+      appendLog('Skopiowano kod VBA do schowka.');
+    } catch (error) {
+      appendLog(`Nie udalo sie skopiowac kodu VBA: ${error.message}`);
+    } finally {
+      setButtonBusy(accessVbaCopyBtn, false);
+    }
+  });
 
   checkBtn?.addEventListener('click', async () => {
     setButtonBusy(checkBtn, true, 'Sprawdzanie...');
@@ -1051,6 +1071,35 @@ export function initDashboardPanel({
     });
   }
 }
+
+  async function copyTextToClipboard(text) {
+    const normalizedText = String(text || '');
+    if (!normalizedText) {
+      return;
+    }
+
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(normalizedText);
+      return;
+    }
+
+    const fallbackArea = document.createElement('textarea');
+    fallbackArea.value = normalizedText;
+    fallbackArea.setAttribute('readonly', 'true');
+    fallbackArea.style.position = 'fixed';
+    fallbackArea.style.opacity = '0';
+    fallbackArea.style.pointerEvents = 'none';
+    fallbackArea.style.inset = '0';
+    document.body.appendChild(fallbackArea);
+    fallbackArea.focus();
+    fallbackArea.select();
+
+    const success = document.execCommand('copy');
+    fallbackArea.remove();
+    if (!success) {
+      throw new Error('Schowek jest niedostepny.');
+    }
+  }
 
 function stringifySettingValue(value, fractionDigits = 0) {
   const numericValue = Number(value);

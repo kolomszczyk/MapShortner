@@ -203,11 +203,21 @@
                             <span class="eyebrow">Access Bridge</span>
                             <h3>Kod VBA do wklejenia</h3>
                           </div>
+                          <button
+                            type="button"
+                            class="button-muted access-vba-copy-btn"
+                            data-access-vba-copy
+                            aria-label="Kopiuj kod VBA"
+                            title="Kopiuj kod VBA"
+                          >
+                            <i class="fa-solid fa-clone" aria-hidden="true"></i>
+                            <span class="access-vba-copy-fallback" aria-hidden="true">📋</span>
+                          </button>
                         </div>
                         <p class="copy">
                           Wklej kod do modułu standardowego w Accessie. Bridge wywołuje funkcję <strong>OpenEntity</strong> i oczekuje zwrotu: <strong>ok</strong> albo <strong>not-found</strong>.
                         </p>
-                        <textarea class="json-export-area access-vba-snippet" readonly>Option Compare Database
+                        <textarea class="json-export-area access-vba-snippet" data-access-vba-snippet readonly>Option Compare Database
 Option Explicit
 
 Public Function OpenEntity(ByVal entityName As String, ByVal recordId As Variant) As String

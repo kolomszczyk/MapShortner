@@ -32,6 +32,20 @@
         box-shadow: 0 10px 24px rgba(31, 43, 31, 0.08);
       }
 
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        -webkit-app-region: drag;
+      }
+
+      .logo {
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        object-fit: cover;
+      }
+
       .kicker {
         margin: 0;
         font-size: 12px;
@@ -85,6 +99,28 @@
         color: #40513f;
       }
 
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .skip-button {
+        border: 1px solid #bdcdb6;
+        border-radius: 10px;
+        background: #edf4e8;
+        color: #274128;
+        font-weight: 600;
+        padding: 8px 12px;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+      }
+
+      .skip-button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+
       @keyframes pulse {
         from {
           opacity: 0.55;
@@ -97,7 +133,10 @@
   </head>
   <body>
     <main class="card" role="status" aria-live="polite">
-      <p class="kicker">Elrond</p>
+      <div class="titlebar">
+        <img class="logo" src="./assets/icon.png" alt="Elrond" />
+        <p class="kicker">Elrond</p>
+      </div>
       <h1 data-updater-splash-phase>Sprawdzanie aktualizacji</h1>
       <p class="status" data-updater-splash-status>Sprawdzanie aktualizacji...</p>
       <section class="progress-wrap" data-updater-splash-progress-wrap>
@@ -106,6 +145,9 @@
         </div>
         <p class="meta">Postęp: <strong data-updater-splash-progress-value>...</strong></p>
       </section>
+      <div class="actions" data-updater-splash-actions hidden>
+        <button type="button" class="skip-button" data-updater-splash-skip-btn>Pomin pobieranie</button>
+      </div>
     </main>
     <script src="./updater-splash.js"></script>
   </body>
