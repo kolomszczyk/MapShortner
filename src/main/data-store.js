@@ -1487,6 +1487,9 @@ function listMapPoints(db, input = {}) {
   const region = normalizeMapFilterOptionValue(input.region);
   const pumpType = normalizeMapFilterOptionValue(input.pumpType);
   const visitType = normalizeMapFilterOptionValue(input.visitType);
+  const postalCode = normalizeMapFilterOptionValue(input.postalCode);
+  const producer = normalizeMapFilterOptionValue(input.producer);
+  const installerCompany = normalizeMapFilterOptionValue(input.installerCompany);
   const includeUnresolved = Boolean(input.includeUnresolved);
   const whereFragments = [];
   const params = [];
@@ -1520,6 +1523,21 @@ function listMapPoints(db, input = {}) {
       )
     `);
     params.push(visitType.toLowerCase());
+  }
+
+  if (postalCode) {
+    whereFragments.push("LOWER(TRIM(COALESCE(postal_code, ''))) = ?");
+    params.push(postalCode.toLowerCase());
+  }
+
+  if (producer) {
+    whereFragments.push("LOWER(TRIM(COALESCE(device_vendor, ''))) = ?");
+    params.push(producer.toLowerCase());
+  }
+
+  if (installerCompany) {
+    whereFragments.push("LOWER(TRIM(COALESCE(company_name, ''))) = ?");
+    params.push(installerCompany.toLowerCase());
   }
 
   const whereClause = whereFragments.length > 0 ? `WHERE ${whereFragments.join(' AND ')}` : '';
@@ -1580,10 +1598,11 @@ function listMapFilterOptions(db) {
   `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
 
   const regions = db.prepare(`
-    SELECT DISTINCT region AS value
+    SELECT MIN(TRIM(region)) AS value
     FROM people_cache
     WHERE region IS NOT NULL
-      AND region != ''
+      AND TRIM(region) != ''
+    GROUP BY LOWER(TRIM(region))
     ORDER BY value COLLATE NOCASE ASC
   `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
 
@@ -1595,10 +1614,37 @@ function listMapFilterOptions(db) {
     ORDER BY value COLLATE NOCASE ASC
   `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
 
+  const postalCodes = db.prepare(`
+    SELECT DISTINCT postal_code AS value
+    FROM people_cache
+    WHERE postal_code IS NOT NULL
+      AND postal_code != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
+  const producers = db.prepare(`
+    SELECT DISTINCT device_vendor AS value
+    FROM people_cache
+    WHERE device_vendor IS NOT NULL
+      AND device_vendor != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
+  const installerCompanies = db.prepare(`
+    SELECT DISTINCT company_name AS value
+    FROM people_cache
+    WHERE company_name IS NOT NULL
+      AND company_name != ''
+    ORDER BY value COLLATE NOCASE ASC
+  `).all().map((row) => String(row.value || '').trim()).filter(Boolean);
+
   return {
     pumpTypes,
     regions,
-    visitTypes
+    visitTypes,
+    postalCodes,
+    producers,
+    installerCompanies
   };
 }
 

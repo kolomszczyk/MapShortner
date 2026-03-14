@@ -124,6 +124,7 @@ const MAP_DATE_FILTER_APPLY_DEBOUNCE_MS = 180;
 const MAP_DATE_FILTER_SCROLL_THRESHOLD_PX = 120;
 const MAP_DATE_FILTER_ROW_GAP_PX = 10;
 const MAP_DATE_FILTER_ESTIMATED_ROW_HEIGHT_PX = 96;
+const MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE = 400;
 const MAP_TIME_CHART_PAST_PADDING_MONTHS = 1;
 const MAP_TIME_CHART_FUTURE_PADDING_MONTHS = 2;
 const MAP_TIME_CHART_ROW_HEIGHT_PX = 16;
@@ -212,7 +213,10 @@ let mapDateFilterOptions = [];
 let mapFilterOptions = {
   pumpTypes: [],
   visitTypes: [],
-  regions: []
+  regions: [],
+  postalCodes: [],
+  producers: [],
+  installerCompanies: []
 };
 let mapDateFilterDraft = resolveMapDateFilterDraft(restoredMapDateFilterState, mapDateFilter);
 let mapTimeColorRanges = restoredMapTimeColorRanges;
@@ -220,6 +224,9 @@ let mapTimeColorDateMatchMode = restoredMapTimeColorDateMatchMode;
 let mapDateFilterApplyTimer = null;
 let mapDateFilterApplyRequestToken = 0;
 let mapPointsRequestToken = 0;
+let visibleMarkerSyncRequestToken = 0;
+let visibleMarkerSyncTimer = 0;
+let mapPopupLoadingOperations = 0;
 let isMapPointsLoading = false;
 let personSearchTimer = null;
 let personSearchRequestToken = 0;
@@ -1380,7 +1387,10 @@ selectionExtraEl?.addEventListener('change', (event) => {
     toYear: formData.get('toYear'),
     pumpType: formData.get('pumpType'),
     visitType: formData.get('visitType'),
-    region: formData.get('region')
+    region: formData.get('region'),
+    postalCode: formData.get('postalCode'),
+    producer: formData.get('producer'),
+    installerCompany: formData.get('installerCompany')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
   persistMapDateFilterState();
@@ -1561,7 +1571,10 @@ selectionExtraEl?.addEventListener('submit', (event) => {
     toYear: formData.get('toYear'),
     pumpType: formData.get('pumpType'),
     visitType: formData.get('visitType'),
-    region: formData.get('region')
+    region: formData.get('region'),
+    postalCode: formData.get('postalCode'),
+    producer: formData.get('producer'),
+    installerCompany: formData.get('installerCompany')
   });
   mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
   persistMapDateFilterState();
@@ -2039,7 +2052,7 @@ function syncMapLoadingIndicator() {
     return;
   }
 
-  mapLoadingIndicatorEl.hidden = !isMapPointsLoading;
+  mapLoadingIndicatorEl.hidden = !(isMapPointsLoading || mapPopupLoadingOperations > 0);
 }
 
 function buildMapPointsRequest() {
@@ -2051,6 +2064,9 @@ function buildMapPointsRequest() {
     payload.pumpType = mapDateFilter.pumpType || undefined;
     payload.visitType = mapDateFilter.visitType || undefined;
     payload.region = mapDateFilter.region || undefined;
+    payload.postalCode = mapDateFilter.postalCode || undefined;
+    payload.producer = mapDateFilter.producer || undefined;
+    payload.installerCompany = mapDateFilter.installerCompany || undefined;
   }
 
   if (!hasActiveMapDateFilter()) {
@@ -2095,7 +2111,14 @@ function hasActiveMapDateFilter() {
 }
 
 function hasActiveMapAttributeFilters() {
-  return Boolean(mapDateFilter.pumpType || mapDateFilter.visitType || mapDateFilter.region);
+  return Boolean(
+    mapDateFilter.pumpType
+    || mapDateFilter.visitType
+    || mapDateFilter.region
+    || mapDateFilter.postalCode
+    || mapDateFilter.producer
+    || mapDateFilter.installerCompany
+  );
 }
 
 function getActiveMapPersonSearchQuery() {
@@ -2118,6 +2141,9 @@ function hasMapDateFilterDraftChanges(input = mapDateFilterDraft) {
     || draft.pumpType !== defaultDraft.pumpType
     || draft.visitType !== defaultDraft.visitType
     || draft.region !== defaultDraft.region
+    || draft.postalCode !== defaultDraft.postalCode
+    || draft.producer !== defaultDraft.producer
+    || draft.installerCompany !== defaultDraft.installerCompany
   );
 }
 
@@ -2144,7 +2170,10 @@ async function applyMapDateFilter(nextFilter, options = {}) {
     || normalizedFilter.dateTo !== mapDateFilter.dateTo
     || normalizedFilter.pumpType !== mapDateFilter.pumpType
     || normalizedFilter.visitType !== mapDateFilter.visitType
-    || normalizedFilter.region !== mapDateFilter.region;
+    || normalizedFilter.region !== mapDateFilter.region
+    || normalizedFilter.postalCode !== mapDateFilter.postalCode
+    || normalizedFilter.producer !== mapDateFilter.producer
+    || normalizedFilter.installerCompany !== mapDateFilter.installerCompany;
 
   mapDateFilter = normalizedFilter;
   syncInfoToolButtons();
@@ -2193,6 +2222,9 @@ function normalizeMapDateFilter(input = {}) {
   const pumpType = normalizeMapFilterOptionInputValue(input?.pumpType);
   const visitType = normalizeMapFilterOptionInputValue(input?.visitType);
   const region = normalizeMapFilterOptionInputValue(input?.region);
+  const postalCode = normalizeMapFilterOptionInputValue(input?.postalCode);
+  const producer = normalizeMapFilterOptionInputValue(input?.producer);
+  const installerCompany = normalizeMapFilterOptionInputValue(input?.installerCompany);
   const normalizedFromMonth = normalizeMonthNumberInputValue(input?.fromMonth);
   const normalizedFromYear = normalizeYearInputValue(input?.fromYear);
   const normalizedToMonth = normalizeMonthNumberInputValue(input?.toMonth);
@@ -2221,7 +2253,10 @@ function normalizeMapDateFilter(input = {}) {
     dateTo,
     pumpType,
     visitType,
-    region
+    region,
+    postalCode,
+    producer,
+    installerCompany
   };
 }
 
@@ -3180,7 +3215,10 @@ function normalizeMapDateFilterDraft(input = {}) {
     toYear: normalizeYearInputValue(input?.toYear),
     pumpType: normalizeMapFilterOptionInputValue(input?.pumpType),
     visitType: normalizeMapFilterOptionInputValue(input?.visitType),
-    region: normalizeMapFilterOptionInputValue(input?.region)
+    region: normalizeMapFilterOptionInputValue(input?.region),
+    postalCode: normalizeMapFilterOptionInputValue(input?.postalCode),
+    producer: normalizeMapFilterOptionInputValue(input?.producer),
+    installerCompany: normalizeMapFilterOptionInputValue(input?.installerCompany)
   };
 }
 
@@ -3283,7 +3321,10 @@ function buildMapDateFilterDraft(filter = {}) {
     toYear: extractYearValue(filter.dateTo),
     pumpType: normalizeMapFilterOptionInputValue(filter.pumpType),
     visitType: normalizeMapFilterOptionInputValue(filter.visitType),
-    region: normalizeMapFilterOptionInputValue(filter.region)
+    region: normalizeMapFilterOptionInputValue(filter.region),
+    postalCode: normalizeMapFilterOptionInputValue(filter.postalCode),
+    producer: normalizeMapFilterOptionInputValue(filter.producer),
+    installerCompany: normalizeMapFilterOptionInputValue(filter.installerCompany)
   };
 
   if (
@@ -3294,6 +3335,9 @@ function buildMapDateFilterDraft(filter = {}) {
     || draft.pumpType
     || draft.visitType
     || draft.region
+    || draft.postalCode
+    || draft.producer
+    || draft.installerCompany
   ) {
     return draft;
   }
@@ -3311,7 +3355,10 @@ function buildDefaultMapDateFilterDraft() {
     toYear: '',
     pumpType: '',
     visitType: '',
-    region: ''
+    region: '',
+    postalCode: '',
+    producer: '',
+    installerCompany: ''
   };
 }
 
@@ -3356,6 +3403,27 @@ function resetMapDateFilterDraftField(currentDraft = mapDateFilterDraft, fieldNa
     };
   }
 
+  if (fieldName === 'postalCode') {
+    return {
+      ...draft,
+      postalCode: ''
+    };
+  }
+
+  if (fieldName === 'producer') {
+    return {
+      ...draft,
+      producer: ''
+    };
+  }
+
+  if (fieldName === 'installerCompany') {
+    return {
+      ...draft,
+      installerCompany: ''
+    };
+  }
+
   return draft;
 }
 
@@ -3369,6 +3437,9 @@ function resolveMapDateFilterDraft(nextFilter = {}, normalizedFilter = mapDateFi
     || nextDraft.pumpType
     || nextDraft.visitType
     || nextDraft.region
+    || nextDraft.postalCode
+    || nextDraft.producer
+    || nextDraft.installerCompany
   ) {
     return nextDraft;
   }
@@ -3416,7 +3487,7 @@ function buildYearOptionsMarkup(selectedValue) {
 }
 
 function buildMapFilterSelectOptionsMarkup(values, selectedValue, placeholder) {
-  const normalizedSelectedValue = String(selectedValue || '').trim();
+  const normalizedSelectedValue = String(selectedValue || '').trim().toLocaleLowerCase('pl-PL');
   const options = [
     `<option value="">${escapeHtml(placeholder || 'Wszystkie')}</option>`
   ];
@@ -3426,9 +3497,10 @@ function buildMapFilterSelectOptionsMarkup(values, selectedValue, placeholder) {
     if (!normalizedValue) {
       return;
     }
+    const normalizedComparableValue = normalizedValue.toLocaleLowerCase('pl-PL');
 
     options.push(
-      `<option value="${escapeHtml(normalizedValue)}"${normalizedValue === normalizedSelectedValue ? ' selected' : ''}>${escapeHtml(normalizedValue)}</option>`
+      `<option value="${escapeHtml(normalizedValue)}"${normalizedComparableValue === normalizedSelectedValue ? ' selected' : ''}>${escapeHtml(normalizedValue)}</option>`
     );
   });
 
@@ -3469,11 +3541,37 @@ async function loadMapFilterOptions() {
       .map((value) => String(value || '').trim())
       .filter(Boolean)
   )).sort((left, right) => left.localeCompare(right, 'pl'));
+  const formatRegionLabel = (value) => String(value || '')
+    .trim()
+    .toLocaleLowerCase('pl-PL')
+    .replace(/(^|-)(\p{L})/gu, (match, prefix, letter) => `${prefix}${letter.toLocaleUpperCase('pl-PL')}`);
+  const toNormalizedCaseInsensitiveList = (values, formatter = null) => {
+    const outputByKey = new Map();
+
+    (Array.isArray(values) ? values : []).forEach((value) => {
+      const normalizedRawValue = String(value || '').trim();
+      if (!normalizedRawValue) {
+        return;
+      }
+
+      const key = normalizedRawValue.toLocaleLowerCase('pl-PL');
+      if (outputByKey.has(key)) {
+        return;
+      }
+
+      outputByKey.set(key, formatter ? formatter(normalizedRawValue) : normalizedRawValue);
+    });
+
+    return Array.from(outputByKey.values()).sort((left, right) => left.localeCompare(right, 'pl'));
+  };
 
   mapFilterOptions = {
     pumpTypes: toNormalizedList(options?.pumpTypes),
     visitTypes: toNormalizedList(options?.visitTypes),
-    regions: toNormalizedList(options?.regions)
+    regions: toNormalizedCaseInsensitiveList(options?.regions, formatRegionLabel),
+    postalCodes: toNormalizedList(options?.postalCodes),
+    producers: toNormalizedList(options?.producers),
+    installerCompanies: toNormalizedList(options?.installerCompanies)
   };
 
   if (infoPanelMode === 'filter') {
@@ -3635,28 +3733,90 @@ function clampNumber(value, min, max) {
 }
 
 function scheduleVisibleMarkerSync(delayMs = 0) {
+  if (visibleMarkerSyncTimer) {
+    window.clearTimeout(visibleMarkerSyncTimer);
+    visibleMarkerSyncTimer = 0;
+  }
+
+  const requestToken = ++visibleMarkerSyncRequestToken;
+  const run = () => {
+    visibleMarkerSyncTimer = 0;
+    void syncVisibleMarkersAsync({ requestToken });
+  };
+
   if (delayMs <= 0) {
-    syncVisibleMarkers();
+    requestAnimationFrame(run);
     return;
   }
 
-  setTimeout(() => {
-    syncVisibleMarkers();
+  visibleMarkerSyncTimer = window.setTimeout(() => {
+    requestAnimationFrame(run);
   }, delayMs);
 }
 
-function syncVisibleMarkers() {
-  if (!mapInstance) {
+async function syncVisibleMarkersAsync(options = {}) {
+  const requestToken = Number(options.requestToken || 0);
+  if (!mapInstance || (requestToken && requestToken !== visibleMarkerSyncRequestToken)) {
     return;
   }
 
   const bounds = mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING);
-  const nextPeople = allPeople.filter((person) => {
-    return isPointVisible(bounds, person) && shouldRenderMapTimeColorPersonMarker(person);
+  const nextPeople = [];
+  for (let index = 0; index < allPeople.length; index += 1) {
+    if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
+      return;
+    }
+
+    const person = allPeople[index];
+    if (isPointVisible(bounds, person) && shouldRenderMapTimeColorPersonMarker(person)) {
+      nextPeople.push(person);
+    }
+
+    if ((index + 1) % MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE === 0) {
+      await waitForNextAnimationFrame();
+    }
+  }
+
+  const nextCustomPoints = [];
+  for (let index = 0; index < allCustomPoints.length; index += 1) {
+    if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
+      return;
+    }
+
+    const point = allCustomPoints[index];
+    if (isPointVisible(bounds, point)) {
+      nextCustomPoints.push(point);
+    }
+
+    if ((index + 1) % MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE === 0) {
+      await waitForNextAnimationFrame();
+    }
+  }
+
+  if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
+    return;
+  }
+
+  applyVisibleMarkerDiff(nextPeople, nextCustomPoints);
+}
+
+function waitForNextAnimationFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
   });
-  const nextCustomPoints = allCustomPoints.filter((point) => isPointVisible(bounds, point));
-  const nextVisiblePeopleKeys = new Set(nextPeople.map((person) => buildPersonKey(person)));
-  const nextVisibleCustomKeys = new Set(nextCustomPoints.map((point) => buildCustomPointKey(point)));
+}
+
+function applyVisibleMarkerDiff(nextPeople, nextCustomPoints) {
+  if (!mapInstance) {
+    return;
+  }
+
+  const normalizedPeople = Array.isArray(nextPeople) ? nextPeople : [];
+  const normalizedCustomPoints = Array.isArray(nextCustomPoints) ? nextCustomPoints : [];
+  const nextVisiblePeopleKeys = new Set(normalizedPeople.map((person) => buildPersonKey(person)));
+  const nextVisibleCustomKeys = new Set(normalizedCustomPoints.map((point) => buildCustomPointKey(point)));
 
   for (const [key, marker] of visiblePeopleMarkers.entries()) {
     if (!nextVisiblePeopleKeys.has(key)) {
@@ -3672,8 +3832,8 @@ function syncVisibleMarkers() {
     }
   }
 
-  const peopleToAdd = nextPeople.filter((person) => !visiblePeopleMarkers.has(buildPersonKey(person)));
-  const customPointsToAdd = nextCustomPoints.filter(
+  const peopleToAdd = normalizedPeople.filter((person) => !visiblePeopleMarkers.has(buildPersonKey(person)));
+  const customPointsToAdd = normalizedCustomPoints.filter(
     (point) => !visibleCustomMarkers.has(buildCustomPointKey(point))
   );
 
@@ -3685,6 +3845,19 @@ function syncVisibleMarkers() {
     peopleIndex: 0,
     customPointIndex: 0
   });
+}
+
+function syncVisibleMarkers() {
+  if (!mapInstance) {
+    return;
+  }
+
+  const bounds = mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING);
+  const nextPeople = allPeople.filter((person) => {
+    return isPointVisible(bounds, person) && shouldRenderMapTimeColorPersonMarker(person);
+  });
+  const nextCustomPoints = allCustomPoints.filter((point) => isPointVisible(bounds, point));
+  applyVisibleMarkerDiff(nextPeople, nextCustomPoints);
 }
 
 function scheduleMarkerRender(state) {
@@ -3725,6 +3898,8 @@ function renderMarkerBatch(state) {
     marker.__personSourceRowId = person.sourceRowId;
     attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
       void selectPersonPoint(person, marker, { panelMode: 'selection' });
+    }, {
+      buildAsyncHtml: () => buildPersonPopupHtmlAsync(person)
     });
 
     if (activeSelection?.key === key) {
@@ -4484,6 +4659,9 @@ function readStoredMapDateFilterState() {
       || normalized.pumpType
       || normalized.visitType
       || normalized.region
+      || normalized.postalCode
+      || normalized.producer
+      || normalized.installerCompany
     )
       ? normalized
       : buildDefaultMapDateFilterDraft();
@@ -4576,7 +4754,7 @@ function persistMapTimeColorRanges() {
   }
 
   refreshAllPersonMarkerAppearances();
-  syncVisibleMarkers();
+  scheduleVisibleMarkerSync(0);
 }
 
 function persistMapTimeColorDateMatchMode() {
@@ -4595,7 +4773,7 @@ function persistMapTimeColorDateMatchMode() {
   }
 
   refreshAllPersonMarkerAppearances();
-  syncVisibleMarkers();
+  scheduleVisibleMarkerSync(0);
 }
 
 function persistMapTimeColorDateMatchModeAsync() {
@@ -5048,7 +5226,10 @@ function easeInOutQuint(progress) {
     : 1 - Math.pow(-2 * progress + 2, 5) / 2;
 }
 
-function attachLazyPopup(marker, buildHtml, onSelect) {
+function attachLazyPopup(marker, buildHtml, onSelect, options = {}) {
+  const buildAsyncHtml = typeof options?.buildAsyncHtml === 'function'
+    ? options.buildAsyncHtml
+    : null;
   let hoverPopupTimer = null;
   let closePopupTimer = null;
   let isPointerOverPopup = false;
@@ -5078,6 +5259,9 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
     }
   };
 
+  let popupContentRequestToken = 0;
+  const loadingMarkup = '<p class="empty-state">Ładowanie osób...</p>';
+
   const refreshPopupContent = () => {
     const popup = marker.getPopup();
     if (!popup) {
@@ -5088,12 +5272,37 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
     bindPopupHoverHandlers();
   };
 
+  const refreshPopupContentAsync = async () => {
+    const popup = marker.getPopup();
+    if (!popup) {
+      return;
+    }
+
+    const currentToken = ++popupContentRequestToken;
+    mapPopupLoadingOperations += 1;
+    syncMapLoadingIndicator();
+    popup.setContent(loadingMarkup);
+    bindPopupHoverHandlers();
+    try {
+      await waitForNextAnimationFrame();
+      if (currentToken !== popupContentRequestToken) {
+        return;
+      }
+
+      popup.setContent(buildAsyncHtml ? await buildAsyncHtml() : buildHtml());
+      bindPopupHoverHandlers();
+    } finally {
+      mapPopupLoadingOperations = Math.max(0, mapPopupLoadingOperations - 1);
+      syncMapLoadingIndicator();
+    }
+  };
+
   const ensurePopup = () => {
     if (!marker.getPopup()) {
       marker.bindPopup('');
     }
 
-    refreshPopupContent();
+    void refreshPopupContentAsync();
   };
 
   const bindPopupViewportSync = () => {
@@ -5101,8 +5310,8 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
       return;
     }
 
-    mapInstance.on('zoomend', refreshPopupContent);
-    mapInstance.on('moveend', refreshPopupContent);
+    mapInstance.on('zoomend', buildAsyncHtml ? refreshPopupContentAsync : refreshPopupContent);
+    mapInstance.on('moveend', buildAsyncHtml ? refreshPopupContentAsync : refreshPopupContent);
     isViewportSyncBound = true;
   };
 
@@ -5111,8 +5320,8 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
       return;
     }
 
-    mapInstance.off('zoomend', refreshPopupContent);
-    mapInstance.off('moveend', refreshPopupContent);
+    mapInstance.off('zoomend', buildAsyncHtml ? refreshPopupContentAsync : refreshPopupContent);
+    mapInstance.off('moveend', buildAsyncHtml ? refreshPopupContentAsync : refreshPopupContent);
     isViewportSyncBound = false;
   };
 
@@ -5159,12 +5368,13 @@ function attachLazyPopup(marker, buildHtml, onSelect) {
   });
 
   marker.on('popupopen', () => {
-    refreshPopupContent();
+    void refreshPopupContentAsync();
     bindPopupHoverHandlers();
     bindPopupViewportSync();
   });
 
   marker.on('popupclose', () => {
+    popupContentRequestToken += 1;
     isPointerOverPopup = false;
     clearClosePopupTimer();
     unbindPopupViewportSync();
@@ -5830,6 +6040,11 @@ function buildPersonPopupHtml(person) {
   `;
 }
 
+async function buildPersonPopupHtmlAsync(person) {
+  await waitForNextAnimationFrame();
+  return buildPersonPopupHtml(person);
+}
+
 function buildCustomPointPopupHtml(point) {
   return `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(point.addressText || 'Punkt lokalny')}`;
 }
@@ -6382,12 +6597,6 @@ function renderListAppliedRulesMarkup() {
     );
   }
 
-  if (mapDateFilter.pumpType) {
-    ruleBadges.push(
-      `<span class="info-chip map-rule-badge">Rodzaj pompy: ${escapeHtml(mapDateFilter.pumpType)}</span>`
-    );
-  }
-
   if (mapDateFilter.visitType) {
     ruleBadges.push(
       `<span class="info-chip map-rule-badge">Typ wizyty: ${escapeHtml(mapDateFilter.visitType)}</span>`
@@ -6397,6 +6606,24 @@ function renderListAppliedRulesMarkup() {
   if (mapDateFilter.region) {
     ruleBadges.push(
       `<span class="info-chip map-rule-badge">Województwo: ${escapeHtml(mapDateFilter.region)}</span>`
+    );
+  }
+
+  if (mapDateFilter.postalCode) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Kod pocztowy: ${escapeHtml(mapDateFilter.postalCode)}</span>`
+    );
+  }
+
+  if (mapDateFilter.producer) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Producent: ${escapeHtml(mapDateFilter.producer)}</span>`
+    );
+  }
+
+  if (mapDateFilter.installerCompany) {
+    ruleBadges.push(
+      `<span class="info-chip map-rule-badge">Firma montująca: ${escapeHtml(mapDateFilter.installerCompany)}</span>`
     );
   }
 
@@ -8589,14 +8816,18 @@ function paintFilterPanel() {
   const hasInvalidDateRange = mapDateFilterHasInvalidRange;
   const hasDraftChanges = hasMapDateFilterDraftChanges();
   const defaultDraft = buildDefaultMapDateFilterDraft();
-  const currentPumpType = mapDateFilterDraft.pumpType;
   const currentVisitType = mapDateFilterDraft.visitType;
   const currentRegion = mapDateFilterDraft.region;
+  const currentPostalCode = mapDateFilterDraft.postalCode;
+  const currentProducer = mapDateFilterDraft.producer;
+  const currentInstallerCompany = mapDateFilterDraft.installerCompany;
   const canResetNewestDate = Boolean(toYear || toMonth);
   const canResetOldestDate = Boolean(fromMonth || fromYear !== defaultDraft.fromYear);
-  const canResetPumpType = Boolean(currentPumpType);
   const canResetVisitType = Boolean(currentVisitType);
   const canResetRegion = Boolean(currentRegion);
+  const canResetPostalCode = Boolean(currentPostalCode);
+  const canResetProducer = Boolean(currentProducer);
+  const canResetInstallerCompany = Boolean(currentInstallerCompany);
 
   mapDateFilterRenderedCount = allPeople.length > 0
     ? Math.min(allPeople.length, Math.max(mapDateFilterRenderedCount, MAP_DATE_FILTER_BATCH_SIZE))
@@ -8677,25 +8908,6 @@ function paintFilterPanel() {
       <div class="map-filter-divider" aria-hidden="true"></div>
 
       <label class="field filter-date-box">
-        <span>Rodzaj pompy</span>
-        <div class="select-wrap">
-          <select name="pumpType">
-            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.pumpTypes, currentPumpType, 'Wszystkie rodzaje')}
-          </select>
-        </div>
-        <button
-          type="button"
-          class="button-muted filter-panel-section-reset"
-          data-map-date-filter-reset-field="pumpType"
-          ${canResetPumpType ? '' : 'disabled'}
-        >
-          Resetuj
-        </button>
-      </label>
-
-      <div class="map-filter-divider" aria-hidden="true"></div>
-
-      <label class="field filter-date-box">
         <span>Typ wizyty</span>
         <div class="select-wrap">
           <select name="visitType">
@@ -8724,6 +8936,57 @@ function paintFilterPanel() {
           class="button-muted filter-panel-section-reset"
           data-map-date-filter-reset-field="region"
           ${canResetRegion ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <label class="field filter-date-box">
+        <span>Kod pocztowy</span>
+        <div class="select-wrap">
+          <select name="postalCode">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.postalCodes, currentPostalCode, 'Wszystkie kody')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="postalCode"
+          ${canResetPostalCode ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <label class="field filter-date-box">
+        <span>Producent</span>
+        <div class="select-wrap">
+          <select name="producer">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.producers, currentProducer, 'Wszyscy producenci')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="producer"
+          ${canResetProducer ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <label class="field filter-date-box">
+        <span>Firma montująca</span>
+        <div class="select-wrap">
+          <select name="installerCompany">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.installerCompanies, currentInstallerCompany, 'Wszystkie firmy')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="installerCompany"
+          ${canResetInstallerCompany ? '' : 'disabled'}
         >
           Resetuj
         </button>
