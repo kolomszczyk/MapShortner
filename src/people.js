@@ -106,20 +106,46 @@ rawFieldsToggleButtonEl?.addEventListener('click', () => {
 openAccessBoxButtonEl?.addEventListener('click', () => {
   const personName = resolveActivePersonNameForAccessToast();
   dumy();
-  showPeopleToast(`Otwarto ${personName} w Accesie`);
+  void handleOpenAccessFromPeople(personName);
 });
 
 bootstrap();
 
-function showPeopleToast(message) {
+async function handleOpenAccessFromPeople(personName) {
+  const safePersonName = String(personName || 'osobę').trim() || 'osobę';
+
+  try {
+    const bridgeResult = await window.appApi.accessbrigeladkfjlakgjOpenPerson({
+      sourceRowId: activePersonId || ''
+    });
+
+    if (bridgeResult?.ok) {
+      showPeopleToast(`Otwarto ${safePersonName} w Accesie`);
+      return;
+    }
+
+    showPeopleToast(getAccessBridgeErrorMessageForPeople({ personName: safePersonName, code: bridgeResult?.code }), {
+      isError: true
+    });
+  } catch (_error) {
+    showPeopleToast(`Nie udało się otworzyć (${safePersonName}) — Access nie odpowiedział.`, {
+      isError: true
+    });
+  }
+}
+
+function showPeopleToast(message, options = {}) {
   const normalizedMessage = String(message || 'Wykonano akcje');
+  const isError = options?.isError === true;
+  const toastTypeClass = isError ? 'is-error' : 'is-info';
+  const durationMs = isError ? 4200 : 2400;
   const toastListElement = ensurePeopleToastListElement();
   if (!toastListElement) {
     return;
   }
 
   const toastItemEl = document.createElement('div');
-  toastItemEl.className = 'map-toast is-info';
+  toastItemEl.className = `map-toast ${toastTypeClass}`;
   toastItemEl.setAttribute('role', 'status');
 
   const toastBodyEl = document.createElement('div');
@@ -142,7 +168,38 @@ function showPeopleToast(message) {
     window.setTimeout(() => {
       toastItemEl.remove();
     }, 220);
-  }, 2400);
+  }, durationMs);
+}
+
+function getAccessBridgeErrorMessageForPeople({ personName, code }) {
+  const safePersonName = String(personName || 'osobę').trim() || 'osobę';
+  const normalizedCode = String(code || '').trim().toLowerCase();
+
+  if (normalizedCode === 'multiple-instances') {
+    return 'Jest za dużo Accessów i nie wiadomo, w którym otworzyć.';
+  }
+
+  if (normalizedCode === 'not-found') {
+    return `Nie udało się otworzyć (${safePersonName})`;
+  }
+
+  if (normalizedCode === 'no-response') {
+    return `Nie udało się otworzyć (${safePersonName}) — Access nie odpowiedział.`;
+  }
+
+  if (normalizedCode === 'no-instance') {
+    return `Nie udało się otworzyć (${safePersonName}) — brak otwartej instancji Accessa.`;
+  }
+
+  if (normalizedCode === 'unsupported-platform') {
+    return `Nie udało się otworzyć (${safePersonName}) — ta funkcja działa tylko w Windows.`;
+  }
+
+  if (normalizedCode === 'database-mismatch') {
+    return `Nie udało się otworzyć (${safePersonName}) — otwarty jest inny plik Access.`;
+  }
+
+  return `Nie udało się otworzyć (${safePersonName})`;
 }
 
 function ensurePeopleToastListElement() {

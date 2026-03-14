@@ -1480,6 +1480,12 @@ textarea {
   white-space: pre;
 }
 
+.access-vba-snippet {
+  min-height: 360px;
+  width: 100%;
+  resize: vertical;
+}
+
 .full-width {
   grid-column: 1 / -1;
 }

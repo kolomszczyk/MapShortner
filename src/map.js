@@ -1708,17 +1708,69 @@ window.appApi.onTileDownloadState((payload) => {
 
 syncSettingsPanelVisibility();
 renderCurrentInfoPanel();
-openAccessBoxButtonEl?.addEventListener('click', () => {
+openAccessBoxButtonEl?.addEventListener('click', async () => {
   const selectedPerson = resolveSelectedPersonForMapAction();
   const personName = selectedPerson ? getMapPersonDisplayName(selectedPerson) : 'osobę';
   dumy();
-  showMapToast({
-    type: 'info',
-    message: `Otwarto ${personName} w Accesie`,
-    executedAt: new Date().toISOString()
-  });
+  try {
+    const bridgeResult = await window.appApi.accessbrigeladkfjlakgjOpenPerson({
+      sourceRowId: selectedPerson?.sourceRowId || ''
+    });
+
+    if (bridgeResult?.ok) {
+      showMapToast({
+        type: 'info',
+        message: `Otwarto ${personName} w Accesie`,
+        executedAt: new Date().toISOString()
+      });
+      return;
+    }
+
+    showMapToast({
+      type: 'error',
+      message: getAccessBridgeErrorMessage({ personName, code: bridgeResult?.code }),
+      executedAt: new Date().toISOString()
+    });
+  } catch (_error) {
+    showMapToast({
+      type: 'error',
+      message: `Nie udało się otworzyć (${personName}) — Access nie odpowiedział.`,
+      executedAt: new Date().toISOString()
+    });
+  }
 });
 bootstrap();
+
+function getAccessBridgeErrorMessage({ personName, code }) {
+  const safePersonName = String(personName || 'osobę').trim() || 'osobę';
+  const normalizedCode = String(code || '').trim().toLowerCase();
+
+  if (normalizedCode === 'multiple-instances') {
+    return 'Jest za dużo Accessów i nie wiadomo, w którym otworzyć.';
+  }
+
+  if (normalizedCode === 'not-found') {
+    return `Nie udało się otworzyć (${safePersonName})`;
+  }
+
+  if (normalizedCode === 'no-response') {
+    return `Nie udało się otworzyć (${safePersonName}) — Access nie odpowiedział.`;
+  }
+
+  if (normalizedCode === 'no-instance') {
+    return `Nie udało się otworzyć (${safePersonName}) — brak otwartej instancji Accessa.`;
+  }
+
+  if (normalizedCode === 'unsupported-platform') {
+    return `Nie udało się otworzyć (${safePersonName}) — ta funkcja działa tylko w Windows.`;
+  }
+
+  if (normalizedCode === 'database-mismatch') {
+    return `Nie udało się otworzyć (${safePersonName}) — otwarty jest inny plik Access.`;
+  }
+
+  return `Nie udało się otworzyć (${safePersonName})`;
+}
 
 async function bootstrap() {
   const [bootstrapData] = await Promise.all([

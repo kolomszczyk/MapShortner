@@ -196,6 +196,74 @@
                       </div>
 
                       <ul class="meta-list" id="import-meta"></ul>
+
+                      <section class="subpanel">
+                        <div class="subpanel-header">
+                          <div>
+                            <span class="eyebrow">Access Bridge</span>
+                            <h3>Kod VBA do wklejenia</h3>
+                          </div>
+                        </div>
+                        <p class="copy">
+                          Wklej kod do modułu standardowego w Accessie. Bridge wywołuje funkcję <strong>OpenEntity</strong> i oczekuje zwrotu: <strong>ok</strong> albo <strong>not-found</strong>.
+                        </p>
+                        <textarea class="json-export-area access-vba-snippet" readonly>Option Compare Database
+Option Explicit
+
+Public Function OpenEntity(ByVal entityName As String, ByVal recordId As Variant) As String
+  On Error GoTo HandleError
+
+  Select Case LCase$(Trim$(entityName))
+    Case "osoba", "person"
+      OpenEntity = OpenRecordInForm("Osoby", "ID", recordId)
+    Case Else
+      OpenEntity = "not-found:entity"
+  End Select
+  Exit Function
+
+HandleError:
+  OpenEntity = "error:" & Err.Number & ":" & Err.Description
+End Function
+
+Public Function OpenRecordInForm(ByVal formName As String, ByVal keyField As String, ByVal recordId As Variant) As String
+  On Error GoTo HandleError
+
+  DoCmd.OpenForm formName, acNormal
+
+  Dim frm As Form
+  Dim rs As DAO.Recordset
+  Set frm = Forms(formName)
+  Set rs = frm.RecordsetClone
+
+  rs.FindFirst BuildFindCriteria(keyField, recordId)
+  If rs.NoMatch Then
+    OpenRecordInForm = "not-found:record"
+  Else
+    frm.Bookmark = rs.Bookmark
+    frm.SetFocus
+    OpenRecordInForm = "ok"
+  End If
+
+Cleanup:
+  On Error Resume Next
+  If Not rs Is Nothing Then rs.Close
+  Set rs = Nothing
+  Set frm = Nothing
+  Exit Function
+
+HandleError:
+  OpenRecordInForm = "error:" & Err.Number & ":" & Err.Description
+  Resume Cleanup
+End Function
+
+Private Function BuildFindCriteria(ByVal keyField As String, ByVal recordId As Variant) As String
+  If IsNumeric(recordId) Then
+    BuildFindCriteria = "[" & keyField & "]=" & CLng(recordId)
+  Else
+    BuildFindCriteria = "[" & keyField & "]='" & Replace(CStr(recordId), "'", "''") & "'"
+  End If
+End Function</textarea>
+                      </section>
                     </section>
 
                     <section class="panel panel-stack">

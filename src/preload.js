@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('appApi', {
   importTrasaArchive: () => ipcRenderer.invoke('trasa:import'),
   pickAccessFile: () => ipcRenderer.invoke('access:pickFile'),
   importAccessDatabase: (payload) => ipcRenderer.invoke('access:import', payload),
+  accessbrigeladkfjlakgjOpenPerson: (payload) => ipcRenderer.invoke('accessbrigeladkfjlakgj:openPerson', payload),
   runGeocoding: (payload) => ipcRenderer.invoke('geocode:run', payload),
   getDashboardSummary: () => ipcRenderer.invoke('dashboard:getSummary'),
   getTileDownloadState: () => ipcRenderer.invoke('tiles:getState'),

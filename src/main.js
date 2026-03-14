@@ -13,6 +13,7 @@ const {
   loadGoogleMapsApiKey,
   saveAccessPassword
 } = require('./main/access-service');
+const { openPersonInRunningAccessBridge } = require('./main/accessbrigeladkfjlakgj-service');
 const { exportTrasaArchive, importTrasaArchive } = require('./main/trasa-service');
 
 let mainWindow;
@@ -1698,6 +1699,16 @@ ipcMain.handle('access:import', async (_event, payload = {}) => {
     reason: 'manual',
     force: true,
     accessDbPath
+  });
+});
+
+ipcMain.handle('accessbrigeladkfjlakgj:openPerson', async (_event, payload = {}) => {
+  const sourceRowId = String(payload?.sourceRowId || '').trim();
+  const expectedDbPath = String(store.getSetting('accessDbPath') || '').trim();
+
+  return openPersonInRunningAccessBridge({
+    sourceRowId,
+    expectedDbPath
   });
 });
 
