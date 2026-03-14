@@ -147,6 +147,72 @@ npm run release
 - Jesli opis release jest pusty, popup pokaze zwykly komunikat o dostepnej wersji.
 - Po zamknieciu popupu mozna go otworzyc ponownie przyciskiem `Pokaz wiadomosc wersji` w dashboardzie.
 
+## Snippet VBA do Accessa (kopiuj-wklej)
+
+Wklej ten kod do **modulu standardowego** w Accessie (`Alt+F11` -> `Insert` -> `Module`).
+
+```vb
+Option Compare Database
+Option Explicit
+
+Private Const PERSON_FORM_NAME As String = "kontakt wprowadzenie i kontrola"
+Private Const PERSON_KEY_FIELD As String = "ID"
+
+Public Function OpenEntity(ByVal entityName As String, ByVal recordId As Variant) As String
+   On Error GoTo HandleError
+
+   Select Case LCase$(Trim$(entityName))
+      Case "osoba", "person"
+         OpenEntity = OpenRecordInForm(PERSON_FORM_NAME, PERSON_KEY_FIELD, recordId)
+      Case Else
+         OpenEntity = "not-found:entity"
+   End Select
+   Exit Function
+
+HandleError:
+   OpenEntity = "error:" & Err.Number & ":" & Err.Description
+End Function
+
+Public Function OpenRecordInForm(ByVal formName As String, ByVal keyField As String, ByVal recordId As Variant) As String
+   On Error GoTo HandleError
+
+   DoCmd.OpenForm formName, acNormal
+
+   Dim frm As Form
+   Dim rs As DAO.Recordset
+   Set frm = Forms(formName)
+   Set rs = frm.RecordsetClone
+
+   rs.FindFirst BuildFindCriteria(keyField, recordId)
+   If rs.NoMatch Then
+      OpenRecordInForm = "not-found:record"
+   Else
+      frm.Bookmark = rs.Bookmark
+      frm.SetFocus
+      OpenRecordInForm = "ok"
+   End If
+
+Cleanup:
+   On Error Resume Next
+   If Not rs Is Nothing Then rs.Close
+   Set rs = Nothing
+   Set frm = Nothing
+   Exit Function
+
+HandleError:
+   OpenRecordInForm = "error:" & Err.Number & ":" & Err.Description
+   Resume Cleanup
+End Function
+
+Private Function BuildFindCriteria(ByVal keyField As String, ByVal recordId As Variant) As String
+   If IsNumeric(recordId) Then
+      BuildFindCriteria = "[" & keyField & "]=" & CLng(recordId)
+   Else
+      BuildFindCriteria = "[" & keyField & "]='" & Replace(CStr(recordId), "'", "''") & "'"
+   End If
+End Function
+```
+
 ## Uwaga
 
 - Auto-update działa dla aplikacji zbudowanej przez `electron-builder` (nie dla `npm run start`).

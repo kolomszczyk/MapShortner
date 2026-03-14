@@ -71,7 +71,8 @@ if ($accessProcesses.Count -eq 0) {
   Emit-BridgeResult 'error' 'no-instance' 'Brak uruchomionej instancji Accessa.'
 }
 
-if ($accessProcesses.Count -gt 1) {
+$visibleAccessProcesses = @($accessProcesses | Where-Object { $_.MainWindowHandle -ne 0 })
+if ($visibleAccessProcesses.Count -gt 1) {
   Emit-BridgeResult 'error' 'multiple-instances' 'Wykryto wiecej niz jedna instancje Accessa.'
 }
 
