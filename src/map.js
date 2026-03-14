@@ -1,4 +1,5 @@
 import {
+  dumy,
   escapeHtml,
   formatDate,
   formatDateTime,
@@ -43,6 +44,7 @@ const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
 const selectionFocusButtonEl = document.querySelector('[data-map-selection-focus]');
 const selectionBookmarkButtonEl = document.querySelector('[data-map-selection-bookmark]');
 const selectionBookmarkIconEl = document.querySelector('[data-map-selection-bookmark-icon]');
+const openAccessBoxButtonEl = document.querySelector('[data-open-access-box]');
 const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
 
 const PERSON_LOCATION_MARKER_OPACITY = 0.5;
@@ -1706,6 +1708,16 @@ window.appApi.onTileDownloadState((payload) => {
 
 syncSettingsPanelVisibility();
 renderCurrentInfoPanel();
+openAccessBoxButtonEl?.addEventListener('click', () => {
+  const selectedPerson = resolveSelectedPersonForMapAction();
+  const personName = selectedPerson ? getMapPersonDisplayName(selectedPerson) : 'osobę';
+  dumy();
+  showMapToast({
+    type: 'info',
+    message: `Otwarto ${personName} w Accesie`,
+    executedAt: new Date().toISOString()
+  });
+});
 bootstrap();
 
 async function bootstrap() {

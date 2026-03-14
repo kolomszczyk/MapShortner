@@ -396,6 +396,8 @@ export function joinPresent(...parts) {
   return parts.filter(Boolean).join(' ');
 }
 
+export function dumy() {}
+
 export function summarizePath(value) {
   if (!value) {
     return 'Otwórz w Accesie';

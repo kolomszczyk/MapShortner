@@ -1,5 +1,6 @@
 import {
   applySummary,
+  dumy,
   escapeHtml,
   formatDate,
   formatNumber,
@@ -35,6 +36,7 @@ const serviceCardsEl = document.getElementById('person-service-cards');
 const notesListEl = document.getElementById('person-notes');
 const notesSectionEl = notesForm?.closest('.subpanel') || null;
 const serviceCardsSectionEl = serviceCardsEl?.closest('.subpanel') || null;
+const openAccessBoxButtonEl = document.querySelector('[data-open-access-box]');
 
 let activePersonId = null;
 let searchTimer = null;
@@ -101,7 +103,81 @@ rawFieldsToggleButtonEl?.addEventListener('click', () => {
   syncRawFieldsVisibility();
 });
 
+openAccessBoxButtonEl?.addEventListener('click', () => {
+  const personName = resolveActivePersonNameForAccessToast();
+  dumy();
+  showPeopleToast(`Otwarto ${personName} w Accesie`);
+});
+
 bootstrap();
+
+function showPeopleToast(message) {
+  const normalizedMessage = String(message || 'Wykonano akcje');
+  const toastListElement = ensurePeopleToastListElement();
+  if (!toastListElement) {
+    return;
+  }
+
+  const toastItemEl = document.createElement('div');
+  toastItemEl.className = 'map-toast is-info';
+  toastItemEl.setAttribute('role', 'status');
+
+  const toastBodyEl = document.createElement('div');
+  toastBodyEl.className = 'map-toast-body';
+
+  const toastMessageEl = document.createElement('div');
+  toastMessageEl.className = 'map-toast-message';
+  toastMessageEl.textContent = normalizedMessage;
+  toastBodyEl.append(toastMessageEl);
+
+  toastItemEl.append(toastBodyEl);
+  toastListElement.append(toastItemEl);
+
+  window.requestAnimationFrame(() => {
+    toastItemEl.classList.add('is-visible');
+  });
+
+  window.setTimeout(() => {
+    toastItemEl.classList.remove('is-visible');
+    window.setTimeout(() => {
+      toastItemEl.remove();
+    }, 220);
+  }, 2400);
+}
+
+function ensurePeopleToastListElement() {
+  let toastListElement = document.querySelector('[data-people-toast-list]');
+  if (toastListElement) {
+    return toastListElement;
+  }
+
+  toastListElement = document.createElement('div');
+  toastListElement.className = 'map-toast-list';
+  toastListElement.setAttribute('data-people-toast-list', 'true');
+  toastListElement.setAttribute('aria-live', 'polite');
+  toastListElement.setAttribute('aria-atomic', 'false');
+  document.body.appendChild(toastListElement);
+  return toastListElement;
+}
+
+function resolveActivePersonNameForAccessToast() {
+  const person = activePersonId
+    ? peopleSearchState.items.find((entry) => entry?.sourceRowId === activePersonId)
+    : null;
+
+  const candidate = String(
+    person?.fullName
+    || person?.companyName
+    || detailTitleEl?.textContent
+    || ''
+  ).trim();
+
+  if (!candidate || candidate === 'Wybierz osobe z listy' || candidate === 'Szczegoly osoby') {
+    return 'osobę';
+  }
+
+  return candidate;
+}
 
 async function bootstrap() {
   const bootstrapData = await window.appApi.getBootstrap();
