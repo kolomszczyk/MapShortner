@@ -40,6 +40,7 @@ const selectionColorIndicatorEl = document.querySelector('[data-map-selection-co
 const selectionCopyEl = document.querySelector('[data-map-selection-copy]');
 const selectionMetaEl = document.querySelector('[data-map-selection-meta]');
 const selectionExtraEl = document.querySelector('[data-map-selection-extra]');
+const selectionFocusButtonEl = document.querySelector('[data-map-selection-focus]');
 const selectionBookmarkButtonEl = document.querySelector('[data-map-selection-bookmark]');
 const selectionBookmarkIconEl = document.querySelector('[data-map-selection-bookmark-icon]');
 const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
@@ -1068,8 +1069,28 @@ function resolveSelectedPersonSourceRowId() {
   return '';
 }
 
+function resolveSelectedPersonForMapAction() {
+  const sourceRowId = resolveSelectedPersonSourceRowId();
+  if (!sourceRowId) {
+    return null;
+  }
+
+  if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === sourceRowId) {
+    return selectionPanelState.details.person;
+  }
+
+  if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId === sourceRowId) {
+    return selectionPanelState.person;
+  }
+
+  return allPeople.find((person) => person?.sourceRowId === sourceRowId)
+    || findPersonBySourceRowId(sourceRowId)
+    || knownPeopleBySourceRowId.get(sourceRowId)
+    || null;
+}
+
 function syncSelectionBookmarkUiState() {
-  if (!selectionActionsEl || !selectionBookmarkButtonEl) {
+  if (!selectionActionsEl || !selectionFocusButtonEl || !selectionBookmarkButtonEl) {
     return;
   }
 
@@ -1078,6 +1099,7 @@ function syncSelectionBookmarkUiState() {
   const shouldShowActions = isSelectionPanelActive && isPersonMode && !isSelectionOverlapChooserActive;
 
   selectionActionsEl.hidden = !shouldShowActions;
+  selectionFocusButtonEl.disabled = !shouldShowActions || selectionPanelState.kind !== 'person';
   selectionBookmarkButtonEl.disabled = !shouldShowActions || selectionPanelState.kind !== 'person';
 
   if (!shouldShowActions) {
@@ -1188,6 +1210,15 @@ function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
     paintBookmarkedListPanel();
   }
 }
+
+selectionFocusButtonEl?.addEventListener('click', () => {
+  const person = resolveSelectedPersonForMapAction();
+  if (!person) {
+    return;
+  }
+
+  focusSelectionOnMap(person, { animate: true });
+});
 
 selectionBookmarkButtonEl?.addEventListener('click', async () => {
   const sourceRowId = resolveSelectedPersonSourceRowId();
@@ -5068,13 +5099,15 @@ function openSelectionPanelForSourceRowId(sourceRowId) {
   });
 }
 
-function focusSelectionOnMap(person) {
+function focusSelectionOnMap(person, options = {}) {
   if (!mapInstance || !Number.isFinite(person?.lat) || !Number.isFinite(person?.lng)) {
     return;
   }
 
+  const shouldAnimate = options.animate === true;
+
   mapInstance.panTo([person.lat, person.lng], {
-    animate: false
+    animate: shouldAnimate
   });
 }
 
