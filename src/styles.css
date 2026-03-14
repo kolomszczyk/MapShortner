@@ -62,6 +62,8 @@
   --success: #2e6f4a;
   --success-soft: rgba(46, 111, 74, 0.12);
   --warning: #8c6518;
+  --access-red: #b71c1c;
+  --access-red-strong: #8a1616;
   --shadow: 0 22px 50px rgba(25, 35, 28, 0.12);
   --shadow-soft: 0 10px 24px rgba(25, 35, 28, 0.08);
   --radius-xl: 28px;
@@ -683,6 +685,40 @@ textarea {
   color: var(--accent-strong);
   border-color: rgba(46, 111, 74, 0.3);
   background: rgba(226, 242, 231, 0.92);
+}
+
+.map-selection-action-button[aria-label='Baza danych'],
+.person-detail-action-button[aria-label='Baza danych'] {
+  width: auto;
+  min-width: 34px;
+  padding: 0 10px;
+  gap: 8px;
+  justify-content: flex-start;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--access-red) 0%, var(--access-red-strong) 100%);
+  border-color: rgba(138, 22, 22, 0.48);
+}
+
+.map-selection-action-button[aria-label='Baza danych']:hover:not(:disabled),
+.person-detail-action-button[aria-label='Baza danych']:hover:not(:disabled) {
+  background: linear-gradient(135deg, #c92727 0%, #9b1b1b 100%);
+  border-color: rgba(138, 22, 22, 0.64);
+}
+
+.database-action-label {
+  font-size: 0.78rem;
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.database-action-image {
+  width: 30px;
+  height: 22px;
+  object-fit: contain;
+  object-position: center;
+  flex: 0 0 auto;
+  filter: none;
 }
 
 .map-selection-cards {

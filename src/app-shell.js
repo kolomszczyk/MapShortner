@@ -398,7 +398,7 @@ export function joinPresent(...parts) {
 
 export function summarizePath(value) {
   if (!value) {
-    return 'Nie wybrano pliku';
+    return 'Otwórz w Accesie';
   }
   return value.length > 72 ? `${value.slice(0, 40)} ... ${value.slice(-24)}` : value;
 }
