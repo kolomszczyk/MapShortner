@@ -3570,7 +3570,7 @@ async function loadMapFilterOptions() {
     visitTypes: toNormalizedList(options?.visitTypes),
     regions: toNormalizedCaseInsensitiveList(options?.regions, formatRegionLabel),
     postalCodes: toNormalizedList(options?.postalCodes),
-    producers: toNormalizedList(options?.producers),
+    producers: toNormalizedCaseInsensitiveList(options?.producers, formatRegionLabel),
     installerCompanies: toNormalizedList(options?.installerCompanies)
   };
 
@@ -8855,7 +8855,6 @@ function paintFilterPanel() {
 
   selectionExtraEl.innerHTML = `
     <form class="time-filter-panel" data-map-date-filter-form>
-      <span class="eyebrow filter-panel-subtitle">Sortuj po dacie</span>
       <div class="filter-date-stack">
         <div class="field filter-date-box">
           <span>Najnowsza data</span>
@@ -8908,23 +8907,6 @@ function paintFilterPanel() {
       <div class="map-filter-divider" aria-hidden="true"></div>
 
       <label class="field filter-date-box">
-        <span>Typ wizyty</span>
-        <div class="select-wrap">
-          <select name="visitType">
-            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.visitTypes, currentVisitType, 'Wszystkie typy')}
-          </select>
-        </div>
-        <button
-          type="button"
-          class="button-muted filter-panel-section-reset"
-          data-map-date-filter-reset-field="visitType"
-          ${canResetVisitType ? '' : 'disabled'}
-        >
-          Resetuj
-        </button>
-      </label>
-
-      <label class="field filter-date-box">
         <span>Województwo</span>
         <div class="select-wrap">
           <select name="region">
@@ -8936,6 +8918,23 @@ function paintFilterPanel() {
           class="button-muted filter-panel-section-reset"
           data-map-date-filter-reset-field="region"
           ${canResetRegion ? '' : 'disabled'}
+        >
+          Resetuj
+        </button>
+      </label>
+
+      <label class="field filter-date-box">
+        <span>Producent</span>
+        <div class="select-wrap">
+          <select name="producer">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.producers, currentProducer, 'Wszyscy producenci')}
+          </select>
+        </div>
+        <button
+          type="button"
+          class="button-muted filter-panel-section-reset"
+          data-map-date-filter-reset-field="producer"
+          ${canResetProducer ? '' : 'disabled'}
         >
           Resetuj
         </button>
@@ -8959,17 +8958,17 @@ function paintFilterPanel() {
       </label>
 
       <label class="field filter-date-box">
-        <span>Producent</span>
+        <span>Typ wizyty</span>
         <div class="select-wrap">
-          <select name="producer">
-            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.producers, currentProducer, 'Wszyscy producenci')}
+          <select name="visitType">
+            ${buildMapFilterSelectOptionsMarkup(mapFilterOptions.visitTypes, currentVisitType, 'Wszystkie typy')}
           </select>
         </div>
         <button
           type="button"
           class="button-muted filter-panel-section-reset"
-          data-map-date-filter-reset-field="producer"
-          ${canResetProducer ? '' : 'disabled'}
+          data-map-date-filter-reset-field="visitType"
+          ${canResetVisitType ? '' : 'disabled'}
         >
           Resetuj
         </button>
