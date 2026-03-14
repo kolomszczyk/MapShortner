@@ -127,6 +127,10 @@ if ($normalizedAck.StartsWith('not-found')) {
   Emit-BridgeResult 'error' 'not-found' 'Access nie znalazl wskazanego rekordu.'
 }
 
+if ($normalizedAck.StartsWith('error:form-not-found')) {
+  Emit-BridgeResult 'error' 'form-not-found' 'Access nie znalazl oczekiwanego formularza.'
+}
+
 Emit-BridgeResult 'error' 'no-response' ('Nieznana odpowiedz Accessa: ' + $ack)
 `;
 

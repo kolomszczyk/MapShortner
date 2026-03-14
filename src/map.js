@@ -1769,6 +1769,10 @@ function getAccessBridgeErrorMessage({ personName, code }) {
     return `Nie udało się otworzyć (${safePersonName}) — otwarty jest inny plik Access.`;
   }
 
+  if (normalizedCode === 'form-not-found') {
+    return `Nie udało się otworzyć (${safePersonName}) — formularz nie istnieje w Accessie.`;
+  }
+
   return `Nie udało się otworzyć (${safePersonName})`;
 }
 

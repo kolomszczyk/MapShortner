@@ -119,15 +119,23 @@
             <textarea class="json-export-area access-vba-snippet" data-access-vba-snippet readonly>Option Compare Database
 Option Explicit
 
-Private Const PERSON_FORM_NAME As String = "kontakt wprowadzenie i kontrola"
+Private Const PERSON_FORM_NAME_PRIMARY As String = "Kontakt wprowadzanie i kontrola"
+Private Const PERSON_FORM_NAME_FALLBACK As String = "Osoby"
 Private Const PERSON_KEY_FIELD As String = "ID"
 
 Public Function OpenEntity(ByVal entityName As String, ByVal recordId As Variant) As String
   On Error GoTo HandleError
 
+  Dim targetFormName As String
+  targetFormName = ResolveExistingFormName(PERSON_FORM_NAME_PRIMARY, PERSON_FORM_NAME_FALLBACK)
+
   Select Case LCase$(Trim$(entityName))
     Case "osoba", "person"
-      OpenEntity = OpenRecordInForm(PERSON_FORM_NAME, PERSON_KEY_FIELD, recordId)
+      If Len(targetFormName) = 0 Then
+        OpenEntity = "error:form-not-found"
+      Else
+        OpenEntity = OpenRecordInForm(targetFormName, PERSON_KEY_FIELD, recordId)
+      End If
     Case Else
       OpenEntity = "not-found:entity"
   End Select
@@ -143,7 +151,7 @@ Public Function OpenRecordInForm(ByVal formName As String, ByVal keyField As Str
   DoCmd.OpenForm formName, acNormal
 
   Dim frm As Form
-  Dim rs As DAO.Recordset
+  Dim rs As Object
   Set frm = Forms(formName)
   Set rs = frm.RecordsetClone
 
@@ -166,6 +174,39 @@ Cleanup:
 HandleError:
   OpenRecordInForm = "error:" & Err.Number & ":" & Err.Description
   Resume Cleanup
+End Function
+
+Private Function ResolveExistingFormName(ParamArray candidates() As Variant) As String
+  Dim index As Long
+  Dim candidate As String
+
+  For index = LBound(candidates) To UBound(candidates)
+    candidate = Trim$(CStr(candidates(index)))
+    If Len(candidate) > 0 And FormExistsByName(candidate) Then
+      ResolveExistingFormName = candidate
+      Exit Function
+    End If
+  Next index
+
+  ResolveExistingFormName = ""
+End Function
+
+Private Function FormExistsByName(ByVal formName As String) As Boolean
+  On Error GoTo HandleError
+
+  Dim formEntry As Object
+  For Each formEntry In CurrentProject.AllForms
+    If StrComp(CStr(formEntry.Name), formName, vbTextCompare) = 0 Then
+      FormExistsByName = True
+      Exit Function
+    End If
+  Next formEntry
+
+  FormExistsByName = False
+  Exit Function
+
+HandleError:
+  FormExistsByName = False
 End Function
 
 Private Function BuildFindCriteria(ByVal keyField As String, ByVal recordId As Variant) As String
