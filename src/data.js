@@ -1,4 +1,7 @@
 import { applySummary, escapeHtml, initShell } from './app-shell.js';
+import { fetchImportTables, fetchTableRows } from './features/data/data-service.js';
+import { renderTableHeader, renderTableRows } from './features/data/table-view.js';
+import { getBootstrap, onOperationStatus } from './shared/data/app-api.js';
 
 initShell('data');
 
@@ -14,7 +17,7 @@ let currentPage = 1;
 let currentTableName = null;
 let tableColumns = [];
 
-window.appApi.onOperationStatus(async (payload) => {
+onOperationStatus(async (payload) => {
   if (
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import')
@@ -47,13 +50,13 @@ nextPageBtn.addEventListener('click', async () => {
 bootstrap();
 
 async function bootstrap() {
-  const bootstrapData = await window.appApi.getBootstrap();
+  const bootstrapData = await getBootstrap();
   applySummary(bootstrapData.summary);
   await refreshTables();
 }
 
 async function refreshTables() {
-  const tables = await window.appApi.getImportTables();
+  const tables = await fetchImportTables();
   tableSelect.innerHTML = tables
     .map(
       (table) =>
@@ -84,62 +87,22 @@ async function loadPage() {
     return;
   }
 
-  const payload = await window.appApi.getTableRows({
+  const payload = await fetchTableRows({
     tableName: currentTableName,
     page: currentPage,
     pageSize: 20,
     query: tableSearchInput.value
   });
 
-  const tables = await window.appApi.getImportTables();
+  const tables = await fetchImportTables();
   const currentTable = tables.find((table) => table.name === currentTableName);
   tableColumns = currentTable?.columns || [];
 
-  renderHeader(tableColumns);
-  renderRows(payload.rows, tableColumns);
+  renderTableHeader(tableHeadEl, tableColumns);
+  renderTableRows(tableBodyEl, payload.rows, tableColumns);
 
   const totalPages = Math.max(1, Math.ceil(payload.total / payload.pageSize));
   pagerInfoEl.textContent = `Strona ${payload.page} z ${totalPages}`;
   prevPageBtn.disabled = payload.page <= 1;
   nextPageBtn.disabled = payload.page >= totalPages;
-}
-
-function renderHeader(columns) {
-  tableHeadEl.innerHTML = columns
-    .slice(0, 8)
-    .map((column) => `<th>${escapeHtml(column.name)}</th>`)
-    .join('');
-}
-
-function renderRows(rows, columns) {
-  const visibleColumns = columns.slice(0, 8).map((column) => column.name);
-  if (rows.length === 0) {
-    tableBodyEl.innerHTML = `
-      <tr>
-        <td colspan="${Math.max(visibleColumns.length, 1)}" class="empty-state-cell">
-          Brak rekordow dla wybranej tabeli.
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  tableBodyEl.innerHTML = rows
-    .map((row) => {
-      const cells = visibleColumns
-        .map((columnName) => `<td>${escapeHtml(displayCellValue(row.data[columnName]))}</td>`)
-        .join('');
-      return `<tr>${cells}</tr>`;
-    })
-    .join('');
-}
-
-function displayCellValue(value) {
-  if (value == null || value === '') {
-    return 'Brak';
-  }
-  if (typeof value === 'object') {
-    return JSON.stringify(value);
-  }
-  return String(value);
 }

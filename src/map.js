@@ -1,4 +1,20 @@
 import {
+  getBootstrap,
+  getMapDateFilterOptions,
+  getMapFilterOptions,
+  getMapPoints,
+  getMapSelectionHistory,
+  getPersonDetails,
+  listPeople,
+  onOperationStatus,
+  onTileDownloadState,
+  openPersonInAccess,
+  queueHoverTilePrefetch as queueHoverTilePrefetchApi,
+  queueViewportTilePrefetch as queueViewportTilePrefetchApi,
+  setMapSelectionHistory,
+  setPersonBookmark
+} from './features/map/data/map-service.js';
+import {
   dumy,
   escapeHtml,
   formatDate,
@@ -11,6 +27,68 @@ import {
   summarizePath
 } from './app-shell.js';
 import { initDashboardPanel } from './dashboard-panel.js';
+import { getAccessBridgeErrorMessage } from './shared/data/access-bridge.js';
+import {
+  extractMapTimeColorRangeLabelNumber,
+  formatMapTimeColorRangeOrdinalLabel,
+  getNextMapTimeColorRangeLabel as getNextMapTimeColorRangeLabelUtil
+} from './features/map/utils/time-color-ordinal.js';
+import {
+  formatRgbChannelToHex,
+  getMapTimeColorRelativeLuminance,
+  normalizeHexColorInputValue,
+  normalizeNonNegativeIntegerInputValue,
+  parseHexColorToRgb
+} from './features/map/utils/color.js';
+import {
+  extractMonthNumberValue,
+  extractMonthValue,
+  extractYearValue,
+  getMonthEndDate,
+  normalizeDateInputValue,
+  normalizeMonthInputValue,
+  normalizeMonthNumberInputValue,
+  normalizeYearInputValue
+} from './features/map/utils/date.js';
+import {
+  buildMapTimeColorDateFromDaysAgo as buildMapTimeColorDateFromDaysAgoUtil,
+  buildMapTimeColorRangeDatesFromDaysValues as buildMapTimeColorRangeDatesFromDaysValuesUtil,
+  convertMapTimeColorDateToDaysAgo as convertMapTimeColorDateToDaysAgoUtil,
+  getMapTimeColorRangeDateComparableValue as getMapTimeColorRangeDateComparableValueUtil
+} from './features/map/utils/date-math.js';
+import {
+  buildMapTimeColorMiddleBoundaryDate as buildMapTimeColorMiddleBoundaryDateUtil,
+  buildMapTimeColorMiddleDateDraft as buildMapTimeColorMiddleDateDraftUtil,
+  buildMapTimeColorRangeDateDraft as buildMapTimeColorRangeDateDraftUtil,
+  resolveMapTimeColorMiddleBoundarySelection as resolveMapTimeColorMiddleBoundarySelectionUtil,
+  resolveMapTimeColorMiddleDateDraft as resolveMapTimeColorMiddleDateDraftUtil
+} from './features/map/utils/date-boundary.js';
+import {
+  buildCustomPointKey,
+  buildPersonKey,
+  buildPersonKeyFromSourceRowId,
+  isPointVisible
+} from './features/map/utils/marker-helpers.js';
+import {
+  readLastSelectedPersonId as readLastSelectedPersonIdUtil,
+  readLastSelectedPersonRestoreState as readLastSelectedPersonRestoreStateUtil,
+  saveLastSelectedPersonDetails as saveLastSelectedPersonDetailsUtil,
+  saveLastSelectedPersonId as saveLastSelectedPersonIdUtil,
+  saveLastSelectedPersonRestoreState as saveLastSelectedPersonRestoreStateUtil
+} from './features/map/utils/selection-storage.js';
+import { copyTextToClipboard as copyTextToClipboardUtil } from './features/map/ui/clipboard.js';
+import { createMapToastPresenter } from './features/map/ui/map-toast.js';
+import { bindMapToolbarIcons } from './features/map/controllers/icons-controller.js';
+import { bindMapInteractions } from './features/map/controllers/map-interactions-controller.js';
+import { initializeMapCore } from './features/map/controllers/map-core-controller.js';
+import { createMarkerRenderController } from './features/map/controllers/marker-render-controller.js';
+import { createOverlapSelectionController } from './features/map/controllers/overlap-selection-controller.js';
+import { createPersonSelectionResolverController } from './features/map/controllers/person-selection-resolver-controller.js';
+import { bindSelectionPanelFieldEvents } from './features/map/controllers/panel-field-events-controller.js';
+import { routeSelectionPanelClick } from './features/map/controllers/panel-click-router.js';
+import { bindSidePanelControls } from './features/map/controllers/side-panels-controller.js';
+import { createVisibleMarkerDiffController } from './features/map/controllers/visible-marker-diff-controller.js';
+import { createVisibleMarkerSyncController } from './features/map/controllers/visible-markers-controller.js';
 
 initShell('map');
 
@@ -45,6 +123,9 @@ const selectionFocusButtonEl = document.querySelector('[data-map-selection-focus
 const selectionBookmarkButtonEl = document.querySelector('[data-map-selection-bookmark]');
 const selectionBookmarkIconEl = document.querySelector('[data-map-selection-bookmark-icon]');
 const openAccessBoxButtonEl = document.querySelector('[data-open-access-box]');
+const showMapToast = createMapToastPresenter({
+  resolveHost: () => mapEl || mapCanvasPanelEl || mapBoardEl
+});
 const isDevMode = window.appApi?.runtimeMeta?.isDevMode === true;
 
 if (settingsButtonEl) {
@@ -231,8 +312,6 @@ let mapTimeColorDateMatchMode = restoredMapTimeColorDateMatchMode;
 let mapDateFilterApplyTimer = null;
 let mapDateFilterApplyRequestToken = 0;
 let mapPointsRequestToken = 0;
-let visibleMarkerSyncRequestToken = 0;
-let visibleMarkerSyncTimer = 0;
 let mapPopupLoadingOperations = 0;
 let isMapPointsLoading = false;
 let personSearchTimer = null;
@@ -291,7 +370,80 @@ let lastQueuedHoverTilePrefetchKey = '';
 let activeTilePackageRevision = 1;
 let overlapSelectionBypassSourceRowId = null;
 let isSelectionOverlapChooserActive = false;
-let mapToastListEl = null;
+
+const visibleMarkerSyncController = createVisibleMarkerSyncController({
+  windowObject: window,
+  requestAnimationFrameFn: requestAnimationFrame,
+  mapVisibleMarkerScanChunkSize: MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE,
+  visibleBoundsPadding: VISIBLE_BOUNDS_PADDING,
+  getMapInstance: () => mapInstance,
+  getAllPeople: () => allPeople,
+  getAllCustomPoints: () => allCustomPoints,
+  shouldRenderPerson: (person) => shouldRenderMapTimeColorPersonMarker(person),
+  isPointVisible,
+  applyVisibleMarkerDiff
+});
+
+const markerRenderController = createMarkerRenderController({
+  requestAnimationFrameFn: requestAnimationFrame,
+  markerBatchSize: MARKER_BATCH_SIZE,
+  getMarkerSyncGeneration: () => markerSyncGeneration,
+  getLeaflet: () => (typeof L === 'undefined' ? null : L),
+  getPersonRenderer: () => personRenderer,
+  buildPersonKey,
+  buildCustomPointKey,
+  visiblePeopleMarkers,
+  visibleCustomMarkers,
+  buildDefaultPersonMarkerStyle,
+  attachLazyPopup,
+  buildPersonPopupHtml,
+  buildPersonPopupHtmlAsync,
+  onSelectPersonPoint: (person, marker, options) => selectPersonPoint(person, marker, options),
+  getActiveSelection: () => activeSelection,
+  setActiveSelectionMarker: (marker) => {
+    if (activeSelection) {
+      activeSelection.marker = marker;
+    }
+  },
+  applyMarkerSelection,
+  getPeopleLayer: () => peopleLayer,
+  getCustomLayer: () => customLayer,
+  syncPersonMarkerAppearance,
+  buildCustomPointPopupHtml,
+  onSelectCustomPoint: (point, marker, options) => selectCustomPoint(point, marker, options)
+});
+
+const visibleMarkerDiffController = createVisibleMarkerDiffController({
+  getMapInstance: () => mapInstance,
+  buildPersonKey,
+  buildCustomPointKey,
+  visiblePeopleMarkers,
+  visibleCustomMarkers,
+  getPeopleLayer: () => peopleLayer,
+  getCustomLayer: () => customLayer,
+  incrementMarkerSyncGeneration: () => {
+    markerSyncGeneration += 1;
+    return markerSyncGeneration;
+  },
+  scheduleMarkerRender: (state) => {
+    scheduleMarkerRender(state);
+  }
+});
+
+const overlapSelectionController = createOverlapSelectionController({
+  getMapInstance: () => mapInstance,
+  getPersonMarkerBySourceRowId,
+  getVisiblePeopleMarkers: () => visiblePeopleMarkers,
+  getSupplementalPeopleMarkers: () => supplementalPeopleMarkers,
+  findPersonBySourceRowId,
+  overlapDistancePx: PERSON_POPUP_OVERLAP_DISTANCE_PX
+});
+
+const personSelectionResolverController = createPersonSelectionResolverController({
+  getPersonSelectionHistory: () => personSelectionHistory,
+  getActiveSelection: () => activeSelection,
+  readLastSelectedPersonId
+});
 
 function endTimeColorChartDragState(options = {}) {
   const shouldCommit = Boolean(options?.commit);
@@ -527,81 +679,28 @@ function focusMapTimeColorLabelInput(rangeId, options = {}) {
   labelInput.setSelectionRange?.(valueLength, valueLength);
 }
 
-selectionButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('selection');
+bindMapToolbarIcons({
+  selectionButtonEl,
+  searchButtonEl,
+  listButtonEl,
+  bookmarkedButtonEl,
+  historyButtonEl,
+  filterButtonEl,
+  colorsButtonEl,
+  settingsButtonEl,
+  onOpenInfoPanelMode: openInfoPanelMode,
+  onFocusMapSearchInput: focusMapSearchInput,
+  onToggleSettingsPanel: toggleSettingsPanel
 });
 
-searchButtonEl?.addEventListener('click', () => {
-  if (!openInfoPanelMode('search')) {
-    focusMapSearchInput();
+bindMapInteractions({
+  mapEl,
+  onCopyPersonId: (personId) => {
+    void copyTextToClipboard(personId);
+  },
+  onOpenPopupPerson: (sourceRowId) => {
+    openSelectionPanelForSourceRowId(sourceRowId);
   }
-});
-
-listButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('list');
-});
-
-bookmarkedButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('bookmarked');
-});
-
-historyButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('history');
-});
-
-filterButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('filter');
-});
-
-colorsButtonEl?.addEventListener('click', () => {
-  openInfoPanelMode('colors');
-});
-
-settingsButtonEl?.addEventListener('click', () => {
-  toggleSettingsPanel();
-});
-
-mapEl?.addEventListener('click', (event) => {
-  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
-  if (copyPersonIdControl) {
-    event.preventDefault();
-    event.stopPropagation();
-    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
-    return;
-  }
-
-  const popupPersonEntry = event.target.closest('[data-map-popup-person-source-row-id]');
-  if (!popupPersonEntry) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-
-  openSelectionPanelForSourceRowId(popupPersonEntry.getAttribute('data-map-popup-person-source-row-id'));
-});
-
-mapEl?.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') {
-    return;
-  }
-
-  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
-  if (copyPersonIdControl) {
-    event.preventDefault();
-    event.stopPropagation();
-    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
-    return;
-  }
-
-  const popupPersonEntry = event.target.closest('[data-map-popup-person-source-row-id]');
-  if (!popupPersonEntry) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  openSelectionPanelForSourceRowId(popupPersonEntry.getAttribute('data-map-popup-person-source-row-id'));
 });
 
 selectionExtraEl?.addEventListener('pointerdown', (event) => {
@@ -635,393 +734,277 @@ function handleSelectionPanelClick(event) {
     }, 0);
   }
 
-  const rawFieldsToggleButton = event.target.closest('[data-map-toggle-raw-fields]');
-  if (rawFieldsToggleButton && infoPanelMode === 'selection' && selectionPanelState.kind === 'person') {
-    areMapRawFieldsExpanded = !areMapRawFieldsExpanded;
-    persistMapRawFieldsExpanded();
-    paintPersonSelection(selectionPanelState.details);
-    return;
-  }
+  routeSelectionPanelClick(event, {
+    infoPanelMode,
+    selectionPanelKind: selectionPanelState.kind,
+    onToggleRawFields: () => {
+      areMapRawFieldsExpanded = !areMapRawFieldsExpanded;
+      persistMapRawFieldsExpanded();
+      paintPersonSelection(selectionPanelState.details);
+    },
+    onTogglePersonBookmarkRow: (bookmarkElement) => {
+      void togglePersonBookmarkFromListRow(bookmarkElement);
+    },
+    onCopyPersonId: (personId) => {
+      void copyTextToClipboard(personId);
+    },
+    onSelectOverlapPerson: (sourceRowId) => {
+      const normalizedSourceRowId = String(sourceRowId || '').trim();
+      if (!normalizedSourceRowId) {
+        return;
+      }
 
-  const personRowBookmarkToggle = event.target.closest('[data-map-person-bookmark-toggle]');
-  if (personRowBookmarkToggle) {
-    event.preventDefault();
-    event.stopPropagation();
-    void togglePersonBookmarkFromListRow(personRowBookmarkToggle);
-    return;
-  }
+      const person = findPersonBySourceRowId(normalizedSourceRowId);
+      if (!person) {
+        return;
+      }
 
-  const copyPersonIdControl = event.target.closest('[data-map-copy-person-id]');
-  if (copyPersonIdControl) {
-    event.preventDefault();
-    event.stopPropagation();
-    void copyTextToClipboard(copyPersonIdControl.getAttribute('data-map-copy-person-id'));
-    return;
-  }
-
-  const overlapPersonButton = event.target.closest('[data-map-overlap-source-row-id]');
-  if (overlapPersonButton && infoPanelMode === 'selection') {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const sourceRowId = overlapPersonButton.getAttribute('data-map-overlap-source-row-id');
-    const normalizedSourceRowId = String(sourceRowId || '').trim();
-    if (!normalizedSourceRowId) {
-      return;
-    }
-
-    const person = findPersonBySourceRowId(normalizedSourceRowId);
-    if (!person) {
-      return;
-    }
-
-    focusSelectionOnMap(person);
-    void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const sameLocationPersonButton = event.target.closest('[data-map-same-location-source-row-id]');
-  if (sameLocationPersonButton && infoPanelMode === 'selection') {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const sourceRowId = sameLocationPersonButton.getAttribute('data-map-same-location-source-row-id');
-    const normalizedSourceRowId = String(sourceRowId || '').trim();
-    if (!normalizedSourceRowId) {
-      return;
-    }
-
-    const person = findPersonBySourceRowId(normalizedSourceRowId);
-    if (!person) {
-      return;
-    }
-
-    focusSelectionOnMap(person);
-    void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const filterResultButton = event.target.closest('[data-map-filter-source-row-id]');
-  if (filterResultButton && infoPanelMode === 'filter') {
-    const sourceRowId = filterResultButton.getAttribute('data-map-filter-source-row-id');
-    const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
-    if (!person) {
-      return;
-    }
-
-    focusSelectionOnMap(person);
-    void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const searchResultButton = event.target.closest('[data-map-search-source-row-id]');
-  if (searchResultButton && infoPanelMode === 'search') {
-    const sourceRowId = searchResultButton.getAttribute('data-map-search-source-row-id');
-    const searchResult = personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId);
-    if (!searchResult) {
-      return;
-    }
-
-    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || searchResult;
-    focusSelectionOnMap(mapPerson);
-    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const listResultButton = event.target.closest('[data-map-list-source-row-id]');
-  if (listResultButton && infoPanelMode === 'list') {
-    const sourceRowId = listResultButton.getAttribute('data-map-list-source-row-id');
-    const listResult = personListState.results.find((entry) => entry.sourceRowId === sourceRowId);
-    if (!listResult) {
-      return;
-    }
-
-    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
-    focusSelectionOnMap(mapPerson);
-    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const bookmarkedResultButton = event.target.closest('[data-map-bookmarked-source-row-id]');
-  if (bookmarkedResultButton && infoPanelMode === 'bookmarked') {
-    const sourceRowId = bookmarkedResultButton.getAttribute('data-map-bookmarked-source-row-id');
-    const listResult = bookmarkedPersonListState.results.find((entry) => entry.sourceRowId === sourceRowId);
-    if (!listResult) {
-      return;
-    }
-
-    const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
-    focusSelectionOnMap(mapPerson);
-    void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-    return;
-  }
-
-  const clearSearchButton = event.target.closest('[data-map-person-search-clear]');
-  if (clearSearchButton && infoPanelMode === 'search') {
-    updatePersonSearchQuery('', { immediate: true });
-    return;
-  }
-
-  const resetFilterFieldButton = event.target.closest('[data-map-date-filter-reset-field]');
-  if (resetFilterFieldButton && infoPanelMode === 'filter') {
-    const fieldName = String(resetFilterFieldButton.getAttribute('data-map-date-filter-reset-field') || '').trim();
-    mapDateFilterDraft = resetMapDateFilterDraftField(mapDateFilterDraft, fieldName);
-    mapDateFilterHasInvalidRange = false;
-    persistMapDateFilterState();
-    scheduleMapDateFilterApply({ immediate: true });
-    return;
-  }
-
-  const resetFilterButton = event.target.closest('[data-map-date-filter-reset]');
-  if (resetFilterButton && infoPanelMode === 'filter') {
-    mapDateFilterDraft = buildDefaultMapDateFilterDraft();
-    mapDateFilterHasInvalidRange = false;
-    persistMapDateFilterState();
-    scheduleMapDateFilterApply({ immediate: true });
-    return;
-  }
-
-  const addTimeColorRangeButton = event.target.closest('[data-map-time-color-add]');
-  if (addTimeColorRangeButton && infoPanelMode === 'colors') {
-    mapTimeColorRanges = insertMapTimeColorRangeBeforeSpecialRanges(
-      mapTimeColorRanges,
-      buildDefaultMapTimeColorRange(mapTimeColorRanges.length, {
-        label: getNextMapTimeColorRangeLabel(mapTimeColorRanges, mapTimeColorRanges.length)
-      })
-    );
-    persistMapTimeColorRanges();
-    paintTimeColorPanel();
-    return;
-  }
-
-  const removeTimeColorRangeButton = event.target.closest('[data-map-time-color-remove]');
-  if (removeTimeColorRangeButton && infoPanelMode === 'colors') {
-    const rangeId = removeTimeColorRangeButton.getAttribute('data-map-time-color-remove');
-    const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
-    if (!range || isMapTimeColorProtectedRange(range)) {
-      return;
-    }
-
-    timeColorConfirmState = {
-      kind: 'remove-range',
-      rangeId
-    };
-    paintTimeColorPanel();
-    return;
-  }
-
-  const previewDisableTimeColorRangeButton = event.target.closest('[data-map-time-color-preview-disable]');
-  if (previewDisableTimeColorRangeButton && infoPanelMode === 'colors') {
-    const rangeId = previewDisableTimeColorRangeButton.getAttribute('data-map-time-color-preview-disable');
-    updateMapTimeColorRangeFromPreviewField(rangeId, 'enabled', 'false');
-    return;
-  }
-
-  const previewRemoveTimeColorRangeButton = event.target.closest('[data-map-time-color-preview-remove]');
-  if (previewRemoveTimeColorRangeButton && infoPanelMode === 'colors') {
-    const rangeId = previewRemoveTimeColorRangeButton.getAttribute('data-map-time-color-preview-remove');
-    const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
-    if (!range || isMapTimeColorProtectedRange(range)) {
-      return;
-    }
-
-    timeColorConfirmState = {
-      kind: 'remove-range',
-      rangeId
-    };
-    paintTimeColorPanel();
-    return;
-  }
-
-  const confirmTimeColorDialogButton = event.target.closest('[data-map-time-color-confirm]');
-  if (confirmTimeColorDialogButton && infoPanelMode === 'colors') {
-    if (timeColorConfirmState?.kind === 'remove-range') {
-      mapTimeColorRanges = mapTimeColorRanges.filter((range) => {
-        return range.id !== timeColorConfirmState.rangeId || isMapTimeColorProtectedRange(range);
+      focusSelectionOnMap(person);
+      void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
       });
-      persistMapTimeColorRanges();
-    } else if (timeColorConfirmState?.kind === 'reset-defaults') {
-      mapTimeColorRanges = createDefaultMapTimeColorRanges();
-      mapTimeColorDateMatchMode = normalizeMapTimeColorDateMatchMode();
-      persistMapTimeColorDateMatchMode();
-      persistMapTimeColorRanges();
-    }
-    timeColorConfirmState = null;
-    paintTimeColorPanel();
-    return;
-  }
+    },
+    onSelectSameLocationPerson: (sourceRowId) => {
+      const normalizedSourceRowId = String(sourceRowId || '').trim();
+      if (!normalizedSourceRowId) {
+        return;
+      }
 
-  if (event.target instanceof Element && event.target.matches('.time-color-confirm-overlay') && infoPanelMode === 'colors') {
-    timeColorConfirmState = null;
-    paintTimeColorPanel();
-    return;
-  }
+      const person = findPersonBySourceRowId(normalizedSourceRowId);
+      if (!person) {
+        return;
+      }
 
-  const cancelTimeColorDialogButton = event.target.closest('[data-map-time-color-confirm-cancel]');
-  if (cancelTimeColorDialogButton && infoPanelMode === 'colors') {
-    timeColorConfirmState = null;
-    paintTimeColorPanel();
-    return;
-  }
-
-  const resetTimeColorRangesButton = event.target.closest('[data-map-time-color-reset]');
-  if (resetTimeColorRangesButton && infoPanelMode === 'colors') {
-    timeColorConfirmState = {
-      kind: 'reset-defaults'
-    };
-    paintTimeColorPanel();
-    return;
-  }
-
-  const timeColorPresetButton = event.target.closest('[data-map-time-color-menu-preset]');
-  if (timeColorPresetButton && infoPanelMode === 'colors') {
-    event.preventDefault();
-    clearMapTimeColorMenuPendingColor(timeColorPresetButton.closest('.time-color-menu'));
-    applyMapTimeColorMenuValue(
-      timeColorPresetButton.closest('.time-color-menu'),
-      timeColorPresetButton.getAttribute('data-map-time-color-menu-preset')
-    );
-    return;
-  }
-
-  const confirmCustomTimeColorButton = event.target.closest('[data-map-time-color-menu-custom-confirm]');
-  if (confirmCustomTimeColorButton && infoPanelMode === 'colors') {
-    const menuElement = confirmCustomTimeColorButton.closest('.time-color-menu');
-    const pendingColor = menuElement?.dataset?.pendingColor || '';
-    if (!menuElement || !pendingColor) {
-      return;
-    }
-
-    applyMapTimeColorMenuValue(menuElement, pendingColor, {
-      closeMenu: true,
-      persistAsync: true
-    });
-    return;
-  }
-
-  const focusTimeColorLabelButton = event.target.closest('[data-map-time-color-focus-label]');
-  if (focusTimeColorLabelButton && infoPanelMode === 'colors') {
-    const rangeId = focusTimeColorLabelButton.getAttribute('data-map-time-color-focus-label');
-    focusMapTimeColorLabelInput(rangeId);
-    return;
-  }
-
-  const legendValueBox = event.target.closest('.legend-value-box');
-  if (legendValueBox && infoPanelMode === 'colors') {
-    const input = legendValueBox.querySelector('.legend-value-input');
-    if (input) {
-      input.focus();
-      const valueLength = typeof input.value === 'string' ? input.value.length : 0;
-      input.setSelectionRange?.(valueLength, valueLength);
-    }
-    return;
-  }
-
-  const historyRowButton = event.target.closest('[data-history-source-row-id]');
-  if (historyRowButton && infoPanelMode === 'history') {
-    const sourceRowId = historyRowButton.getAttribute('data-history-source-row-id');
-    const person = findPersonBySourceRowId(sourceRowId);
-    if (!person) {
-      return;
-    }
-
-    focusSelectionOnMap(person);
-    void selectPersonPoint(person, getPersonMarkerBySourceRowId(sourceRowId), {
-      panelMode: 'selection',
-      bypassOverlapSelection: true
-    });
-  }
-
-  const historyNavButton = event.target.closest('[data-history-nav]');
-  if (!historyNavButton || infoPanelMode !== 'history') {
-    return;
-  }
-
-  if (historyNavButton.getAttribute('data-history-nav') === 'back') {
-    if (navigationHistoryState.currentId > 0) {
-      history.back();
-    }
-    return;
-  }
-
-  if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
-    history.forward();
-  }
-
-  async function togglePersonBookmarkFromListRow(bookmarkElement) {
-    const sourceRowId = String(bookmarkElement?.getAttribute('data-map-person-bookmark-toggle') || '').trim();
-    if (!sourceRowId || !window.appApi?.setPersonBookmark) {
-      return;
-    }
-
-    const isBookmarked = bookmarkElement.getAttribute('data-map-person-bookmarked') === 'true';
-    const nextState = !isBookmarked;
-
-    bookmarkElement.setAttribute('data-map-person-bookmarked', String(nextState));
-    bookmarkElement.classList.toggle('is-active', nextState);
-    const iconEl = bookmarkElement.querySelector('i');
-    iconEl?.classList.toggle('fa-solid', nextState);
-    iconEl?.classList.toggle('fa-regular', !nextState);
-
-    try {
-      const result = await window.appApi.setPersonBookmark({
-        sourceRowId,
-        isBookmarked: nextState
+      focusSelectionOnMap(person);
+      void selectPersonPoint(person, getPersonMarkerBySourceRowId(normalizedSourceRowId), {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
       });
-      const persistedState = result?.isBookmarked === true;
-      syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
-      refreshPeopleListPanelsAfterBookmarkToggle();
-      showBookmarkToggleToast(persistedState, sourceRowId);
-    } catch (error) {
-      bookmarkElement.setAttribute('data-map-person-bookmarked', String(isBookmarked));
-      bookmarkElement.classList.toggle('is-active', isBookmarked);
-      iconEl?.classList.toggle('fa-solid', isBookmarked);
-      iconEl?.classList.toggle('fa-regular', !isBookmarked);
+    },
+    onSelectFilterResult: (sourceRowId) => {
+      const person = allPeople.find((entry) => entry.sourceRowId === sourceRowId);
+      if (!person) {
+        return;
+      }
+
+      focusSelectionOnMap(person);
+      void selectPersonPoint(person, visiblePeopleMarkers.get(buildPersonKey(person)) || null, {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
+      });
+    },
+    onSelectSearchResult: (sourceRowId) => {
+      const searchResult = personSearchState.results.find((entry) => entry.sourceRowId === sourceRowId);
+      if (!searchResult) {
+        return;
+      }
+
+      const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || searchResult;
+      focusSelectionOnMap(mapPerson);
+      void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
+      });
+    },
+    onSelectListResult: (sourceRowId) => {
+      const listResult = personListState.results.find((entry) => entry.sourceRowId === sourceRowId);
+      if (!listResult) {
+        return;
+      }
+
+      const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
+      focusSelectionOnMap(mapPerson);
+      void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
+      });
+    },
+    onSelectBookmarkedResult: (sourceRowId) => {
+      const listResult = bookmarkedPersonListState.results.find((entry) => entry.sourceRowId === sourceRowId);
+      if (!listResult) {
+        return;
+      }
+
+      const mapPerson = allPeople.find((entry) => entry.sourceRowId === sourceRowId) || listResult;
+      focusSelectionOnMap(mapPerson);
+      void selectPersonPoint(mapPerson, visiblePeopleMarkers.get(buildPersonKey(mapPerson)) || null, {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
+      });
+    },
+    onClearSearch: () => {
+      updatePersonSearchQuery('', { immediate: true });
+    },
+    onResetFilterField: (fieldName) => {
+      mapDateFilterDraft = resetMapDateFilterDraftField(mapDateFilterDraft, fieldName);
+      mapDateFilterHasInvalidRange = false;
+      persistMapDateFilterState();
+      scheduleMapDateFilterApply({ immediate: true });
+    },
+    onResetFilter: () => {
+      mapDateFilterDraft = buildDefaultMapDateFilterDraft();
+      mapDateFilterHasInvalidRange = false;
+      persistMapDateFilterState();
+      scheduleMapDateFilterApply({ immediate: true });
+    },
+    onAddTimeColorRange: () => {
+      mapTimeColorRanges = insertMapTimeColorRangeBeforeSpecialRanges(
+        mapTimeColorRanges,
+        buildDefaultMapTimeColorRange(mapTimeColorRanges.length, {
+          label: getNextMapTimeColorRangeLabel(mapTimeColorRanges, mapTimeColorRanges.length)
+        })
+      );
+      persistMapTimeColorRanges();
+      paintTimeColorPanel();
+    },
+    onRemoveTimeColorRange: (rangeId) => {
+      const range = mapTimeColorRanges.find((entry) => entry.id === rangeId);
+      if (!range || isMapTimeColorProtectedRange(range)) {
+        return;
+      }
+
+      timeColorConfirmState = {
+        kind: 'remove-range',
+        rangeId
+      };
+      paintTimeColorPanel();
+    },
+    onDisableTimeColorRangePreview: (rangeId) => {
+      updateMapTimeColorRangeFromPreviewField(rangeId, 'enabled', 'false');
+    },
+    onConfirmTimeColorDialog: () => {
+      if (timeColorConfirmState?.kind === 'remove-range') {
+        mapTimeColorRanges = mapTimeColorRanges.filter((range) => {
+          return range.id !== timeColorConfirmState.rangeId || isMapTimeColorProtectedRange(range);
+        });
+        persistMapTimeColorRanges();
+      } else if (timeColorConfirmState?.kind === 'reset-defaults') {
+        mapTimeColorRanges = createDefaultMapTimeColorRanges();
+        mapTimeColorDateMatchMode = normalizeMapTimeColorDateMatchMode();
+        persistMapTimeColorDateMatchMode();
+        persistMapTimeColorRanges();
+      }
+      timeColorConfirmState = null;
+      paintTimeColorPanel();
+    },
+    onCancelTimeColorDialog: () => {
+      timeColorConfirmState = null;
+      paintTimeColorPanel();
+    },
+    onPromptResetTimeColorRanges: () => {
+      timeColorConfirmState = {
+        kind: 'reset-defaults'
+      };
+      paintTimeColorPanel();
+    },
+    onApplyTimeColorPreset: (menuElement, presetValue) => {
+      clearMapTimeColorMenuPendingColor(menuElement);
+      applyMapTimeColorMenuValue(menuElement, presetValue);
+    },
+    onConfirmCustomTimeColor: (menuElement, pendingColor) => {
+      if (!menuElement || !pendingColor) {
+        return;
+      }
+
+      applyMapTimeColorMenuValue(menuElement, pendingColor, {
+        closeMenu: true,
+        persistAsync: true
+      });
+    },
+    onFocusTimeColorLabel: (rangeId) => {
+      focusMapTimeColorLabelInput(rangeId);
+    },
+    onLegendValueBoxClick: (legendValueBox) => {
+      const input = legendValueBox.querySelector('.legend-value-input');
+      if (input) {
+        input.focus();
+        const valueLength = typeof input.value === 'string' ? input.value.length : 0;
+        input.setSelectionRange?.(valueLength, valueLength);
+      }
+    },
+    onSelectHistoryRow: (sourceRowId) => {
+      const person = findPersonBySourceRowId(sourceRowId);
+      if (!person) {
+        return;
+      }
+
+      focusSelectionOnMap(person);
+      void selectPersonPoint(person, getPersonMarkerBySourceRowId(sourceRowId), {
+        panelMode: 'selection',
+        bypassOverlapSelection: true
+      });
+    },
+    onHistoryNav: (direction) => {
+      if (direction === 'back') {
+        if (navigationHistoryState.currentId > 0) {
+          history.back();
+        }
+        return;
+      }
+
+      if (navigationHistoryState.currentId < navigationHistoryState.maxId) {
+        history.forward();
+      }
     }
+  });
+}
+
+async function togglePersonBookmarkFromListRow(bookmarkElement) {
+  const sourceRowId = String(bookmarkElement?.getAttribute('data-map-person-bookmark-toggle') || '').trim();
+  if (!sourceRowId || !window.appApi?.setPersonBookmark) {
+    return;
   }
 
-  function refreshPeopleListPanelsAfterBookmarkToggle() {
-    if (infoPanelMode === 'search') {
-      paintSearchPanel({ shouldFocusInput: false });
-      return;
-    }
+  const isBookmarked = bookmarkElement.getAttribute('data-map-person-bookmarked') === 'true';
+  const nextState = !isBookmarked;
 
-    if (infoPanelMode === 'list') {
-      paintListPanel();
-      return;
-    }
+  bookmarkElement.setAttribute('data-map-person-bookmarked', String(nextState));
+  bookmarkElement.classList.toggle('is-active', nextState);
+  const iconEl = bookmarkElement.querySelector('i');
+  iconEl?.classList.toggle('fa-solid', nextState);
+  iconEl?.classList.toggle('fa-regular', !nextState);
 
-    if (infoPanelMode === 'bookmarked') {
-      paintBookmarkedListPanel();
-      return;
-    }
+  try {
+    const result = await setPersonBookmark({
+      sourceRowId,
+      isBookmarked: nextState
+    });
+    const persistedState = result?.isBookmarked === true;
+    syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
+    refreshPeopleListPanelsAfterBookmarkToggle();
+    showBookmarkToggleToast(persistedState, sourceRowId);
+  } catch (_error) {
+    bookmarkElement.setAttribute('data-map-person-bookmarked', String(isBookmarked));
+    bookmarkElement.classList.toggle('is-active', isBookmarked);
+    iconEl?.classList.toggle('fa-solid', isBookmarked);
+    iconEl?.classList.toggle('fa-regular', !isBookmarked);
+  }
+}
 
-    if (infoPanelMode === 'filter') {
-      paintFilterPanel();
-      return;
-    }
+function refreshPeopleListPanelsAfterBookmarkToggle() {
+  if (infoPanelMode === 'search') {
+    paintSearchPanel({ shouldFocusInput: false });
+    return;
+  }
 
-    if (infoPanelMode === 'history') {
-      paintHistorySelection();
-    }
+  if (infoPanelMode === 'list') {
+    paintListPanel();
+    return;
+  }
+
+  if (infoPanelMode === 'bookmarked') {
+    paintBookmarkedListPanel();
+    return;
+  }
+
+  if (infoPanelMode === 'filter') {
+    paintFilterPanel();
+    return;
+  }
+
+  if (infoPanelMode === 'history') {
+    paintHistorySelection();
   }
 }
 
@@ -1217,115 +1200,77 @@ function syncBookmarkedFlagAcrossKnownPeople(sourceRowId, isBookmarked) {
   }
 }
 
-selectionFocusButtonEl?.addEventListener('click', () => {
-  const person = resolveSelectedPersonForMapAction();
-  if (!person) {
-    return;
-  }
-
-  focusSelectionOnMap(person, { animate: true });
-});
-
-selectionBookmarkButtonEl?.addEventListener('click', async () => {
-  const sourceRowId = resolveSelectedPersonSourceRowId();
-  if (!sourceRowId || !window.appApi?.setPersonBookmark) {
-    return;
-  }
-
-  const currentActive = selectionBookmarkButtonEl.classList.contains('is-active');
-  const nextState = !currentActive;
-  setMapSelectionBookmarkActive(nextState);
-  selectionBookmarkButtonEl.disabled = true;
-
-  try {
-    const result = await window.appApi.setPersonBookmark({
-      sourceRowId,
-      isBookmarked: nextState
-    });
-    const persistedState = result?.isBookmarked === true;
-    setMapSelectionBookmarkActive(persistedState);
-    syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
-    showBookmarkToggleToast(persistedState, sourceRowId);
-
-    if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === sourceRowId) {
-      selectionPanelState.details.person.isBookmarked = persistedState;
+bindSidePanelControls({
+  selectionFocusButtonEl,
+  selectionBookmarkButtonEl,
+  selectionExtraEl,
+  selectionMetaEl,
+  onFocusSelection: () => {
+    const person = resolveSelectedPersonForMapAction();
+    if (!person) {
+      return;
     }
 
-    if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId === sourceRowId) {
-      selectionPanelState.person.isBookmarked = persistedState;
+    focusSelectionOnMap(person, { animate: true });
+  },
+  onToggleSelectionBookmark: async () => {
+    const sourceRowId = resolveSelectedPersonSourceRowId();
+    if (!sourceRowId || !window.appApi?.setPersonBookmark) {
+      return;
     }
-  } catch (error) {
-    setMapSelectionBookmarkActive(currentActive);
-  }
 
-  syncSelectionBookmarkUiState();
+    const currentActive = selectionBookmarkButtonEl.classList.contains('is-active');
+    const nextState = !currentActive;
+    setMapSelectionBookmarkActive(nextState);
+    selectionBookmarkButtonEl.disabled = true;
+
+    try {
+      const result = await setPersonBookmark({
+        sourceRowId,
+        isBookmarked: nextState
+      });
+      const persistedState = result?.isBookmarked === true;
+      setMapSelectionBookmarkActive(persistedState);
+      syncBookmarkedFlagAcrossKnownPeople(sourceRowId, persistedState);
+      showBookmarkToggleToast(persistedState, sourceRowId);
+
+      if (selectionPanelState.kind === 'person' && selectionPanelState.details?.person?.sourceRowId === sourceRowId) {
+        selectionPanelState.details.person.isBookmarked = persistedState;
+      }
+
+      if (selectionPanelState.kind === 'person-loading' && selectionPanelState.person?.sourceRowId === sourceRowId) {
+        selectionPanelState.person.isBookmarked = persistedState;
+      }
+    } catch (_error) {
+      setMapSelectionBookmarkActive(currentActive);
+    }
+
+    syncSelectionBookmarkUiState();
+  },
+  onPanelClick: handleSelectionPanelClick
 });
 
 setMapSelectionBookmarkActive(false);
 syncSelectionBookmarkUiState();
-
-selectionExtraEl?.addEventListener('click', handleSelectionPanelClick);
-selectionMetaEl?.addEventListener('click', handleSelectionPanelClick);
-
-selectionExtraEl?.addEventListener('scroll', () => {
-  syncOpenMapTimeColorMenusDirection();
-}, { passive: true });
-
-selectionExtraEl?.addEventListener('dblclick', (event) => {
-  if (infoPanelMode !== 'colors') {
-    return;
-  }
-
-  const titleGroup = event.target.closest('[data-map-time-color-title-group]');
-  if (!titleGroup) {
-    return;
-  }
-
-  const rangeId = titleGroup.getAttribute('data-map-time-color-title-group');
-  if (!rangeId) {
-    return;
-  }
-
-  focusMapTimeColorLabelInput(rangeId, { selectAll: true });
-});
-
-selectionExtraEl?.addEventListener('input', (event) => {
-  const searchField = event.target.closest('[data-map-person-search-input]');
-  if (!searchField || infoPanelMode !== 'search') {
-    const customTimeColorInput = event.target.closest('.time-color-menu-custom-input');
-    if (customTimeColorInput && infoPanelMode === 'colors') {
-      stageMapTimeColorMenuPendingColor(
-        customTimeColorInput.closest('.time-color-menu'),
-        customTimeColorInput.value
-      );
-      return;
-    }
-
-    const previewField = event.target.closest('[data-map-time-color-preview-field]');
-    if (previewField && infoPanelMode === 'colors') {
-      const previewFieldValue = previewField instanceof HTMLInputElement && previewField.type === 'checkbox'
-        ? String(previewField.checked)
-        : previewField.value;
-      updateMapTimeColorRangeFromPreviewField(
-        previewField.getAttribute('data-map-time-color-preview-range-id'),
-        previewField.getAttribute('data-map-time-color-preview-field'),
-        previewFieldValue
-      );
-      return;
-    }
-
-    const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] textarea');
-    if (!timeColorField || infoPanelMode !== 'colors') {
-      return;
-    }
-
-    const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
-    if (!timeColorForm) {
-      return;
-    }
-
-    const timeColorRow = timeColorField.closest('[data-map-time-color-row-id]');
-    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
+bindSelectionPanelFieldEvents({
+  selectionExtraEl,
+  getInfoPanelMode: () => infoPanelMode,
+  onScroll: () => {
+    syncOpenMapTimeColorMenusDirection();
+  },
+  onDoubleClickTitleGroup: (rangeId) => {
+    focusMapTimeColorLabelInput(rangeId, { selectAll: true });
+  },
+  onSearchInput: (value) => {
+    updatePersonSearchQuery(value);
+  },
+  onCustomTimeColorInput: (menuElement, value) => {
+    stageMapTimeColorMenuPendingColor(menuElement, value);
+  },
+  onTimeColorPreviewFieldInput: (rangeId, fieldName, fieldValue) => {
+    updateMapTimeColorRangeFromPreviewField(rangeId, fieldName, fieldValue);
+  },
+  onTimeColorFieldInput: (timeColorForm, timeColorRow, timeColorFieldName) => {
     if (timeColorRow && timeColorFieldName) {
       syncMapTimeColorMiddleRowFields(timeColorRow, { changedFieldName: timeColorFieldName });
     }
@@ -1333,53 +1278,17 @@ selectionExtraEl?.addEventListener('input', (event) => {
     mapTimeColorRanges = readMapTimeColorRangesFromForm(timeColorForm);
     persistMapTimeColorRanges();
     syncTimeColorPreview();
-    return;
-  }
-
-  updatePersonSearchQuery(searchField.value);
-});
-
-selectionExtraEl?.addEventListener('change', (event) => {
-  const customTimeColorInput = event.target.closest('.time-color-menu-custom-input');
-  if (customTimeColorInput && infoPanelMode === 'colors') {
-    stageMapTimeColorMenuPendingColor(
-      customTimeColorInput.closest('.time-color-menu'),
-      customTimeColorInput.value
-    );
-    return;
-  }
-
-  const previewField = event.target.closest('[data-map-time-color-preview-field]');
-  if (previewField && infoPanelMode === 'colors') {
-    const previewFieldValue = previewField instanceof HTMLInputElement && previewField.type === 'checkbox'
-      ? String(previewField.checked)
-      : previewField.value;
-    updateMapTimeColorRangeFromPreviewField(
-      previewField.getAttribute('data-map-time-color-preview-range-id'),
-      previewField.getAttribute('data-map-time-color-preview-field'),
-      previewFieldValue
-    );
+  },
+  onTimeColorPreviewFieldChange: (previewField, rangeId, fieldName, fieldValue) => {
+    updateMapTimeColorRangeFromPreviewField(rangeId, fieldName, fieldValue);
     previewField.closest('.time-color-menu')?.removeAttribute('open');
-    return;
-  }
-
-  const timeColorDateMatchModeField = event.target.closest('[data-map-time-color-date-match-mode]');
-  if (timeColorDateMatchModeField && infoPanelMode === 'colors') {
-    mapTimeColorDateMatchMode = normalizeMapTimeColorDateMatchMode(timeColorDateMatchModeField.value);
+  },
+  onTimeColorDateMatchModeChange: (modeValue) => {
+    mapTimeColorDateMatchMode = normalizeMapTimeColorDateMatchMode(modeValue);
     paintTimeColorPanel();
     persistMapTimeColorDateMatchModeAsync();
-    return;
-  }
-
-  const timeColorField = event.target.closest('[data-map-time-color-form] input, [data-map-time-color-form] select');
-  if (timeColorField && infoPanelMode === 'colors') {
-    const timeColorForm = timeColorField.closest('[data-map-time-color-form]');
-    if (!timeColorForm) {
-      return;
-    }
-
-    const timeColorRow = timeColorField.closest('[data-map-time-color-row-id]');
-    const timeColorFieldName = timeColorField.getAttribute('data-map-time-color-field');
+  },
+  onTimeColorFieldChange: (timeColorField, timeColorForm, timeColorRow, timeColorFieldName) => {
     if (timeColorRow && timeColorFieldName) {
       syncMapTimeColorMiddleRowFields(timeColorRow, { changedFieldName: timeColorFieldName });
     }
@@ -1403,36 +1312,26 @@ selectionExtraEl?.addEventListener('change', (event) => {
     if (timeColorFieldName === 'color') {
       timeColorField.closest('.time-color-menu')?.removeAttribute('open');
     }
-    return;
+  },
+  onFilterFormChange: (filterForm) => {
+    const formData = new FormData(filterForm);
+    mapDateFilterDraft = normalizeMapDateFilterDraft({
+      fromMonth: formData.get('fromMonth'),
+      fromYear: formData.get('fromYear'),
+      toMonth: formData.get('toMonth'),
+      toYear: formData.get('toYear'),
+      pumpType: formData.get('pumpType'),
+      visitType: formData.get('visitType'),
+      region: formData.get('region'),
+      postalCode: formData.get('postalCode'),
+      producer: formData.get('producer'),
+      installerCompany: formData.get('installerCompany')
+    });
+    mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
+    persistMapDateFilterState();
+    paintFilterPanel();
+    scheduleMapDateFilterApply();
   }
-
-  const filterField = event.target.closest('[data-map-date-filter-form] select');
-  if (!filterField || infoPanelMode !== 'filter') {
-    return;
-  }
-
-  const filterForm = filterField.closest('[data-map-date-filter-form]');
-  if (!filterForm) {
-    return;
-  }
-
-  const formData = new FormData(filterForm);
-  mapDateFilterDraft = normalizeMapDateFilterDraft({
-    fromMonth: formData.get('fromMonth'),
-    fromYear: formData.get('fromYear'),
-    toMonth: formData.get('toMonth'),
-    toYear: formData.get('toYear'),
-    pumpType: formData.get('pumpType'),
-    visitType: formData.get('visitType'),
-    region: formData.get('region'),
-    postalCode: formData.get('postalCode'),
-    producer: formData.get('producer'),
-    installerCompany: formData.get('installerCompany')
-  });
-  mapDateFilterHasInvalidRange = hasInvalidMapDateRangeDraft(mapDateFilterDraft);
-  persistMapDateFilterState();
-  paintFilterPanel();
-  scheduleMapDateFilterApply();
 });
 
 selectionExtraEl?.addEventListener('pointerdown', (event) => {
@@ -1693,7 +1592,7 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
-window.appApi.onOperationStatus(async (payload) => {
+onOperationStatus(async (payload) => {
   if (
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
@@ -1706,7 +1605,7 @@ window.appApi.onOperationStatus(async (payload) => {
   }
 });
 
-window.appApi.onTileDownloadState((payload) => {
+onTileDownloadState((payload) => {
   syncTileLayerRevision(payload?.packageState);
 });
 
@@ -1717,7 +1616,7 @@ openAccessBoxButtonEl?.addEventListener('click', async () => {
   const personName = selectedPerson ? getMapPersonDisplayName(selectedPerson) : 'osobę';
   dumy();
   try {
-    const bridgeResult = await window.appApi.accessbrigeladkfjlakgjOpenPerson({
+    const bridgeResult = await openPersonInAccess({
       sourceRowId: selectedPerson?.sourceRowId || ''
     });
 
@@ -1745,43 +1644,8 @@ openAccessBoxButtonEl?.addEventListener('click', async () => {
 });
 bootstrap();
 
-function getAccessBridgeErrorMessage({ personName, code }) {
-  const safePersonName = String(personName || 'osobę').trim() || 'osobę';
-  const normalizedCode = String(code || '').trim().toLowerCase();
-
-  if (normalizedCode === 'multiple-instances') {
-    return 'Jest za dużo Accessów i nie wiadomo, w którym otworzyć.';
-  }
-
-  if (normalizedCode === 'not-found') {
-    return `Nie udało się otworzyć (${safePersonName})`;
-  }
-
-  if (normalizedCode === 'no-response') {
-    return `Nie udało się otworzyć (${safePersonName}) — Access nie odpowiedział.`;
-  }
-
-  if (normalizedCode === 'no-instance') {
-    return `Nie udało się otworzyć (${safePersonName}) — brak otwartej instancji Accessa.`;
-  }
-
-  if (normalizedCode === 'unsupported-platform') {
-    return `Nie udało się otworzyć (${safePersonName}) — ta funkcja działa tylko w Windows.`;
-  }
-
-  if (normalizedCode === 'database-mismatch') {
-    return `Nie udało się otworzyć (${safePersonName}) — otwarty jest inny plik Access.`;
-  }
-
-  if (normalizedCode === 'form-not-found') {
-    return `Nie udało się otworzyć (${safePersonName}) — formularz nie istnieje w Accessie.`;
-  }
-
-  return `Nie udało się otworzyć (${safePersonName})`;
-}
-
 async function bootstrap() {
-  const bootstrapDataPromise = window.appApi.getBootstrap();
+  const bootstrapDataPromise = getBootstrap();
   const deferredInitPromise = Promise.allSettled([
     loadMapDateFilterOptions(),
     loadMapFilterOptions(),
@@ -1902,64 +1766,45 @@ function renderOverviewSummary(summary) {
 }
 
 function buildMap() {
-  if (typeof L === 'undefined') {
-    mapEl.innerHTML = `
-      <div class="map-error">
-        Nie udalo sie zaladowac biblioteki mapy.
-      </div>
-    `;
+  const initializedMap = initializeMapCore({
+    leaflet: typeof L === 'undefined' ? undefined : L,
+    mapElement: mapEl,
+    restoredMapViewportState,
+    polandBounds: POLAND_BOUNDS,
+    buildTileUrlTemplate,
+    minWheelZoomSnap: MIN_WHEEL_ZOOM_SNAP,
+    buttonZoomStep: BUTTON_ZOOM_STEP,
+    minZoom: 2,
+    maxZoom: 18,
+    wheelZoomMultiplier: WHEEL_ZOOM_MULTIPLIER,
+    wheelLineHeightPx: WHEEL_LINE_HEIGHT_PX,
+    wheelPageHeightFactor: WHEEL_PAGE_HEIGHT_FACTOR,
+    onMoveEndZoomEnd: () => {
+      persistMapViewportState();
+      scheduleVisibleMarkerSync();
+      updateMapDevHud();
+      void queueViewportTilePrefetch();
+    },
+    onMouseMove: (latlng) => {
+      scheduleHoverTilePrefetch(latlng);
+    },
+    onMouseOut: () => {
+      clearScheduledHoverTilePrefetch();
+    }
+  });
+
+  if (!initializedMap) {
     return;
   }
 
-  mapInstance = L.map(mapEl, {
-    attributionControl: false,
-    preferCanvas: true,
-    zoomControl: true,
-    scrollWheelZoom: false,
-    zoomSnap: MIN_WHEEL_ZOOM_SNAP,
-    zoomDelta: BUTTON_ZOOM_STEP,
-    minZoom: 2,
-    maxZoom: 18
-  });
-  personRenderer = L.canvas({ padding: 0.5 });
+  mapInstance = initializedMap.mapInstance;
+  tileLayer = initializedMap.tileLayer;
+  peopleLayer = initializedMap.peopleLayer;
+  supplementalPeopleLayer = initializedMap.supplementalPeopleLayer;
+  customLayer = initializedMap.customLayer;
+  personRenderer = initializedMap.personRenderer;
 
-  mapInstance.getContainer().classList.add('offline-map');
-  installAcceleratedWheelZoom(mapInstance);
-  tileLayer = L.tileLayer(buildTileUrlTemplate(), {
-    keepBuffer: 3,
-    minZoom: 2,
-    maxZoom: 18,
-    updateWhenIdle: false,
-    crossOrigin: false
-  }).addTo(mapInstance);
-  L.control.scale({
-    position: 'bottomleft',
-    metric: true,
-    imperial: false,
-    maxWidth: 160
-  }).addTo(mapInstance);
-
-  applyInitialMapViewport();
   updateMapDevHud();
-  peopleLayer = L.layerGroup().addTo(mapInstance);
-  supplementalPeopleLayer = L.layerGroup().addTo(mapInstance);
-  customLayer = L.layerGroup().addTo(mapInstance);
-  mapInstance.on('moveend zoomend', () => {
-    persistMapViewportState();
-    scheduleVisibleMarkerSync();
-    updateMapDevHud();
-    void queueViewportTilePrefetch();
-  });
-  mapInstance.on('mousemove', (event) => {
-    scheduleHoverTilePrefetch(event?.latlng);
-  });
-  mapInstance.on('mouseout', () => {
-    clearScheduledHoverTilePrefetch();
-  });
-
-  requestAnimationFrame(() => {
-    mapInstance.invalidateSize();
-  });
   void queueViewportTilePrefetch();
 }
 
@@ -2009,7 +1854,7 @@ async function queueViewportTilePrefetch() {
   }
 
   try {
-    await window.appApi.queueViewportTilePrefetch({
+    await queueViewportTilePrefetchApi({
       currentZoom: mapInstance.getZoom(),
       bounds: {
         south: bounds.getSouth(),
@@ -2035,7 +1880,7 @@ async function queueHoverTilePrefetch(latlng) {
   lastQueuedHoverTilePrefetchKey = hoverKey;
 
   try {
-    await window.appApi.queueHoverTilePrefetch({
+    await queueHoverTilePrefetchApi({
       lat: latlng.lat,
       lng: latlng.lng,
       currentZoom: mapInstance.getZoom()
@@ -2077,7 +1922,7 @@ async function loadPoints(options = {}) {
   let payload;
 
   try {
-    payload = await window.appApi.getMapPoints(buildMapPointsRequest());
+    payload = await getMapPoints(buildMapPointsRequest());
   } catch (error) {
     if (requestToken === mapPointsRequestToken) {
       isMapPointsLoading = false;
@@ -2391,36 +2236,6 @@ function normalizeMapFilterOptionInputValue(value) {
   return String(value || '').trim();
 }
 
-function normalizeDateInputValue(value) {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return '';
-    }
-
-    const exactDateMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}$/);
-    if (exactDateMatch) {
-      return exactDateMatch[0];
-    }
-
-    const isoDateMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}/);
-    if (isoDateMatch) {
-      return isoDateMatch[0];
-    }
-  }
-
-  if (!value) {
-    return '';
-  }
-
-  const parsedDate = new Date(value);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return '';
-  }
-
-  return parsedDate.toISOString().slice(0, 10);
-}
-
 function createDefaultMapTimeColorRanges() {
   return normalizeMapTimeColorRanges(
     [0, 1, 2, 3, 4].map((index) => buildDefaultMapTimeColorRange(index)),
@@ -2428,125 +2243,12 @@ function createDefaultMapTimeColorRanges() {
   );
 }
 
-function formatRomanNumeral(numberValue) {
-  const normalizedNumber = Math.trunc(Number(numberValue));
-  if (!Number.isFinite(normalizedNumber) || normalizedNumber <= 0) {
-    return 'I';
-  }
-
-  const numerals = [
-    ['M', 1000],
-    ['CM', 900],
-    ['D', 500],
-    ['CD', 400],
-    ['C', 100],
-    ['XC', 90],
-    ['L', 50],
-    ['XL', 40],
-    ['X', 10],
-    ['IX', 9],
-    ['V', 5],
-    ['IV', 4],
-    ['I', 1]
-  ];
-
-  let remainingValue = normalizedNumber;
-  let result = '';
-  for (const [symbol, value] of numerals) {
-    while (remainingValue >= value) {
-      result += symbol;
-      remainingValue -= value;
-    }
-  }
-
-  return result || 'I';
-}
-
-function parseRomanNumeral(value) {
-  const normalizedValue = String(value || '').trim().toUpperCase();
-  if (!normalizedValue || !/^[IVXLCDM]+$/.test(normalizedValue)) {
-    return null;
-  }
-
-  const values = {
-    I: 1,
-    V: 5,
-    X: 10,
-    L: 50,
-    C: 100,
-    D: 500,
-    M: 1000
-  };
-
-  let total = 0;
-  let previousValue = 0;
-  for (let index = normalizedValue.length - 1; index >= 0; index -= 1) {
-    const currentValue = values[normalizedValue[index]];
-    if (!currentValue) {
-      return null;
-    }
-
-    if (currentValue < previousValue) {
-      total -= currentValue;
-    } else {
-      total += currentValue;
-      previousValue = currentValue;
-    }
-  }
-
-  return total > 0 ? total : null;
-}
-
-function formatMapTimeColorRangeOrdinalLabel(numberValue) {
-  const normalizedNumber = Number(numberValue);
-  if (!Number.isFinite(normalizedNumber) || normalizedNumber <= 0) {
-    return 'Zakres I';
-  }
-
-  return `Zakres ${formatRomanNumeral(normalizedNumber)}`;
-}
-
-function extractMapTimeColorRangeLabelNumber(labelValue) {
-  const normalizedLabel = String(labelValue || '').trim();
-  if (!normalizedLabel) {
-    return null;
-  }
-
-  const leadingMatch = normalizedLabel.match(/^(\d+)\s+zakres$/i);
-  if (leadingMatch) {
-    return Number(leadingMatch[1]);
-  }
-
-  const trailingMatch = normalizedLabel.match(/^zakres\s+(\d+)$/i);
-  if (trailingMatch) {
-    return Number(trailingMatch[1]);
-  }
-
-  const leadingRomanMatch = normalizedLabel.match(/^([IVXLCDM]+)\s+zakres$/i);
-  if (leadingRomanMatch) {
-    return parseRomanNumeral(leadingRomanMatch[1]);
-  }
-
-  const trailingRomanMatch = normalizedLabel.match(/^zakres\s+([IVXLCDM]+)$/i);
-  if (trailingRomanMatch) {
-    return parseRomanNumeral(trailingRomanMatch[1]);
-  }
-
-  return null;
-}
-
 function getNextMapTimeColorRangeLabel(ranges = mapTimeColorRanges, fallbackIndex = 0) {
-  const highestNumber = normalizeMapTimeColorRanges(ranges, { allowEmpty: true })
-    .filter((range) => !isMapTimeColorSpecialMatcherRange(range))
-    .map((range) => extractMapTimeColorRangeLabelNumber(range.label))
-    .filter(Number.isFinite)
-    .reduce((maxValue, currentValue) => Math.max(maxValue, currentValue), 0);
-
-  if (highestNumber > 0) {
-    return formatMapTimeColorRangeOrdinalLabel(highestNumber + 1);
-  }
-
-  return formatMapTimeColorRangeOrdinalLabel(1);
+  return getNextMapTimeColorRangeLabelUtil(ranges, {
+    fallbackIndex,
+    normalizeRanges: (inputRanges) => normalizeMapTimeColorRanges(inputRanges, { allowEmpty: true }),
+    isSpecialRange: (range) => isMapTimeColorSpecialMatcherRange(range)
+  });
 }
 
 function getMapTimeColorSpecialRangeDefaultLabel(matcher) {
@@ -2887,15 +2589,8 @@ function formatMapTimeColorDateFieldLabel(value, options = {}) {
 }
 
 function buildMapTimeColorRangeDateDraft(range = {}) {
-  return buildMapDateFilterDraft({
-    dateFrom: range.dateFrom,
-    dateTo: range.dateTo,
-    fromMonth: range.mode === 'dates' && typeof range.dateFromMonthDraft === 'string'
-      ? range.dateFromMonthDraft
-      : undefined,
-    toMonth: range.mode === 'dates' && typeof range.dateToMonthDraft === 'string'
-      ? range.dateToMonthDraft
-      : undefined
+  return buildMapTimeColorRangeDateDraftUtil(range, {
+    buildMapDateFilterDraft
   });
 }
 
@@ -2948,24 +2643,17 @@ function getMapTimeColorMiddleBoundaryDefaults(boundary = 'start', yearValue = '
 }
 
 function resolveMapTimeColorMiddleDateDraft(input = {}, options = {}) {
-  const draft = normalizeMapTimeColorMiddleDateDraft(input);
-  if (options?.mode !== 'dates') {
-    return draft;
-  }
-
-  return {
-    fromYear: draft.fromYear,
-    fromMonth: draft.fromYear ? draft.fromMonth : '',
-    toYear: draft.toYear,
-    toMonth: draft.toYear ? draft.toMonth : ''
-  };
+  return resolveMapTimeColorMiddleDateDraftUtil(input, {
+    ...options,
+    normalizeMapTimeColorMiddleDateDraft
+  });
 }
 
 function buildMapTimeColorMiddleDateDraft(range = {}) {
-  return resolveMapTimeColorMiddleDateDraft(
-    buildMapTimeColorRangeDateDraft(range),
-    { mode: range?.mode }
-  );
+  return buildMapTimeColorMiddleDateDraftUtil(range, {
+    buildMapTimeColorRangeDateDraft,
+    resolveMapTimeColorMiddleDateDraft
+  });
 }
 
 function buildMapTimeColorEffectiveDateRange(range = {}) {
@@ -2973,26 +2661,15 @@ function buildMapTimeColorEffectiveDateRange(range = {}) {
 }
 
 function convertMapTimeColorDateToDaysAgo(dateValue) {
-  const comparableValue = getMapTimeColorRangeDateComparableValue(dateValue);
-  if (!Number.isFinite(comparableValue)) {
-    return '';
-  }
-
-  const today = new Date();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return String(Math.max(0, Math.round((todayUtc - comparableValue) / 86400000)));
+  return convertMapTimeColorDateToDaysAgoUtil(dateValue, {
+    getComparableValue: getMapTimeColorRangeDateComparableValue
+  });
 }
 
 function buildMapTimeColorDateFromDaysAgo(daysValue) {
-  const normalizedDays = normalizeNonNegativeIntegerInputValue(daysValue);
-  if (!normalizedDays) {
-    return '';
-  }
-
-  const today = new Date();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  const targetDate = new Date(todayUtc - (Number(normalizedDays) * 86400000));
-  return targetDate.toISOString().slice(0, 10);
+  return buildMapTimeColorDateFromDaysAgoUtil(daysValue, {
+    normalizeNonNegativeIntegerInputValue
+  });
 }
 
 function buildMapTimeColorPreviewDaysValues(range = {}) {
@@ -3034,29 +2711,17 @@ function getMapTimeColorBoundaryExactDate(range = {}, boundary = 'start') {
 }
 
 function resolveMapTimeColorMiddleBoundarySelection(boundary = 'start', input = {}) {
-  const rawYear = normalizeYearInputValue(input?.year);
-  const rawMonth = normalizeMonthNumberInputValue(input?.month);
-
-  return {
-    year: rawYear,
-    month: rawYear ? rawMonth : ''
-  };
+  return resolveMapTimeColorMiddleBoundarySelectionUtil(boundary, input, {
+    normalizeYearInputValue,
+    normalizeMonthNumberInputValue
+  });
 }
 
 function buildMapTimeColorMiddleBoundaryDate(boundary = 'start', input = {}) {
-  const normalizedBoundary = boundary === 'end' ? 'end' : 'start';
-  const resolved = resolveMapTimeColorMiddleBoundarySelection(normalizedBoundary, input);
-  if (!resolved.year) {
-    return '';
-  }
-
-  if (normalizedBoundary === 'end') {
-    return resolved.month
-      ? getMonthEndDate(`${resolved.year}-${resolved.month}`)
-      : `${resolved.year}-12-31`;
-  }
-
-  return `${resolved.year}-${resolved.month || '01'}-01`;
+  return buildMapTimeColorMiddleBoundaryDateUtil(boundary, input, {
+    resolveMapTimeColorMiddleBoundarySelection,
+    getMonthEndDate
+  });
 }
 
 function buildMapTimeColorMiddleBoundaryState(range = {}, boundary = 'start') {
@@ -3090,13 +2755,10 @@ function buildMapTimeColorMiddleBoundaryState(range = {}, boundary = 'start') {
 }
 
 function buildMapTimeColorRangeDatesFromDaysValues(input = {}) {
-  const normalizedDaysFrom = normalizeNonNegativeIntegerInputValue(input?.daysFrom);
-  const normalizedDaysTo = normalizeNonNegativeIntegerInputValue(input?.daysTo);
-
-  return {
-    dateFrom: buildMapTimeColorDateFromDaysAgo(normalizedDaysTo),
-    dateTo: buildMapTimeColorDateFromDaysAgo(normalizedDaysFrom)
-  };
+  return buildMapTimeColorRangeDatesFromDaysValuesUtil(input, {
+    normalizeNonNegativeIntegerInputValue,
+    buildDateFromDaysAgo: buildMapTimeColorDateFromDaysAgo
+  });
 }
 
 function hasInvalidMapTimeColorMiddleDateRange(input = {}) {
@@ -3251,59 +2913,6 @@ function formatMapTimeColorDraftBoundaryLabel(yearValue, monthValue) {
   return formatMonthYear(`${normalizedYear}-${normalizedMonth}`);
 }
 
-function normalizeNonNegativeIntegerInputValue(value) {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-    return String(Math.trunc(value));
-  }
-
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  const trimmed = value.trim();
-  return /^\d+$/.test(trimmed) ? String(Number(trimmed)) : '';
-}
-
-function normalizeHexColorInputValue(value) {
-  if (typeof value !== 'string') {
-    return '#4db06f';
-  }
-
-  const trimmed = value.trim();
-  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : '#4db06f';
-}
-
-function parseHexColorToRgb(colorValue) {
-  const normalizedColor = normalizeHexColorInputValue(colorValue);
-  const hexValue = normalizedColor.slice(1);
-  return {
-    red: Number.parseInt(hexValue.slice(0, 2), 16),
-    green: Number.parseInt(hexValue.slice(2, 4), 16),
-    blue: Number.parseInt(hexValue.slice(4, 6), 16)
-  };
-}
-
-function formatRgbChannelToHex(channelValue) {
-  const normalizedValue = Math.max(0, Math.min(255, Math.round(Number(channelValue) || 0)));
-  return normalizedValue.toString(16).padStart(2, '0');
-}
-
-function getMapTimeColorRelativeLuminance(colorValue) {
-  const { red, green, blue } = parseHexColorToRgb(colorValue);
-  const normalizeChannel = (channel) => {
-    const srgb = channel / 255;
-    return srgb <= 0.03928
-      ? srgb / 12.92
-      : ((srgb + 0.055) / 1.055) ** 2.4;
-  };
-
-  return (
-    (0.2126 * normalizeChannel(red))
-    + (0.7152 * normalizeChannel(green))
-    + (0.0722 * normalizeChannel(blue))
-  );
-}
-
 function isDarkMapTimeColorValue(colorValue) {
   return getMapTimeColorRelativeLuminance(colorValue) <= DARK_TIME_COLOR_OUTLINE_LUMINANCE_THRESHOLD;
 }
@@ -3379,65 +2988,6 @@ function buildDraftEndComparableDate(draft) {
   }
 
   return `${draft.toYear}-12-31`;
-}
-
-function normalizeMonthInputValue(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  const trimmed = value.trim();
-  return /^\d{4}-\d{2}$/.test(trimmed) ? trimmed : '';
-}
-
-function normalizeMonthNumberInputValue(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  const trimmed = value.trim();
-  return /^(0[1-9]|1[0-2])$/.test(trimmed) ? trimmed : '';
-}
-
-function normalizeYearInputValue(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  const trimmed = value.trim();
-  return /^\d{4}$/.test(trimmed) ? trimmed : '';
-}
-
-function getMonthEndDate(monthValue) {
-  const normalized = normalizeMonthInputValue(monthValue);
-  if (!normalized) {
-    return '';
-  }
-
-  const [yearPart, monthPart] = normalized.split('-');
-  const year = Number(yearPart);
-  const monthIndex = Number(monthPart);
-  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 1 || monthIndex > 12) {
-    return '';
-  }
-
-  const lastDay = new Date(Date.UTC(year, monthIndex, 0));
-  return lastDay.toISOString().slice(0, 10);
-}
-
-function extractMonthValue(dateValue) {
-  const normalizedDate = normalizeDateInputValue(dateValue);
-  return normalizedDate ? normalizedDate.slice(0, 7) : '';
-}
-
-function extractYearValue(dateValue) {
-  const monthValue = extractMonthValue(dateValue);
-  return monthValue ? monthValue.slice(0, 4) : '';
-}
-
-function extractMonthNumberValue(dateValue) {
-  const monthValue = extractMonthValue(dateValue);
-  return monthValue ? monthValue.slice(5, 7) : '';
 }
 
 function buildMapDateFilterDraft(filter = {}) {
@@ -3646,7 +3196,7 @@ function getMapDateFilterYears() {
 }
 
 async function loadMapDateFilterOptions() {
-  const options = await window.appApi.getMapDateFilterOptions();
+  const options = await getMapDateFilterOptions();
   mapDateFilterOptions = Array.isArray(options)
     ? options.filter((value) => normalizeMonthInputValue(value))
     : [];
@@ -3662,7 +3212,7 @@ async function loadMapDateFilterOptions() {
 }
 
 async function loadMapFilterOptions() {
-  const options = await window.appApi.getMapFilterOptions();
+  const options = await getMapFilterOptions();
   const toNormalizedList = (values) => Array.from(new Set(
     (Array.isArray(values) ? values : [])
       .map((value) => String(value || '').trim())
@@ -3706,225 +3256,20 @@ async function loadMapFilterOptions() {
   }
 }
 
-function focusPoland() {
-  mapInstance.fitBounds(POLAND_BOUNDS, {
-    padding: [24, 24]
-  });
-}
-
-function applyInitialMapViewport() {
-  if (!restoredMapViewportState) {
-    focusPoland();
-    return;
-  }
-
-  mapInstance.setView(
-    [restoredMapViewportState.center.lat, restoredMapViewportState.center.lng],
-    clampMapZoom(mapInstance, restoredMapViewportState.zoom),
-    { animate: false }
-  );
-}
-
-function installAcceleratedWheelZoom(map) {
-  const container = map.getContainer();
-  let lastWheelAt = 0;
-
-  container.addEventListener(
-    'wheel',
-    (event) => {
-      if (!map._loaded) {
-        return;
-      }
-
-      event.preventDefault();
-
-      const delta = buildWheelZoomDelta(event, lastWheelAt, container);
-      lastWheelAt = performance.now();
-
-      if (!delta) {
-        return;
-      }
-
-      const zoomPoint = map.mouseEventToContainerPoint(event);
-      const nextZoom = clampMapZoom(map, map.getZoom() + delta);
-
-      if (Math.abs(nextZoom - map.getZoom()) < 0.001) {
-        return;
-      }
-
-      map.setZoomAround(zoomPoint, nextZoom, false);
-    },
-    { passive: false }
-  );
-}
-
-function buildWheelZoomDelta(event, previousWheelAt, container) {
-  const pixelDeltaY = normalizeWheelDeltaToPixels(
-    event.deltaY,
-    event.deltaMode,
-    container.clientHeight || mapEl.clientHeight || 0
-  );
-  const pixelDeltaX = normalizeWheelDeltaToPixels(
-    event.deltaX,
-    event.deltaMode,
-    container.clientWidth || mapEl.clientWidth || 0
-  );
-  const dominantDelta = pixelDeltaY || pixelDeltaX;
-
-  if (!dominantDelta) {
-    return 0;
-  }
-
-  const now = performance.now();
-  const elapsed = previousWheelAt ? now - previousWheelAt : Number.POSITIVE_INFINITY;
-  const isTouchpad = isLikelyTouchpadWheel(event, pixelDeltaX, pixelDeltaY);
-  const magnitude = Math.abs(dominantDelta);
-  const baseStep = isTouchpad
-    ? clampNumber(magnitude / 220, 0.04, 0.24)
-    : clampNumber(Math.max(magnitude / 120, 1) * 0.24, 0.24, 0.52);
-  const acceleration = isTouchpad
-    ? getTouchpadWheelAcceleration(elapsed)
-    : getMouseWheelAcceleration(elapsed);
-
-  return -Math.sign(dominantDelta) * baseStep * acceleration * WHEEL_ZOOM_MULTIPLIER;
-}
-
-function normalizeWheelDeltaToPixels(delta, deltaMode, viewportSize) {
-  if (!delta) {
-    return 0;
-  }
-
-  if (deltaMode === 1) {
-    return delta * WHEEL_LINE_HEIGHT_PX;
-  }
-
-  if (deltaMode === 2) {
-    return delta * Math.max(viewportSize, 1) * WHEEL_PAGE_HEIGHT_FACTOR;
-  }
-
-  return delta;
-}
-
-function isLikelyTouchpadWheel(event, pixelDeltaX, pixelDeltaY) {
-  if (event.ctrlKey) {
-    return true;
-  }
-
-  if (event.deltaMode !== 0) {
-    return false;
-  }
-
-  const dominantMagnitude = Math.max(Math.abs(pixelDeltaX), Math.abs(pixelDeltaY));
-  return (
-    Math.abs(pixelDeltaX) > 0 ||
-    !Number.isInteger(event.deltaY) ||
-    !Number.isInteger(event.deltaX) ||
-    dominantMagnitude < 48
-  );
-}
-
-function getMouseWheelAcceleration(elapsed) {
-  if (elapsed < 50) {
-    return 2.75;
-  }
-
-  if (elapsed < 100) {
-    return 2.1;
-  }
-
-  if (elapsed < 170) {
-    return 1.55;
-  }
-
-  return 1;
-}
-
-function getTouchpadWheelAcceleration(elapsed) {
-  if (elapsed < 18) {
-    return 1.65;
-  }
-
-  if (elapsed < 40) {
-    return 1.3;
-  }
-
-  return 1;
-}
-
-function clampMapZoom(map, zoom) {
-  return clampNumber(zoom, map.getMinZoom(), map.getMaxZoom());
-}
-
-function clampNumber(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
 function scheduleVisibleMarkerSync(delayMs = 0) {
-  if (visibleMarkerSyncTimer) {
-    window.clearTimeout(visibleMarkerSyncTimer);
-    visibleMarkerSyncTimer = 0;
-  }
-
-  const requestToken = ++visibleMarkerSyncRequestToken;
-  const run = () => {
-    visibleMarkerSyncTimer = 0;
-    void syncVisibleMarkersAsync({ requestToken });
-  };
-
-  if (delayMs <= 0) {
-    requestAnimationFrame(run);
-    return;
-  }
-
-  visibleMarkerSyncTimer = window.setTimeout(() => {
-    requestAnimationFrame(run);
-  }, delayMs);
+  visibleMarkerSyncController.scheduleVisibleMarkerSync(delayMs);
 }
 
 async function syncVisibleMarkersAsync(options = {}) {
-  const requestToken = Number(options.requestToken || 0);
-  if (!mapInstance || (requestToken && requestToken !== visibleMarkerSyncRequestToken)) {
-    return;
-  }
+  await visibleMarkerSyncController.syncVisibleMarkersAsync(options);
+}
 
-  const bounds = mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING);
-  const nextPeople = [];
-  for (let index = 0; index < allPeople.length; index += 1) {
-    if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
-      return;
-    }
+function applyVisibleMarkerDiff(nextPeople, nextCustomPoints) {
+  visibleMarkerDiffController.applyVisibleMarkerDiff(nextPeople, nextCustomPoints);
+}
 
-    const person = allPeople[index];
-    if (isPointVisible(bounds, person) && shouldRenderMapTimeColorPersonMarker(person)) {
-      nextPeople.push(person);
-    }
-
-    if ((index + 1) % MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE === 0) {
-      await waitForNextAnimationFrame();
-    }
-  }
-
-  const nextCustomPoints = [];
-  for (let index = 0; index < allCustomPoints.length; index += 1) {
-    if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
-      return;
-    }
-
-    const point = allCustomPoints[index];
-    if (isPointVisible(bounds, point)) {
-      nextCustomPoints.push(point);
-    }
-
-    if ((index + 1) % MAP_VISIBLE_MARKER_SCAN_CHUNK_SIZE === 0) {
-      await waitForNextAnimationFrame();
-    }
-  }
-
-  if (requestToken && requestToken !== visibleMarkerSyncRequestToken) {
-    return;
-  }
-
-  applyVisibleMarkerDiff(nextPeople, nextCustomPoints);
+function syncVisibleMarkers() {
+  visibleMarkerSyncController.syncVisibleMarkers();
 }
 
 function waitForNextAnimationFrame() {
@@ -3935,261 +3280,16 @@ function waitForNextAnimationFrame() {
   });
 }
 
-function applyVisibleMarkerDiff(nextPeople, nextCustomPoints) {
-  if (!mapInstance) {
-    return;
-  }
-
-  const normalizedPeople = Array.isArray(nextPeople) ? nextPeople : [];
-  const normalizedCustomPoints = Array.isArray(nextCustomPoints) ? nextCustomPoints : [];
-  const nextVisiblePeopleKeys = new Set(normalizedPeople.map((person) => buildPersonKey(person)));
-  const nextVisibleCustomKeys = new Set(normalizedCustomPoints.map((point) => buildCustomPointKey(point)));
-
-  for (const [key, marker] of visiblePeopleMarkers.entries()) {
-    if (!nextVisiblePeopleKeys.has(key)) {
-      peopleLayer.removeLayer(marker);
-      visiblePeopleMarkers.delete(key);
-    }
-  }
-
-  for (const [key, marker] of visibleCustomMarkers.entries()) {
-    if (!nextVisibleCustomKeys.has(key)) {
-      customLayer.removeLayer(marker);
-      visibleCustomMarkers.delete(key);
-    }
-  }
-
-  const peopleToAdd = normalizedPeople.filter((person) => !visiblePeopleMarkers.has(buildPersonKey(person)));
-  const customPointsToAdd = normalizedCustomPoints.filter(
-    (point) => !visibleCustomMarkers.has(buildCustomPointKey(point))
-  );
-
-  markerSyncGeneration += 1;
-  scheduleMarkerRender({
-    generation: markerSyncGeneration,
-    people: peopleToAdd,
-    customPoints: customPointsToAdd,
-    peopleIndex: 0,
-    customPointIndex: 0
-  });
-}
-
-function syncVisibleMarkers() {
-  if (!mapInstance) {
-    return;
-  }
-
-  const bounds = mapInstance.getBounds().pad(VISIBLE_BOUNDS_PADDING);
-  const nextPeople = allPeople.filter((person) => {
-    return isPointVisible(bounds, person) && shouldRenderMapTimeColorPersonMarker(person);
-  });
-  const nextCustomPoints = allCustomPoints.filter((point) => isPointVisible(bounds, point));
-  applyVisibleMarkerDiff(nextPeople, nextCustomPoints);
-}
-
 function scheduleMarkerRender(state) {
-  requestAnimationFrame(() => {
-    renderMarkerBatch(state);
-  });
-}
-
-function renderMarkerBatch(state) {
-  if (state.generation !== markerSyncGeneration) {
-    return;
-  }
-
-  let processed = 0;
-
-  while (state.peopleIndex < state.people.length && processed < MARKER_BATCH_SIZE) {
-    const person = state.people[state.peopleIndex];
-    state.peopleIndex += 1;
-
-    if (!Number.isFinite(person.lat) || !Number.isFinite(person.lng)) {
-      continue;
-    }
-
-    const key = buildPersonKey(person);
-    if (visiblePeopleMarkers.has(key)) {
-      continue;
-    }
-
-    const markerStyle = buildDefaultPersonMarkerStyle(person);
-    if (!markerStyle) {
-      continue;
-    }
-
-    const marker = L.circleMarker([person.lat, person.lng], {
-      ...markerStyle,
-      renderer: personRenderer
-    });
-    marker.__personSourceRowId = person.sourceRowId;
-    attachLazyPopup(marker, () => buildPersonPopupHtml(person), () => {
-      void selectPersonPoint(person, marker, { panelMode: 'selection' });
-    }, {
-      buildAsyncHtml: () => buildPersonPopupHtmlAsync(person)
-    });
-
-    if (activeSelection?.key === key) {
-      applyMarkerSelection(marker, 'person');
-      activeSelection.marker = marker;
-    }
-
-    peopleLayer.addLayer(marker);
-    visiblePeopleMarkers.set(key, marker);
-    syncPersonMarkerAppearance(marker, person.sourceRowId);
-    processed += 1;
-  }
-
-  while (state.customPointIndex < state.customPoints.length && processed < MARKER_BATCH_SIZE) {
-    const point = state.customPoints[state.customPointIndex];
-    state.customPointIndex += 1;
-
-    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) {
-      continue;
-    }
-
-    const key = buildCustomPointKey(point);
-    if (visibleCustomMarkers.has(key)) {
-      continue;
-    }
-
-    const marker = L.marker([point.lat, point.lng], {
-      title: point.label
-    });
-    attachLazyPopup(marker, () => buildCustomPointPopupHtml(point), () => {
-      selectCustomPoint(point, marker, { panelMode: 'selection' });
-    });
-
-    if (activeSelection?.key === key) {
-      applyMarkerSelection(marker, 'custom');
-      activeSelection.marker = marker;
-    }
-
-    customLayer.addLayer(marker);
-    visibleCustomMarkers.set(key, marker);
-    processed += 1;
-  }
-
-  if (state.peopleIndex < state.people.length || state.customPointIndex < state.customPoints.length) {
-    scheduleMarkerRender(state);
-  }
-}
-
-function isPointVisible(bounds, point) {
-  if (!Number.isFinite(point?.lat) || !Number.isFinite(point?.lng)) {
-    return false;
-  }
-
-  return bounds.contains([point.lat, point.lng]);
-}
-
-function buildPersonKey(person) {
-  return buildPersonKeyFromSourceRowId(person?.sourceRowId);
+  markerRenderController.scheduleMarkerRender(state);
 }
 
 function getVisiblePeopleWithOverlappingMarkers(person) {
-  if (!mapInstance || !person?.sourceRowId) {
-    return person ? [person] : [];
-  }
-
-  const anchorMarker = getPersonMarkerBySourceRowId(person.sourceRowId);
-  if (!anchorMarker || typeof anchorMarker.getLatLng !== 'function') {
-    return [person];
-  }
-
-  const anchorPoint = mapInstance.latLngToLayerPoint(anchorMarker.getLatLng());
-  const overlappingSourceRowIds = new Set();
-  const consideredSourceRowIds = new Set();
-
-  const considerMarker = (marker) => {
-    if (!marker || typeof marker.getLatLng !== 'function') {
-      return;
-    }
-
-    const sourceRowId = String(marker.__personSourceRowId || '').trim();
-    if (!sourceRowId || consideredSourceRowIds.has(sourceRowId)) {
-      return;
-    }
-
-    if (typeof mapInstance.hasLayer === 'function' && !mapInstance.hasLayer(marker)) {
-      return;
-    }
-
-    consideredSourceRowIds.add(sourceRowId);
-    const markerPoint = mapInstance.latLngToLayerPoint(marker.getLatLng());
-    if (anchorPoint.distanceTo(markerPoint) <= PERSON_POPUP_OVERLAP_DISTANCE_PX) {
-      overlappingSourceRowIds.add(sourceRowId);
-    }
-  };
-
-  for (const marker of visiblePeopleMarkers.values()) {
-    considerMarker(marker);
-  }
-  for (const marker of supplementalPeopleMarkers.values()) {
-    considerMarker(marker);
-  }
-
-  if (overlappingSourceRowIds.size === 0) {
-    return [person];
-  }
-
-  const overlappingPeople = [];
-  for (const sourceRowId of overlappingSourceRowIds) {
-    const matchingPerson = findPersonBySourceRowId(sourceRowId);
-    if (matchingPerson) {
-      overlappingPeople.push(matchingPerson);
-    }
-  }
-
-  if (overlappingPeople.length === 0) {
-    return [person];
-  }
-
-  return overlappingPeople;
-}
-
-function buildPersonKeyFromSourceRowId(sourceRowId) {
-  if (!sourceRowId) {
-    return '';
-  }
-
-  return `person:${sourceRowId}`;
-}
-
-function buildCustomPointKey(point) {
-  return `custom:${point.id}`;
+  return overlapSelectionController.getVisiblePeopleWithOverlappingMarkers(person);
 }
 
 function resolveVisiblePersonSelection(people) {
-  if (!Array.isArray(people) || people.length === 0) {
-    return null;
-  }
-
-  const currentPersonId = personSelectionHistory.entries[personSelectionHistory.index];
-  if (currentPersonId) {
-    const matchingPerson = people.find((person) => person.sourceRowId === currentPersonId);
-    if (matchingPerson) {
-      return matchingPerson;
-    }
-  }
-
-  const activePersonId = activeSelection?.type === 'person' ? activeSelection.key.replace(/^person:/, '') : null;
-  if (activePersonId) {
-    const activePerson = people.find((person) => person.sourceRowId === activePersonId);
-    if (activePerson) {
-      return activePerson;
-    }
-  }
-
-  const lastSelectedPersonId = readLastSelectedPersonId();
-  if (lastSelectedPersonId) {
-    const lastSelectedPerson = people.find((person) => person.sourceRowId === lastSelectedPersonId);
-    if (lastSelectedPerson) {
-      return lastSelectedPerson;
-    }
-  }
-
-  return people[0];
+  return personSelectionResolverController.resolveVisiblePersonSelection(people);
 }
 
 function resolveCurrentPersonSelection(people) {
@@ -4334,7 +3434,7 @@ function writePersonSelectionHistoryCache(historyState) {
 
 function persistPersonSelectionHistory() {
   personSelectionHistory = writePersonSelectionHistoryCache(personSelectionHistory);
-  void window.appApi.setMapSelectionHistory(personSelectionHistory).catch(() => {});
+  void setMapSelectionHistory(personSelectionHistory).catch(() => {});
 
   if (infoPanelMode === 'history') {
     paintHistorySelection();
@@ -4345,7 +3445,7 @@ async function hydratePersonSelectionHistory() {
   let persistedHistory = null;
 
   try {
-    const storedHistory = await window.appApi.getMapSelectionHistory();
+    const storedHistory = await getMapSelectionHistory();
     if (storedHistory) {
       persistedHistory = normalizePersonSelectionHistory(storedHistory);
     }
@@ -4926,115 +4026,33 @@ function persistMapTimeColorRangesAsync() {
 }
 
 function readLastSelectedPersonId() {
-  try {
-    return window.localStorage.getItem(LAST_SELECTED_PERSON_STORAGE_KEY);
-  } catch (_error) {
-    return null;
-  }
+  return readLastSelectedPersonIdUtil(LAST_SELECTED_PERSON_STORAGE_KEY);
 }
 
 function saveLastSelectedPersonId(sourceRowId) {
-  if (!sourceRowId) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(LAST_SELECTED_PERSON_STORAGE_KEY, sourceRowId);
-  } catch (_error) {
-    // Ignore storage failures and keep the current session working.
-  }
+  saveLastSelectedPersonIdUtil(LAST_SELECTED_PERSON_STORAGE_KEY, sourceRowId);
 }
 
 function readLastSelectedPersonRestoreState() {
-  try {
-    const raw = window.localStorage.getItem(LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(raw);
-    const sourceRowId = String(parsed?.sourceRowId || '').trim();
-    if (!sourceRowId) {
-      return null;
-    }
-
-    return {
-      sourceRowId,
-      preferPersonDetails: parsed?.preferPersonDetails === true
-    };
-  } catch (_error) {
-    return null;
-  }
+  return readLastSelectedPersonRestoreStateUtil(LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY);
 }
 
 function saveLastSelectedPersonRestoreState(sourceRowId, preferPersonDetails) {
-  const normalizedSourceRowId = String(sourceRowId || '').trim();
-  if (!normalizedSourceRowId) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(
-      LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY,
-      JSON.stringify({
-        sourceRowId: normalizedSourceRowId,
-        preferPersonDetails: preferPersonDetails === true
-      })
-    );
-  } catch (_error) {
-    // Ignore storage failures and keep the current session working.
-  }
+  saveLastSelectedPersonRestoreStateUtil(
+    LAST_SELECTED_PERSON_RESTORE_STATE_STORAGE_KEY,
+    sourceRowId,
+    preferPersonDetails
+  );
 }
 
 function saveLastSelectedPersonDetails(details) {
-  if (!details?.person?.sourceRowId) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(
-      LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY,
-      JSON.stringify(details)
-    );
-  } catch (_error) {
-    // Ignore storage failures and keep the current session working.
-  }
+  saveLastSelectedPersonDetailsUtil(LAST_SELECTED_PERSON_DETAILS_STORAGE_KEY, details);
 }
 
 async function copyTextToClipboard(value) {
-  const text = String(value || '').trim();
-  if (!text) {
-    return false;
-  }
-
-  let didCopy = false;
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      didCopy = true;
-    }
-  } catch (_error) {
-    // Fallback below.
-  }
-
-  if (!didCopy) {
-    try {
-      const input = document.createElement('textarea');
-      input.value = text;
-      input.setAttribute('readonly', 'readonly');
-      input.style.position = 'fixed';
-      input.style.opacity = '0';
-      input.style.pointerEvents = 'none';
-      document.body.appendChild(input);
-      input.focus();
-      input.select();
-      didCopy = document.execCommand('copy');
-      document.body.removeChild(input);
-    } catch (_error) {
-      didCopy = false;
-    }
-  }
+  const copyResult = await copyTextToClipboardUtil(value);
+  const didCopy = copyResult.ok === true;
+  const text = copyResult.text;
 
   showMapToast({
     message: didCopy
@@ -5043,136 +4061,6 @@ async function copyTextToClipboard(value) {
     type: didCopy ? 'success' : 'error'
   });
   return didCopy;
-}
-
-function formatMapToastExecutionTime(value) {
-  const candidateDate = value instanceof Date
-    ? value
-    : new Date(value ?? Date.now());
-  if (!Number.isFinite(candidateDate.getTime())) {
-    return '';
-  }
-
-  return candidateDate.toLocaleTimeString('pl-PL', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
-}
-
-function ensureMapToastListElement() {
-  if (mapToastListEl) {
-    return mapToastListEl;
-  }
-
-  const host = mapEl || mapCanvasPanelEl || mapBoardEl;
-  if (!host) {
-    return null;
-  }
-
-  const listElement = document.createElement('div');
-  listElement.className = 'map-toast-list';
-  listElement.setAttribute('aria-live', 'polite');
-  listElement.setAttribute('aria-atomic', 'false');
-  host.appendChild(listElement);
-  mapToastListEl = listElement;
-  return mapToastListEl;
-}
-
-function showMapToast(options = {}) {
-  const toastListElement = ensureMapToastListElement();
-  if (!toastListElement) {
-    return;
-  }
-
-  const normalizedMessage = String(options?.message || 'Wykonano akcje');
-  const normalizedType = String(options?.type || 'success').toLowerCase();
-  const durationMs = Number.isFinite(options?.durationMs)
-    ? Math.max(800, Math.round(options.durationMs))
-    : 5000;
-  const executionMomentLabel = formatMapToastExecutionTime(options?.executedAt);
-
-  const toastItemEl = document.createElement('div');
-  toastItemEl.className = 'map-toast';
-  toastItemEl.setAttribute('role', 'status');
-
-  if (normalizedType === 'error') {
-    toastItemEl.classList.add('is-error');
-  } else if (normalizedType === 'info') {
-    toastItemEl.classList.add('is-info');
-  } else {
-    toastItemEl.classList.add('is-success');
-  }
-
-  const toastBodyEl = document.createElement('div');
-  toastBodyEl.className = 'map-toast-body';
-
-  const toastMessageEl = document.createElement('div');
-  toastMessageEl.className = 'map-toast-message';
-  toastMessageEl.textContent = normalizedMessage;
-
-  const toastTimeEl = document.createElement('div');
-  toastTimeEl.className = 'map-toast-time';
-  toastTimeEl.textContent = executionMomentLabel;
-
-  toastBodyEl.append(toastMessageEl);
-  if (executionMomentLabel) {
-    toastBodyEl.append(toastTimeEl);
-  }
-
-  const closeControlEl = document.createElement('button');
-  closeControlEl.type = 'button';
-  closeControlEl.className = 'map-toast-close';
-  closeControlEl.setAttribute('aria-label', 'Zamknij powiadomienie');
-  closeControlEl.innerHTML = '<span class="map-toast-close-icon">×</span>';
-
-  toastItemEl.append(toastBodyEl, closeControlEl);
-
-  toastListElement.append(toastItemEl);
-  if (toastListElement.childElementCount > 6) {
-    toastListElement.firstElementChild?.remove();
-  }
-
-  window.requestAnimationFrame(() => {
-    toastItemEl.classList.add('is-visible');
-  });
-
-  const startedAt = Date.now();
-  const updateToastCountdown = () => {
-    const elapsedMs = Date.now() - startedAt;
-    const remainingMs = Math.max(0, durationMs - elapsedMs);
-
-    const progressRatio = durationMs > 0
-      ? Math.min(1, Math.max(0, elapsedMs / durationMs))
-      : 1;
-    closeControlEl.style.setProperty('--toast-close-progress', String(progressRatio));
-  };
-
-  const removeToastWithFade = () => {
-    toastItemEl.classList.remove('is-visible');
-    window.setTimeout(() => {
-      if (toastItemEl.parentElement) {
-        toastItemEl.remove();
-      }
-    }, 220);
-  };
-
-  updateToastCountdown();
-  const countdownTimer = window.setInterval(updateToastCountdown, 200);
-
-  const hideTimer = window.setTimeout(() => {
-    window.clearInterval(countdownTimer);
-    removeToastWithFade();
-  }, durationMs);
-
-  closeControlEl.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    window.clearTimeout(hideTimer);
-    window.clearInterval(countdownTimer);
-    removeToastWithFade();
-  });
 }
 
 function openSelectionPanelForSourceRowId(sourceRowId) {
@@ -5558,7 +4446,7 @@ async function selectPersonPoint(person, marker, options = {}) {
   }
   renderPersonSelectionState(person);
 
-  const details = await window.appApi.getPersonDetails(person.sourceRowId);
+  const details = await getPersonDetails(person.sourceRowId);
   if (!details || requestToken !== selectionRequestToken || activeSelection?.key !== key) {
     return;
   }
@@ -8655,13 +7543,9 @@ function getMapTimeColorRangeSortScore(range) {
 }
 
 function getMapTimeColorRangeDateComparableValue(value) {
-  const normalized = normalizeDateInputValue(value);
-  if (!normalized) {
-    return null;
-  }
-
-  const timestamp = Date.parse(`${normalized}T00:00:00Z`);
-  return Number.isFinite(timestamp) ? timestamp : null;
+  return getMapTimeColorRangeDateComparableValueUtil(value, {
+    normalizeDateInputValue
+  });
 }
 
 function updateMapTimeColorRangeFromPreviewField(rangeId, fieldName, fieldValue, options = {}) {
@@ -9344,7 +8228,7 @@ async function loadPersonSearchResults(query, options = {}) {
     paintSearchPanel({ shouldFocusInput: false });
   }
 
-  const response = await window.appApi.listPeople({
+  const response = await listPeople({
     query: normalizedQuery,
     limit: MAP_PERSON_SEARCH_BATCH_SIZE,
     offset: reset ? 0 : personSearchState.results.length
@@ -10225,7 +9109,7 @@ async function loadMissingHistoryPeople(sourceRowIds) {
   await Promise.all(
     missingSourceRowIds.map(async (sourceRowId) => {
       try {
-        const details = await window.appApi.getPersonDetails(sourceRowId);
+        const details = await getPersonDetails(sourceRowId);
         if (details?.person) {
           cacheKnownPeople([details.person]);
         }

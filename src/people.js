@@ -9,6 +9,18 @@ import {
   renderRecordFields,
   renderKeyValueList
 } from './app-shell.js';
+import {
+  getBootstrap,
+  onOperationStatus
+} from './shared/data/app-api.js';
+import {
+  fetchPeopleList,
+  fetchPersonDetails,
+  openPersonInAccessById,
+  savePersonNote
+} from './features/people/people-service.js';
+import { getAccessBridgeErrorMessage } from './shared/data/access-bridge.js';
+import { ensureToastListElement, showToastMessage } from './shared/ui/toast.js';
 
 initShell('people');
 
@@ -53,7 +65,7 @@ let peopleSearchState = {
   hasMore: false
 };
 
-window.appApi.onOperationStatus(async (payload) => {
+onOperationStatus(async (payload) => {
   if (
     payload?.status === 'completed' &&
     (payload.type === 'import' || payload.type === 'trasa-import' || payload.type === 'geocoding')
@@ -88,7 +100,7 @@ notesForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  await window.appApi.addNote({
+  await savePersonNote({
     entityType: 'person',
     entityId: activePersonId,
     message: noteInput.value.trim()
@@ -115,7 +127,7 @@ async function handleOpenAccessFromPeople(personName) {
   const safePersonName = String(personName || 'osobę').trim() || 'osobę';
 
   try {
-    const bridgeResult = await window.appApi.accessbrigeladkfjlakgjOpenPerson({
+    const bridgeResult = await openPersonInAccessById({
       sourceRowId: activePersonId || ''
     });
 
@@ -124,7 +136,7 @@ async function handleOpenAccessFromPeople(personName) {
       return;
     }
 
-    showPeopleToast(getAccessBridgeErrorMessageForPeople({ personName: safePersonName, code: bridgeResult?.code }), {
+    showPeopleToast(getAccessBridgeErrorMessage({ personName: safePersonName, code: bridgeResult?.code }), {
       isError: true
     });
   } catch (_error) {
@@ -135,90 +147,24 @@ async function handleOpenAccessFromPeople(personName) {
 }
 
 function showPeopleToast(message, options = {}) {
-  const normalizedMessage = String(message || 'Wykonano akcje');
-  const isError = options?.isError === true;
-  const toastTypeClass = isError ? 'is-error' : 'is-info';
-  const durationMs = isError ? 4200 : 2400;
   const toastListElement = ensurePeopleToastListElement();
-  if (!toastListElement) {
-    return;
-  }
-
-  const toastItemEl = document.createElement('div');
-  toastItemEl.className = `map-toast ${toastTypeClass}`;
-  toastItemEl.setAttribute('role', 'status');
-
-  const toastBodyEl = document.createElement('div');
-  toastBodyEl.className = 'map-toast-body';
-
-  const toastMessageEl = document.createElement('div');
-  toastMessageEl.className = 'map-toast-message';
-  toastMessageEl.textContent = normalizedMessage;
-  toastBodyEl.append(toastMessageEl);
-
-  toastItemEl.append(toastBodyEl);
-  toastListElement.append(toastItemEl);
-
-  window.requestAnimationFrame(() => {
-    toastItemEl.classList.add('is-visible');
+  showToastMessage({
+    listElement: toastListElement,
+    message,
+    type: options?.isError === true ? 'error' : 'info',
+    durationMs: options?.isError === true ? 4200 : 2400,
+    maxItems: 6
   });
-
-  window.setTimeout(() => {
-    toastItemEl.classList.remove('is-visible');
-    window.setTimeout(() => {
-      toastItemEl.remove();
-    }, 220);
-  }, durationMs);
-}
-
-function getAccessBridgeErrorMessageForPeople({ personName, code }) {
-  const safePersonName = String(personName || 'osobę').trim() || 'osobę';
-  const normalizedCode = String(code || '').trim().toLowerCase();
-
-  if (normalizedCode === 'multiple-instances') {
-    return 'Jest za dużo Accessów i nie wiadomo, w którym otworzyć.';
-  }
-
-  if (normalizedCode === 'not-found') {
-    return `Nie udało się otworzyć (${safePersonName})`;
-  }
-
-  if (normalizedCode === 'no-response') {
-    return `Nie udało się otworzyć (${safePersonName}) — Access nie odpowiedział.`;
-  }
-
-  if (normalizedCode === 'no-instance') {
-    return `Nie udało się otworzyć (${safePersonName}) — brak otwartej instancji Accessa.`;
-  }
-
-  if (normalizedCode === 'unsupported-platform') {
-    return `Nie udało się otworzyć (${safePersonName}) — ta funkcja działa tylko w Windows.`;
-  }
-
-  if (normalizedCode === 'database-mismatch') {
-    return `Nie udało się otworzyć (${safePersonName}) — otwarty jest inny plik Access.`;
-  }
-
-  if (normalizedCode === 'form-not-found') {
-    return `Nie udało się otworzyć (${safePersonName}) — formularz nie istnieje w Accessie.`;
-  }
-
-  return `Nie udało się otworzyć (${safePersonName})`;
 }
 
 function ensurePeopleToastListElement() {
-  let toastListElement = document.querySelector('[data-people-toast-list]');
-  if (toastListElement) {
-    return toastListElement;
-  }
-
-  toastListElement = document.createElement('div');
-  toastListElement.className = 'map-toast-list';
-  toastListElement.setAttribute('data-people-toast-list', 'true');
-  toastListElement.setAttribute('aria-live', 'polite');
-  toastListElement.setAttribute('aria-atomic', 'false');
-  document.body.appendChild(toastListElement);
-  return toastListElement;
+  return ensureToastListElement({
+    selector: '[data-people-toast-list]',
+    host: document.body,
+    dataset: {
+      peopleToastList: 'true'
+    }
+  });
 }
 
 function resolveActivePersonNameForAccessToast() {
@@ -241,7 +187,7 @@ function resolveActivePersonNameForAccessToast() {
 }
 
 async function bootstrap() {
-  const bootstrapData = await window.appApi.getBootstrap();
+  const bootstrapData = await getBootstrap();
   applySummary(bootstrapData.summary);
   syncRawFieldsVisibility();
   const restoredSelectionPromise = restoreInitialPersonSelection();
@@ -280,7 +226,7 @@ async function loadPeople(query, options = {}) {
     showPeopleLoadingState();
   }
 
-  const response = await window.appApi.listPeople({
+  const response = await fetchPeopleList({
     query: normalizedQuery,
     limit: PEOPLE_SEARCH_BATCH_SIZE,
     offset: reset ? 0 : peopleSearchState.items.length
@@ -454,7 +400,7 @@ async function loadPerson(sourceRowId) {
   }
 
   const requestToken = ++personDetailsRequestToken;
-  const details = await window.appApi.getPersonDetails(normalizedSourceRowId);
+  const details = await fetchPersonDetails(normalizedSourceRowId);
   if (requestToken !== personDetailsRequestToken) {
     return false;
   }
