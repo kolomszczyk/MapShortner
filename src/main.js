@@ -25,6 +25,16 @@ let accessReimportInterval = null;
 let devReloadWatchers = [];
 let devReloadTimer = null;
 let devReloadInFlight = false;
+const startupTimeline = {
+  appStartAt: Date.now(),
+  appReadyAt: null,
+  dataStoreReadyAt: null,
+  mapTileProtocolReadyAt: null,
+  updaterFlowStartedAt: null,
+  updaterFlowFinishedAt: null,
+  windowCreatedAt: null,
+  windowShownAt: null
+};
 
 const ACCESS_REIMPORT_INTERVAL_MS = 5 * 60 * 1000;
 const FIRST_LAUNCH_SETUP_KEY = 'firstLaunchSetupCompleted';
@@ -308,6 +318,52 @@ function sendOperationStatus(payload) {
 
 function sendTileDownloadState(payload) {
   sendToRenderer('tiles:state', payload);
+}
+
+function getStartupDiagnostics() {
+  const now = Date.now();
+  const toElapsed = (timestamp) => {
+    if (!Number.isFinite(timestamp)) {
+      return null;
+    }
+
+    return Math.max(0, timestamp - startupTimeline.appStartAt);
+  };
+
+  const toDuration = (fromTimestamp, toTimestamp) => {
+    if (!Number.isFinite(fromTimestamp) || !Number.isFinite(toTimestamp)) {
+      return null;
+    }
+
+    return Math.max(0, toTimestamp - fromTimestamp);
+  };
+
+  const appReadyMs = toElapsed(startupTimeline.appReadyAt);
+  const dataStoreReadyMs = toElapsed(startupTimeline.dataStoreReadyAt);
+  const mapTileProtocolReadyMs = toElapsed(startupTimeline.mapTileProtocolReadyAt);
+  const updaterFlowStartedMs = toElapsed(startupTimeline.updaterFlowStartedAt);
+  const updaterFlowFinishedMs = toElapsed(startupTimeline.updaterFlowFinishedAt);
+  const windowCreatedMs = toElapsed(startupTimeline.windowCreatedAt);
+  const windowShownMs = toElapsed(startupTimeline.windowShownAt);
+
+  return {
+    timestamps: {
+      ...startupTimeline,
+      now
+    },
+    elapsedMs: {
+      appReadyMs,
+      dataStoreReadyMs,
+      mapTileProtocolReadyMs,
+      updaterFlowStartedMs,
+      updaterFlowFinishedMs,
+      windowCreatedMs,
+      windowShownMs,
+      updaterFlowDurationMs: toDuration(startupTimeline.updaterFlowStartedAt, startupTimeline.updaterFlowFinishedAt),
+      windowCreateToShowMs: toDuration(startupTimeline.windowCreatedAt, startupTimeline.windowShownAt),
+      totalToNowMs: Math.max(0, now - startupTimeline.appStartAt)
+    }
+  };
 }
 
 function clearStartupUpdateResolutionTimer() {
@@ -854,7 +910,7 @@ function startAccessReimportMonitor() {
   void queueAccessImport({
     source: 'auto',
     reason: 'startup',
-    force: true
+    force: false
   }).catch((error) => {
     log.error('Startup access reimport failed', error);
   });
@@ -1347,6 +1403,10 @@ function createWindow() {
   });
   const windowState = loadWindowState();
 
+  if (!startupTimeline.windowCreatedAt) {
+    startupTimeline.windowCreatedAt = Date.now();
+  }
+
   mainWindow = new BrowserWindow({
     width: windowState.width,
     height: windowState.height,
@@ -1378,6 +1438,9 @@ function createWindow() {
   mainWindow.on('close', persistWindowState);
   mainWindow.loadFile(path.join(__dirname, 'map.html'));
   mainWindow.once('ready-to-show', () => {
+    if (!startupTimeline.windowShownAt) {
+      startupTimeline.windowShownAt = Date.now();
+    }
     mainWindow.setTitle(' ');
     mainWindow.show();
     if (windowState.isMaximized) {
@@ -1786,7 +1849,14 @@ if (hasSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    if (!startupTimeline.appReadyAt) {
+      startupTimeline.appReadyAt = Date.now();
+    }
+
     store = createDataStore(app);
+    if (!startupTimeline.dataStoreReadyAt) {
+      startupTimeline.dataStoreReadyAt = Date.now();
+    }
     resetCachedStoreState();
     mapTileService = createMapTileService({
       app,
@@ -1797,16 +1867,28 @@ if (hasSingleInstanceLock) {
       sendOperationStatus
     });
     await mapTileService.registerProtocol();
+    if (!startupTimeline.mapTileProtocolReadyAt) {
+      startupTimeline.mapTileProtocolReadyAt = Date.now();
+    }
     const devUpdaterPreviewScenario = getDevUpdaterPreviewScenario();
 
     if (!isDevMode) {
       configureAutoUpdater();
       createUpdaterWindow();
-      await runStartupUpdateFlow();
-      closeUpdaterWindow();
+      startupTimeline.updaterFlowStartedAt = Date.now();
+      try {
+        await runStartupUpdateFlow();
+      } catch (error) {
+        log.error('Startup auto-update flow failed', error);
+      } finally {
+        startupTimeline.updaterFlowFinishedAt = Date.now();
+        closeUpdaterWindow();
+      }
     } else if (devUpdaterPreviewScenario) {
       createUpdaterWindow();
+      startupTimeline.updaterFlowStartedAt = Date.now();
       await runDevUpdaterPreviewFlow();
+      startupTimeline.updaterFlowFinishedAt = Date.now();
       closeUpdaterWindow();
     }
 
@@ -1873,7 +1955,8 @@ ipcMain.handle('app:getBootstrap', async () => ({
   googleMapsConfigured: Boolean(loadGoogleMapsApiKey() || store.getSetting('googleMapsApiKey')),
   summary: store.getDashboardSummary(),
   updater: getUpdaterState(),
-  operationLogHistory: getOperationLogHistory()
+  operationLogHistory: getOperationLogHistory(),
+  startupDiagnostics: getStartupDiagnostics()
 }));
 
 ipcMain.handle('app:addOperationLogEntry', async (_event, payload = {}) => recordOperationLogEntry(payload));

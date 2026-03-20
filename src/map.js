@@ -1788,7 +1788,6 @@ async function bootstrap() {
     hydratePersonSelectionHistory()
   ]);
 
-  await waitForFirstPaintOpportunity();
   buildMap();
   requestAnimationFrame(() => {
     loadPoints().catch((error) => {
@@ -1821,17 +1820,6 @@ async function bootstrap() {
       console.error(`Deferred map init task failed (${taskLabel})`, result.reason);
     });
   });
-}
-
-function waitForAnimationFrame() {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
-async function waitForFirstPaintOpportunity() {
-  await waitForAnimationFrame();
-  await waitForAnimationFrame();
 }
 
 function buildTileUrlTemplate(revision = activeTilePackageRevision) {

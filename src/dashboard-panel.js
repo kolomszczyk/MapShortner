@@ -71,6 +71,7 @@ export function initDashboardPanel({
     version: null,
     isDevMode: false
   };
+  let startupDiagnostics = null;
 
   if (
     !accessPathEl ||
@@ -461,6 +462,7 @@ export function initDashboardPanel({
       version: data.version || null,
       isDevMode: data.isDevMode === true
     };
+    startupDiagnostics = data.startupDiagnostics || null;
     if (updaterTestControlsEl) {
       updaterTestControlsEl.hidden = !runtimeMeta.isDevMode;
     }
@@ -614,7 +616,31 @@ export function initDashboardPanel({
         break;
     }
 
-    updaterDetailEl.textContent = [currentVersion, details, devSuffix].filter(Boolean).join(' ');
+    const startupDetails = formatStartupDiagnostics(startupDiagnostics);
+    updaterDetailEl.textContent = [currentVersion, details, startupDetails, devSuffix].filter(Boolean).join(' ');
+  }
+
+  function formatStartupDiagnostics(diagnostics) {
+    const elapsed = diagnostics?.elapsedMs;
+    if (!elapsed || !Number.isFinite(elapsed.windowShownMs)) {
+      return '';
+    }
+
+    const formatMs = (value) => `${Math.max(0, Math.round(Number(value || 0)))} ms`;
+    const parts = [
+      `Start UI: ${formatMs(elapsed.windowShownMs)} od uruchomienia.`,
+      Number.isFinite(elapsed.mapTileProtocolReadyMs)
+        ? `Map tiles gotowe po ${formatMs(elapsed.mapTileProtocolReadyMs)}.`
+        : null,
+      Number.isFinite(elapsed.updaterFlowDurationMs)
+        ? `Flow aktualizacji: ${formatMs(elapsed.updaterFlowDurationMs)}.`
+        : null,
+      Number.isFinite(elapsed.windowCreateToShowMs)
+        ? `Okno od create do show: ${formatMs(elapsed.windowCreateToShowMs)}.`
+        : null
+    ].filter(Boolean);
+
+    return parts.join(' ');
   }
 
   function appendUpdaterLog(state = lastUpdaterState) {
